@@ -27,7 +27,7 @@ jobs:
 
     - name: Type check with mypy
       run: |
-        pip install numpy scipy matplotlib pyyaml
+        pip install numpy scipy matplotlib pyyaml types-PyYAML
         mypy src/
 
   test:
