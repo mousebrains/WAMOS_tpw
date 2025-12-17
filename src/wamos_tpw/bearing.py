@@ -1,0 +1,1193 @@
+#! /usr/bin/env python3
+#
+# Theta and Bearing classes for calculating radar beam angles
+# Theta: beam angle relative to radar/ship
+# Bearing: beam angle in earth coordinates with cartesian projections
+#
+# Dec-2025, Pat Welch, pat@mousebrains.com
+
+from __future__ import annotations
+
+import logging
+from typing import Tuple
+
+import numpy as np
+
+from wamos_tpw.config import WamosConfig
+from wamos_tpw.frame import Frame
+from wamos_tpw.plotting import (
+    calc_bin_edges, format_nav_title, add_crosshairs, add_range_rings,
+    sort_polar_data, get_radar_height
+)
+
+
+class Theta:
+    """
+    Calculate radar beam angle (theta) relative to ship for contiguous frames.
+
+    Uses bit 13 encoding in the first distance bin to determine degree transitions,
+    then optionally refines the estimate using the shadow region alignment.
+
+    The bearing is encoded in bit 13 of the first distance bin:
+    - Bit 13 = 0: radial is within an even degree (e.g., 44.0° to 45.0°)
+    - Bit 13 = 1: radial is within an odd degree (e.g., 45.0° to 46.0°)
+
+    All bearing values are wrapped to [0, 360).
+
+    Example:
+        >>> config = WamosConfig('radar_config.yaml')
+        >>> theta = Theta(frames, config)
+        >>> bearings = theta.bearing  # Array of bearing angles per radial [0, 360)
+        >>> print(f"Shadow offset correction: {theta.shadow_offset:.2f}°")
+    """
+
+    # Bit mask for bearing pulse (bit 13)
+    _MASK_BIT13 = np.uint16(0x2000)
+
+    # Algorithm constants
+    _SEGMENT_SUSPICIOUS_MULTIPLIER = 1.8  # Flag segments > 1.8x median as suspicious
+    _SMOOTHING_WEIGHTS = (0.6, 0.2, 0.2)  # Center, prev, next for adaptive smoothing
+    _GRADIENT_THRESHOLD = 0.01  # Minimum gradient magnitude for edge detection
+    _SHADOW_INTENSITY_BINS = 25  # Number of distance bins for shadow analysis
+    _GAUSSIAN_SIGMA = 3  # Sigma for intensity smoothing in edge detection
+
+    def __init__(self,
+                 frames: list[Frame],
+                 config: WamosConfig | None = None,
+                 refine: bool = True):
+        """
+        Initialize Theta calculator for a set of contiguous frames.
+
+        Args:
+            frames: List of contiguous Frame objects
+            config: WamosConfig object (uses defaults if None)
+            refine: Whether to refine bearing using shadow alignment
+        """
+        if not frames:
+            raise ValueError("At least one frame is required")
+
+        self._frames = frames
+        self._config = config or WamosConfig()
+        self._refine = refine and self._config.theta_refinement.enabled
+
+        # Calculated values (computed lazily)
+        self._bearing: np.ndarray | None = None
+        self._bearing_per_frame: list[np.ndarray] | None = None
+        self._shadow_offset: float = 0.0
+        self._shadow_quality: float = 0.0
+
+        # Shadow edge detection results
+        self._shadow_data: list[dict] = []
+        self._shadow_left_edges: list[float] = []
+        self._shadow_right_edges: list[float] = []
+        self._shadow_left_mean: float | None = None
+        self._shadow_left_std: float | None = None
+        self._shadow_right_mean: float | None = None
+        self._shadow_right_std: float | None = None
+
+        # Calculate bearing
+        self._calculate()
+
+    def _calculate(self) -> None:
+        """Calculate bearing angles for all frames."""
+        self._bearing_per_frame = []
+
+        for i, frame in enumerate(self._frames):
+            # Calculate bearing for this frame
+            bearing = self._calculate_frame_bearing(frame)
+            # Wrap to [0, 360)
+            bearing = bearing % 360
+            self._bearing_per_frame.append(bearing)
+
+        # Concatenate all bearings (each frame is 0-360)
+        self._bearing = np.concatenate(self._bearing_per_frame)
+
+        # Refine using shadow region if enabled
+        min_frames = self._config.theta_refinement.min_frames
+        if self._refine and len(self._frames) >= min_frames:
+            self._refine_with_shadow()
+
+    def _calculate_frame_bearing(self, frame: Frame) -> np.ndarray:
+        """
+        Calculate bearing angles for a single frame using bit 13 transitions.
+
+        Args:
+            frame: Frame object
+
+        Returns:
+            Array of bearing angles for each radial (may exceed 360)
+        """
+        data = frame.raw
+        n_radials = frame.n_bearings
+
+        # Extract bit 13 from first distance bin
+        bit_13 = (data[:, 0] & self._MASK_BIT13) != 0
+
+        # Find all degree transitions (bit changes)
+        transitions = np.where(np.diff(bit_13.astype(int)) != 0)[0] + 1
+
+        # Add boundaries (start and end)
+        transitions = np.concatenate([[0], transitions, [n_radials]])
+
+        # Detect and handle missing transitions
+        if len(transitions) > 2:
+            segment_sizes = np.diff(transitions)
+            median_size = np.median(segment_sizes)
+
+            # Find segments that are likely missing a transition
+            suspicious = np.where(segment_sizes > median_size * self._SEGMENT_SUSPICIOUS_MULTIPLIER)[0]
+
+            new_transitions = []
+            for seg_idx in suspicious:
+                start_idx = transitions[seg_idx]
+                end_idx = transitions[seg_idx + 1]
+                segment_size = end_idx - start_idx
+
+                # Estimate number of missing transitions
+                expected_segments = int(np.round(segment_size / median_size))
+                if expected_segments > 1:
+                    for j in range(1, expected_segments):
+                        insert_idx = start_idx + int(j * segment_size / expected_segments)
+                        new_transitions.append(insert_idx)
+
+            if new_transitions:
+                transitions = np.sort(np.concatenate([transitions, new_transitions]))
+
+        # Initialize bearing array
+        bearing = np.zeros(n_radials)
+
+        # Determine starting degree based on bit 13 parity
+        current_degree = 0.0
+        if bit_13[0]:
+            # First bearing is odd
+            current_degree = 1.0
+        # else first bearing is even (0)
+
+        # Calculate nominal radials per degree
+        n_segments = len(transitions) - 1
+        if n_segments > 0:
+            avg_radials_per_degree = n_radials / n_segments
+        else:
+            avg_radials_per_degree = n_radials / 360
+
+        # Process each segment with adaptive width
+        for i in range(len(transitions) - 1):
+            start_idx = transitions[i]
+            end_idx = transitions[i + 1]
+            n_radials_in_segment = end_idx - start_idx
+
+            # Apply smoothing for interior segments
+            if i > 0 and i < len(transitions) - 2:
+                prev_size = transitions[i] - transitions[i-1]
+                next_size = transitions[i+2] - transitions[i+1]
+                w = self._SMOOTHING_WEIGHTS
+                smoothed_size = w[0] * n_radials_in_segment + w[1] * prev_size + w[2] * next_size
+                degree_width = smoothed_size / avg_radials_per_degree
+            else:
+                degree_width = n_radials_in_segment / avg_radials_per_degree
+
+            # Distribute bearing within segment
+            sub_bearings = current_degree + \
+                (np.arange(n_radials_in_segment) + 0.5) / n_radials_in_segment * degree_width
+            bearing[start_idx:end_idx] = sub_bearings
+
+            current_degree += degree_width
+
+        return bearing
+
+    def _refine_with_shadow(self) -> None:
+        """
+        Refine bearing estimate using shadow edge detection across frames.
+
+        Detects left and right edges of the shadow region using intensity
+        gradients, then calculates the center and applies offset correction.
+        """
+        from scipy.ndimage import gaussian_filter1d
+
+        # Get config parameters
+        expected_center = self._config.shadow.center
+        expected_width = self._config.shadow.width
+        search_range = expected_width
+
+        # Analyze shadow edges
+        self._shadow_data = []
+        left_edges = []
+        right_edges = []
+
+        for frame_idx, frame in enumerate(self._frames):
+            bearing = self._bearing_per_frame[frame_idx]
+
+            # Get intensity at first few distance bins (shadow is most visible there)
+            intensity = frame.intensity[:, :self._SHADOW_INTENSITY_BINS].mean(axis=1).astype(float)
+
+            # Sort by bearing for gradient calculation
+            sort_idx = np.argsort(bearing)
+            bearing_sorted = bearing[sort_idx]
+            intensity_sorted = intensity[sort_idx]
+
+            # Normalize intensity
+            intensity_norm = intensity_sorted / intensity_sorted.max() if intensity_sorted.max() > 0 else intensity_sorted
+
+            # Smooth intensity for edge detection
+            intensity_smooth = gaussian_filter1d(intensity_norm, sigma=self._GAUSSIAN_SIGMA)
+
+            # Calculate gradient (derivative)
+            gradient = np.gradient(intensity_smooth)
+
+            # Detect edges in search region around expected center
+            search_start = (expected_center - search_range) % 360
+            search_end = (expected_center + search_range) % 360
+
+            if search_start < search_end:
+                in_search = (bearing_sorted >= search_start) & (bearing_sorted <= search_end)
+            else:
+                in_search = (bearing_sorted >= search_start) | (bearing_sorted <= search_end)
+
+            search_indices = np.where(in_search)[0]
+
+            # Find left edge (largest negative gradient - intensity dropping)
+            # Find right edge (largest positive gradient - intensity rising)
+            left_edge = None
+            right_edge = None
+            left_edge_idx = None
+            right_edge_idx = None
+
+            if len(search_indices) > 10:
+                search_gradient = gradient[search_indices]
+
+                # Left edge: most negative gradient (entering shadow)
+                neg_grad_idx = np.argmin(search_gradient)
+                if search_gradient[neg_grad_idx] < -self._GRADIENT_THRESHOLD:
+                    left_edge_idx = search_indices[neg_grad_idx]
+                    left_edge = bearing_sorted[left_edge_idx]
+                    left_edges.append(left_edge)
+
+                # Right edge: most positive gradient (exiting shadow)
+                pos_grad_idx = np.argmax(search_gradient)
+                if search_gradient[pos_grad_idx] > self._GRADIENT_THRESHOLD:
+                    right_edge_idx = search_indices[pos_grad_idx]
+                    right_edge = bearing_sorted[right_edge_idx]
+                    right_edges.append(right_edge)
+
+            # Calculate center from edges if both found
+            detected_center = None
+            detected_width = None
+            if left_edge is not None and right_edge is not None:
+                if right_edge < left_edge:
+                    right_edge_unwrap = right_edge + 360
+                else:
+                    right_edge_unwrap = right_edge
+                detected_center = ((left_edge + right_edge_unwrap) / 2) % 360
+                detected_width = (right_edge_unwrap - left_edge) % 360
+
+            self._shadow_data.append({
+                'frame_idx': frame_idx,
+                'bearing_sorted': bearing_sorted,
+                'intensity_norm': intensity_norm,
+                'intensity_smooth': intensity_smooth,
+                'gradient': gradient,
+                'left_edge': left_edge,
+                'right_edge': right_edge,
+                'left_edge_idx': left_edge_idx,
+                'right_edge_idx': right_edge_idx,
+                'detected_center': detected_center,
+                'detected_width': detected_width,
+                'timestamp': frame.timestamp,
+            })
+
+        # Store edge statistics
+        self._shadow_left_edges = left_edges
+        self._shadow_right_edges = right_edges
+
+        if left_edges:
+            self._shadow_left_mean, self._shadow_left_std = self._circular_stats(left_edges)
+        else:
+            self._shadow_left_mean = None
+            self._shadow_left_std = None
+
+        if right_edges:
+            self._shadow_right_mean, self._shadow_right_std = self._circular_stats(right_edges)
+        else:
+            self._shadow_right_mean = None
+            self._shadow_right_std = None
+
+        # Apply correction if we have both edges
+        min_frames = self._config.theta_refinement.min_frames
+        if len(left_edges) >= min_frames and len(right_edges) >= min_frames:
+            mean_left = self._shadow_left_mean
+            mean_right = self._shadow_right_mean
+
+            # Calculate center from mean edges
+            if mean_right < mean_left:
+                width = mean_right + 360 - mean_left
+            else:
+                width = mean_right - mean_left
+            detected_center = (mean_left + width / 2) % 360
+
+            # Calculate offset from expected
+            offset = detected_center - expected_center
+            if offset > 180:
+                offset -= 360
+            elif offset < -180:
+                offset += 360
+
+            self._shadow_offset = offset
+            self._shadow_quality = (self._shadow_left_std + self._shadow_right_std) / 2
+
+            # Apply correction to all bearings and rewrap to [0, 360)
+            for i in range(len(self._bearing_per_frame)):
+                self._bearing_per_frame[i] = (self._bearing_per_frame[i] - offset) % 360
+
+            self._bearing = np.concatenate(self._bearing_per_frame)
+
+            logging.info(
+                f"Shadow refinement: LHS={mean_left:.1f}°±{self._shadow_left_std:.1f}°, "
+                f"RHS={mean_right:.1f}°±{self._shadow_right_std:.1f}°, "
+                f"offset={offset:.2f}°"
+            )
+        else:
+            logging.warning(
+                f"Insufficient shadow detections (LHS={len(left_edges)}, RHS={len(right_edges)}) "
+                f"for refinement (need {min_frames})"
+            )
+
+    @staticmethod
+    def _circular_stats(angles: list[float]) -> Tuple[float, float]:
+        """
+        Calculate circular mean and standard deviation of angles in degrees.
+
+        Returns both values efficiently by computing shared intermediate values once.
+
+        Args:
+            angles: List of angles in degrees
+
+        Returns:
+            Tuple of (mean, std) in degrees
+        """
+        angles_rad = np.deg2rad(angles)
+        mean_x = np.mean(np.cos(angles_rad))
+        mean_y = np.mean(np.sin(angles_rad))
+
+        # Circular mean
+        mean_angle = np.rad2deg(np.arctan2(mean_y, mean_x)) % 360
+
+        # Circular std (from mean resultant length)
+        R = np.sqrt(mean_x**2 + mean_y**2)
+        if R >= 1:
+            std_angle = 0.0
+        else:
+            std_angle = np.rad2deg(np.sqrt(-2 * np.log(R)))
+
+        return mean_angle, std_angle
+
+    @staticmethod
+    def _circular_mean(angles: list[float]) -> float:
+        """Calculate circular mean of angles in degrees."""
+        mean_angle, _ = Theta._circular_stats(angles)
+        return mean_angle
+
+    @staticmethod
+    def _circular_std(angles: list[float]) -> float:
+        """Calculate circular standard deviation of angles in degrees."""
+        _, std_angle = Theta._circular_stats(angles)
+        return std_angle
+
+    # -------------------------------------------------------------------------
+    # Public API
+    # -------------------------------------------------------------------------
+
+    @property
+    def frames(self) -> list[Frame]:
+        """Return the frames."""
+        return self._frames
+
+    @property
+    def bearing(self) -> np.ndarray:
+        """
+        Get bearing angles for all radials across all frames.
+
+        Returns:
+            Array of bearing angles in degrees [0, 360)
+        """
+        return self._bearing
+
+    @property
+    def bearing_per_frame(self) -> list[np.ndarray]:
+        """
+        Get bearing angles separated by frame.
+
+        Returns:
+            List of arrays, one per frame, each in [0, 360)
+        """
+        return self._bearing_per_frame
+
+    def bearing_for_frame(self, frame_idx: int) -> np.ndarray:
+        """
+        Get bearing angles for a specific frame.
+
+        Args:
+            frame_idx: Frame index
+
+        Returns:
+            Array of bearing angles in degrees [0, 360)
+        """
+        return self._bearing_per_frame[frame_idx]
+
+    @property
+    def shadow_offset(self) -> float:
+        """Get the shadow-based bearing offset correction applied."""
+        return self._shadow_offset
+
+    @property
+    def shadow_quality(self) -> float:
+        """Get the shadow alignment quality metric (std dev, lower is better)."""
+        return self._shadow_quality
+
+    @property
+    def shadow_left_mean(self) -> float | None:
+        """Get the mean left edge of shadow region."""
+        return self._shadow_left_mean
+
+    @property
+    def shadow_left_std(self) -> float | None:
+        """Get the std dev of left edge of shadow region."""
+        return self._shadow_left_std
+
+    @property
+    def shadow_right_mean(self) -> float | None:
+        """Get the mean right edge of shadow region."""
+        return self._shadow_right_mean
+
+    @property
+    def shadow_right_std(self) -> float | None:
+        """Get the std dev of right edge of shadow region."""
+        return self._shadow_right_std
+
+    @property
+    def shadow_stats(self) -> str | None:
+        """Get formatted shadow statistics string, or None if not available."""
+        if self._shadow_left_mean is not None and self._shadow_right_mean is not None:
+            return (f"LHS: {self._shadow_left_mean:.2f}°±{self._shadow_left_std:.2f}°  "
+                    f"RHS: {self._shadow_right_mean:.2f}°±{self._shadow_right_std:.2f}°  "
+                    f"(n={len(self._shadow_left_edges)})")
+        return None
+
+    def plot_shadow_diagnostics(self) -> None:
+        """
+        Display diagnostic plots for shadow edge detection.
+
+        Shows per-frame intensity profiles with detected edges and
+        summary statistics across all frames.
+        """
+        import matplotlib.pyplot as plt
+
+        if not self._shadow_data:
+            print("No shadow data available (refinement may be disabled)")
+            return
+
+        expected_center = self._config.shadow.center
+        expected_width = self._config.shadow.width
+        search_range = expected_width
+
+        # Create figure with subplots
+        n_frames = len(self._frames)
+        n_cols = min(3, n_frames)
+        n_rows = (n_frames + n_cols - 1) // n_cols + 2  # Extra rows for summary
+
+        fig = plt.figure(figsize=(5 * n_cols, 4 * n_rows))
+
+        # Plot each frame's intensity vs bearing with edge detection
+        for i, data in enumerate(self._shadow_data):
+            ax = fig.add_subplot(n_rows, n_cols, i + 1)
+
+            bearing = data['bearing_sorted']
+            intensity_norm = data['intensity_norm']
+            intensity_smooth = data['intensity_smooth']
+
+            # Plot raw and smoothed intensity
+            ax.plot(bearing, intensity_norm, 'b-', linewidth=0.5, alpha=0.5, label='Raw')
+            ax.plot(bearing, intensity_smooth, 'b-', linewidth=1.5, label='Smoothed')
+
+            # Mark expected shadow region (lighter)
+            ax.axvspan(expected_center - expected_width/2, expected_center + expected_width/2,
+                      alpha=0.1, color='gray', label='Expected region')
+            ax.axvline(expected_center, color='gray', linestyle=':', linewidth=1)
+
+            # Mark detected edges
+            if data['left_edge'] is not None:
+                ax.axvline(data['left_edge'], color='red', linestyle='-', linewidth=2,
+                          label=f'Left edge ({data["left_edge"]:.1f}°)')
+                ax.scatter([data['left_edge']], [intensity_smooth[data['left_edge_idx']]],
+                          color='red', s=80, zorder=5, marker='<')
+
+            if data['right_edge'] is not None:
+                ax.axvline(data['right_edge'], color='blue', linestyle='-', linewidth=2,
+                          label=f'Right edge ({data["right_edge"]:.1f}°)')
+                ax.scatter([data['right_edge']], [intensity_smooth[data['right_edge_idx']]],
+                          color='blue', s=80, zorder=5, marker='>')
+
+            # Mark detected center
+            if data['detected_center'] is not None:
+                ax.axvline(data['detected_center'], color='green', linestyle='--', linewidth=2,
+                          label=f'Center ({data["detected_center"]:.1f}°)')
+
+            ax.set_xlabel('Bearing (°)')
+            ax.set_ylabel('Normalized Intensity')
+            title = f'Frame {i}: {data["timestamp"]}'
+            if data['detected_width'] is not None:
+                title += f'\nWidth: {data["detected_width"]:.1f}°'
+            ax.set_title(title, fontsize=9)
+            ax.set_xlim(expected_center - search_range - 10, expected_center + search_range + 10)
+            ax.set_ylim(0, 1.1)
+            ax.legend(fontsize=6, loc='upper right')
+            ax.grid(True, alpha=0.3)
+
+        # Summary plot 1: Edge positions across frames
+        ax_edges = fig.add_subplot(n_rows, 1, n_rows - 1)
+
+        left_edges = [(d['frame_idx'], d['left_edge']) for d in self._shadow_data if d['left_edge'] is not None]
+        right_edges = [(d['frame_idx'], d['right_edge']) for d in self._shadow_data if d['right_edge'] is not None]
+        centers = [(d['frame_idx'], d['detected_center']) for d in self._shadow_data if d['detected_center'] is not None]
+
+        if left_edges:
+            ax_edges.scatter(*zip(*left_edges), s=60, c='red', marker='<', label='Left edges')
+            if self._shadow_left_mean is not None:
+                ax_edges.axhline(self._shadow_left_mean, color='red', linestyle='-', linewidth=1, alpha=0.7)
+
+        if right_edges:
+            ax_edges.scatter(*zip(*right_edges), s=60, c='blue', marker='>', label='Right edges')
+            if self._shadow_right_mean is not None:
+                ax_edges.axhline(self._shadow_right_mean, color='blue', linestyle='-', linewidth=1, alpha=0.7)
+
+        if centers:
+            ax_edges.scatter(*zip(*centers), s=60, c='green', marker='o', label='Centers (from edges)')
+            mean_center = self._circular_mean([c[1] for c in centers])
+            ax_edges.axhline(mean_center, color='green', linestyle='--', linewidth=2)
+
+        ax_edges.axhline(expected_center, color='gray', linestyle=':', linewidth=2, label=f'Expected ({expected_center}°)')
+
+        ax_edges.set_xlabel('Frame Index')
+        ax_edges.set_ylabel('Bearing (°)')
+        ax_edges.set_title('Shadow Edge Detection Across Frames')
+        ax_edges.legend(loc='upper right')
+        ax_edges.grid(True, alpha=0.3)
+
+        # Summary plot 2: Statistics
+        ax_stats = fig.add_subplot(n_rows, 1, n_rows)
+
+        stats_text = []
+        if self._shadow_left_mean is not None:
+            stats_text.append(f'Left Edge:  mean={self._shadow_left_mean:.2f}°, std={self._shadow_left_std:.2f}°, n={len(self._shadow_left_edges)}')
+
+        if self._shadow_right_mean is not None:
+            stats_text.append(f'Right Edge: mean={self._shadow_right_mean:.2f}°, std={self._shadow_right_std:.2f}°, n={len(self._shadow_right_edges)}')
+
+        if centers:
+            center_vals = [c[1] for c in centers]
+            mean_center, std_center = self._circular_stats(center_vals)
+            stats_text.append(f'Center:     mean={mean_center:.2f}°, std={std_center:.2f}°, n={len(centers)}')
+
+        if self._shadow_left_mean is not None and self._shadow_right_mean is not None:
+            mean_left = self._shadow_left_mean
+            mean_right = self._shadow_right_mean
+            if mean_right < mean_left:
+                width = mean_right + 360 - mean_left
+            else:
+                width = mean_right - mean_left
+            computed_center = (mean_left + width / 2) % 360
+            offset = computed_center - expected_center
+            if offset > 180:
+                offset -= 360
+            elif offset < -180:
+                offset += 360
+            stats_text.append('\nComputed from edges:')
+            stats_text.append(f'  Shadow width: {width:.2f}°')
+            stats_text.append(f'  Shadow center: {computed_center:.2f}°')
+            stats_text.append(f'  Offset from expected ({expected_center}°): {offset:.2f}°')
+
+        ax_stats.text(0.05, 0.95, '\n'.join(stats_text), transform=ax_stats.transAxes,
+                     fontsize=10, verticalalignment='top', fontfamily='monospace',
+                     bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        ax_stats.set_xlim(0, 1)
+        ax_stats.set_ylim(0, 1)
+        ax_stats.axis('off')
+        ax_stats.set_title('Shadow Detection Statistics')
+
+        plt.tight_layout()
+        plt.show()
+
+    @property
+    def config(self) -> WamosConfig:
+        """Return the configuration object."""
+        return self._config
+
+    def in_shadow(self, frame_idx: int | None = None) -> np.ndarray:
+        """
+        Get boolean mask indicating radials in the shadow region.
+
+        Args:
+            frame_idx: If provided, return mask for specific frame only
+
+        Returns:
+            Boolean array (True = in shadow region)
+        """
+        if frame_idx is not None:
+            bearing = self._bearing_per_frame[frame_idx]
+        else:
+            bearing = self._bearing
+
+        shadow_start = self._config.shadow.start
+        shadow_end = self._config.shadow.end
+
+        if shadow_start < shadow_end:
+            return (bearing >= shadow_start) & (bearing <= shadow_end)
+        else:
+            # Wrap around 360
+            return (bearing >= shadow_start) | (bearing <= shadow_end)
+
+    def __len__(self) -> int:
+        """Return total number of radials across all frames."""
+        return len(self._bearing)
+
+    def __repr__(self) -> str:
+        return (
+            f"Theta(frames={len(self._frames)}, "
+            f"radials={len(self)}, "
+            f"shadow_offset={self._shadow_offset:.2f}°)"
+        )
+
+    def __enter__(self) -> 'Theta':
+        """Enter context manager."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Exit context manager."""
+        pass
+
+
+class Bearing:
+    """
+    Calculate radar beam angles in ship and earth reference frames with cartesian coordinates.
+
+    Converts theta (radar-relative angle) to:
+    - Ship-relative heading: theta + BO2RA (bow-to-radar angle)
+    - Image-adjusted heading: + HDGDL (heading delay for start of image)
+    - Earth heading: + GYROC (gyro compass heading)
+
+    Provides x/y cartesian coordinates for each radar pixel in both ship and earth frames.
+
+    Example:
+        >>> config = WamosConfig('radar_config.yaml')
+        >>> theta = Theta(frames, config)
+        >>> bearing = Bearing(theta, radar_height=25.0)
+        >>> x_ship, y_ship = bearing.xy_ship(frame_idx=0)
+        >>> x_earth, y_earth = bearing.xy_earth(frame_idx=0)
+    """
+
+    def __init__(self,
+                 theta: Theta,
+                 radar_height: float | None = None):
+        """
+        Initialize Bearing calculator.
+
+        Args:
+            theta: Theta object with calculated beam angles
+            radar_height: Radar height above water (m). If None, uses config or metadata.
+        """
+        self._theta = theta
+        self._config = theta.config
+        self._frames = theta.frames
+
+        # Determine radar height: parameter > config > metadata > wind sensor height
+        if radar_height is not None:
+            self._radar_height = radar_height
+        elif self._config.radar.height is not None:
+            self._radar_height = self._config.radar.height
+        elif self._frames[0].metadata.radar_height is not None:
+            self._radar_height = self._frames[0].metadata.radar_height
+        else:
+            # Fall back to wind sensor height
+            self._radar_height = self._frames[0].metadata.wind_sensor_height
+
+    @property
+    def theta(self) -> Theta:
+        """Return the underlying Theta object."""
+        return self._theta
+
+    @property
+    def config(self) -> WamosConfig:
+        """Return the configuration."""
+        return self._config
+
+    @property
+    def radar_height(self) -> float | None:
+        """Return the radar height."""
+        return self._radar_height
+
+    def _get_radar_height(self, frame_idx: int) -> float | None:
+        """Get radar height with fallback to frame metadata."""
+        return get_radar_height(self._radar_height, self._frames[frame_idx])
+
+    def heading_ship(self, frame_idx: int) -> np.ndarray:
+        """
+        Get beam heading relative to ship bow.
+
+        heading_ship = theta + BO2RA
+
+        Args:
+            frame_idx: Frame index
+
+        Returns:
+            Array of ship-relative headings in degrees [0, 360)
+        """
+        theta = self._theta.bearing_for_frame(frame_idx)
+        bo2ra = self._config.offsets.bow_to_radar
+        return (theta + bo2ra) % 360
+
+    def heading_image(self, frame_idx: int) -> np.ndarray:
+        """
+        Get beam heading adjusted for image start.
+
+        heading_image = theta + BO2RA + HDGDL
+
+        Args:
+            frame_idx: Frame index
+
+        Returns:
+            Array of image-adjusted headings in degrees [0, 360)
+        """
+        theta = self._theta.bearing_for_frame(frame_idx)
+        bo2ra = self._config.offsets.bow_to_radar
+        hdgdl = self._config.offsets.heading_delay
+        return (theta + bo2ra + hdgdl) % 360
+
+    def heading_earth(self, frame_idx: int) -> np.ndarray:
+        """
+        Get beam heading in earth coordinates (true heading).
+
+        heading_earth = theta + BO2RA + HDGDL + GYROC
+
+        Args:
+            frame_idx: Frame index
+
+        Returns:
+            Array of earth headings in degrees [0, 360), where 0=North, 90=East
+        """
+        frame = self._frames[frame_idx]
+        theta = self._theta.bearing_for_frame(frame_idx)
+        bo2ra = self._config.offsets.bow_to_radar
+        hdgdl = self._config.offsets.heading_delay
+        gyroc = frame.metadata.heading or 0.0
+        compass_offset = self._config.offsets.compass
+
+        return (theta + bo2ra + hdgdl + gyroc + compass_offset) % 360
+
+    def _heading_to_xy(self,
+                       frame_idx: int,
+                       heading: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Convert heading angles to x/y cartesian coordinates.
+
+        Common implementation for xy_ship and xy_earth.
+        Convention: +Y = heading 0°, +X = heading 90°
+
+        Args:
+            frame_idx: Frame index (for range calculation)
+            heading: Array of heading angles in degrees
+
+        Returns:
+            Tuple of (x, y) arrays, each shape (n_bearings, n_distances)
+        """
+        frame = self._frames[frame_idx]
+        height = self._get_radar_height(frame_idx)
+        range_vals = frame.ground_range(height) if height else frame.slant_range()
+
+        # Convert to radians
+        heading_rad = np.deg2rad(heading)
+
+        # Create 2D grids: heading is (n_bearings,), range is (n_distances,)
+        heading_2d = heading_rad[:, np.newaxis]
+        range_2d = range_vals[np.newaxis, :]
+
+        # x = range * sin(heading), y = range * cos(heading)
+        x = range_2d * np.sin(heading_2d)
+        y = range_2d * np.cos(heading_2d)
+
+        return x, y
+
+    def xy_ship(self, frame_idx: int) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Get x/y cartesian coordinates in ship reference frame.
+
+        Ship frame: +X = starboard, +Y = bow (forward)
+        Origin at ship center.
+
+        Args:
+            frame_idx: Frame index
+
+        Returns:
+            Tuple of (x, y) arrays, each shape (n_bearings, n_distances)
+            in meters relative to ship center
+        """
+        return self._heading_to_xy(frame_idx, self.heading_ship(frame_idx))
+
+    def xy_earth(self, frame_idx: int) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Get x/y cartesian coordinates in earth reference frame.
+
+        Earth frame: +X = East, +Y = North
+        Origin at ship position.
+
+        Args:
+            frame_idx: Frame index
+
+        Returns:
+            Tuple of (x, y) arrays, each shape (n_bearings, n_distances)
+            in meters relative to ship position
+        """
+        return self._heading_to_xy(frame_idx, self.heading_earth(frame_idx))
+
+    def plot_polar(self,
+                   frame_idx: int,
+                   ax=None,
+                   vmin: float = 0,
+                   vmax: float = 4095,
+                   cmap: str = 'viridis',
+                   colorbar: bool = True):
+        """
+        Plot frame in polar coordinates (bearing vs distance).
+
+        Args:
+            frame_idx: Frame index
+            ax: Matplotlib axes (creates new if None)
+            vmin, vmax: Colorbar limits
+            cmap: Colormap name
+            colorbar: Whether to add colorbar
+
+        Returns:
+            Tuple of (figure, axes, image)
+        """
+        import matplotlib.pyplot as plt
+
+        frame = self._frames[frame_idx]
+        bearing = self._theta.bearing_for_frame(frame_idx)
+        height = self._get_radar_height(frame_idx)
+        if height is not None:
+            range_vals = frame.ground_range(height)
+            x_label = 'Ground Distance (m)'
+        else:
+            range_vals = frame.slant_range()
+            x_label = 'Slant Range (m)'
+        intensity = frame.intensity.astype(np.float64)
+
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(10, 8))
+        else:
+            fig = ax.figure
+
+        # Sort bearing and data to ensure monotonic coordinates for pcolormesh
+        sorted_bearing, sorted_intensity = sort_polar_data(bearing, intensity)
+
+        # Create bin edges for pcolormesh
+        bearing_edges = calc_bin_edges(sorted_bearing)
+        range_edges = calc_bin_edges(range_vals)
+
+        im = ax.pcolormesh(range_edges, bearing_edges, sorted_intensity,
+                           vmin=vmin, vmax=vmax, cmap=cmap, shading='flat')
+
+        if colorbar:
+            fig.colorbar(im, ax=ax, label='Intensity')
+        ax.set_xlabel(x_label)
+        ax.set_ylabel('Bearing (°)')
+        ax.set_title(self._format_title(frame_idx, 'Polar'))
+
+        return fig, ax, im
+
+    def plot_ship(self,
+                  frame_idx: int,
+                  ax=None,
+                  vmin: float = 0,
+                  vmax: float = 4095,
+                  cmap: str = 'viridis',
+                  colorbar: bool = True):
+        """
+        Plot frame in ship-relative x/y coordinates.
+
+        Ship frame: +X = starboard, +Y = bow (forward)
+
+        Args:
+            frame_idx: Frame index
+            ax: Matplotlib axes (creates new if None)
+            vmin, vmax: Colorbar limits
+            cmap: Colormap name
+            colorbar: Whether to add colorbar
+
+        Returns:
+            Tuple of (figure, axes, image)
+        """
+        import matplotlib.pyplot as plt
+
+        frame = self._frames[frame_idx]
+        intensity = frame.intensity
+        x, y = self.xy_ship(frame_idx)
+
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(10, 10))
+        else:
+            fig = ax.figure
+
+        # Use shading='nearest' for radial coordinates - they're not monotonic
+        # Suppress the matplotlib warning about non-monotonic coordinates
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', message='.*input coordinates.*pcolormesh.*')
+            im = ax.pcolormesh(x, y, intensity,
+                               vmin=vmin, vmax=vmax, cmap=cmap, shading='nearest')
+
+        if colorbar:
+            fig.colorbar(im, ax=ax, label='Intensity')
+
+        ax.set_xlabel('X - Starboard (m)')
+        ax.set_ylabel('Y - Bow (m)')
+        ax.set_aspect('equal')
+        add_crosshairs(ax)
+
+        # Add range rings every 1km
+        max_range = np.sqrt(x**2 + y**2).max()
+        add_range_rings(ax, max_range, interval=1000.0)
+
+        ax.set_title(self._format_title(frame_idx, 'Ship Coordinates'))
+
+        return fig, ax, im
+
+    def plot_earth(self,
+                   frame_idx: int,
+                   ax=None,
+                   vmin: float = 0,
+                   vmax: float = 4095,
+                   cmap: str = 'viridis',
+                   colorbar: bool = True):
+        """
+        Plot frame in earth x/y coordinates.
+
+        Earth frame: +X = East, +Y = North
+
+        Args:
+            frame_idx: Frame index
+            ax: Matplotlib axes (creates new if None)
+            vmin, vmax: Colorbar limits
+            cmap: Colormap name
+            colorbar: Whether to add colorbar
+
+        Returns:
+            Tuple of (figure, axes, image)
+        """
+        import matplotlib.pyplot as plt
+
+        frame = self._frames[frame_idx]
+        intensity = frame.intensity
+        x, y = self.xy_earth(frame_idx)
+
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(10, 10))
+        else:
+            fig = ax.figure
+
+        # Use shading='nearest' for radial coordinates - they're not monotonic
+        # Suppress the matplotlib warning about non-monotonic coordinates
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', message='.*input coordinates.*pcolormesh.*')
+            im = ax.pcolormesh(x, y, intensity,
+                               vmin=vmin, vmax=vmax, cmap=cmap, shading='nearest')
+
+        if colorbar:
+            fig.colorbar(im, ax=ax, label='Intensity')
+
+        ax.set_xlabel('X - East (m)')
+        ax.set_ylabel('Y - North (m)')
+        ax.set_aspect('equal')
+        add_crosshairs(ax)
+
+        # Add range rings every 1km
+        max_range = np.sqrt(x**2 + y**2).max()
+        add_range_rings(ax, max_range, interval=1000.0)
+
+        ax.set_title(self._format_title(frame_idx, 'Earth Coordinates'))
+
+        return fig, ax, im
+
+    def _format_title(self, frame_idx: int, coord_type: str) -> str:
+        """Format plot title with frame info."""
+        frame = self._frames[frame_idx]
+
+        parts = [f'Frame {frame_idx + 1}/{len(self._frames)}: {frame.timestamp}']
+        parts.append(f'[{coord_type}]')
+
+        nav_info = format_nav_title(frame)
+        if nav_info:
+            parts.append(nav_info)
+
+        return '\n'.join(parts)
+
+    def __repr__(self) -> str:
+        return (
+            f"Bearing(frames={len(self._frames)}, "
+            f"radar_height={self._radar_height})"
+        )
+
+    def __enter__(self) -> 'Bearing':
+        """Enter context manager."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Exit context manager."""
+        pass
+
+
+def add_subparser(subparsers) -> None:
+    """Register the 'bearing' subcommand."""
+    p = subparsers.add_parser(
+        'bearing',
+        help='Bearing analysis and plotting',
+        description="Calculate radar bearing from polar files"
+    )
+    p.add_argument("stime", type=str, help="Start time")
+    p.add_argument("etime", type=str, help="End time")
+    p.add_argument("polar_path", type=str, help="Path to polar files")
+    p.add_argument("--config", "-c", type=str, default=None,
+                   help="YAML configuration file")
+    p.add_argument("--radar-height", type=float, default=None,
+                   help="Radar height above water (m)")
+    p.add_argument("--max-frames", type=int, default=10,
+                   help="Maximum frames to process (default: 10)")
+    p.add_argument("--no-refine", action="store_true",
+                   help="Disable shadow refinement")
+    p.add_argument("--plot", choices=['polar', 'ship', 'earth', 'all'],
+                   default=None, help="Plot type")
+    p.add_argument("--frame", type=int, default=0,
+                   help="Frame index to plot (default: 0)")
+    p.add_argument("--verbose", "-v", action="store_true",
+                   help="Verbose output")
+    p.set_defaults(func=run)
+
+
+def run(args) -> None:
+    """Execute the 'bearing' command."""
+    from wamos_tpw.filenames import Filenames, _parse_timestamp
+    from wamos_tpw.polarfile import load_polar_file
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s"
+    )
+
+    # Parse times
+    stime = _parse_timestamp(args.stime)
+    etime = _parse_timestamp(args.etime)
+
+    # Find files
+    filenames = Filenames(stime, etime, args.polar_path)
+    print(f"Found {len(filenames)} files")
+
+    if not filenames:
+        print("No files found")
+        return
+
+    # Load frames
+    print(f"Loading up to {args.max_frames} frames...")
+    frames = []
+    for filepath in filenames.files[:args.max_frames]:
+        frame = load_polar_file(filepath)
+        if frame is not None:
+            frames.append(frame)
+
+    print(f"Loaded {len(frames)} frames")
+
+    if not frames:
+        print("No valid frames")
+        return
+
+    # Load config
+    config = WamosConfig(args.config) if args.config else WamosConfig()
+    print(f"Config: {config}")
+
+    # Calculate theta
+    theta = Theta(frames, config, refine=not args.no_refine)
+    print(f"\n{theta}")
+
+    # Show statistics
+    print("\nTheta Statistics:")
+    print(f"  Total radials: {len(theta)}")
+    for i in range(min(3, len(frames))):
+        bearing = theta.bearing_for_frame(i)
+        print(f"  Frame {i}: bearing range [{bearing.min():.1f}°, {bearing.max():.1f}°]")
+
+    if theta.shadow_offset != 0:
+        print("\nShadow Refinement:")
+        print(f"  Offset applied: {theta.shadow_offset:.2f}°")
+        print(f"  Quality (std): {theta.shadow_quality:.2f}°")
+
+    # Create Bearing object
+    bearing_obj = Bearing(theta, radar_height=args.radar_height)
+    print(f"\n{bearing_obj}")
+
+    # Show heading conversions for first frame
+    print("\nHeading conversions (frame 0):")
+    heading_ship = bearing_obj.heading_ship(0)
+    heading_image = bearing_obj.heading_image(0)
+    heading_earth = bearing_obj.heading_earth(0)
+    print(f"  Ship heading:  [{heading_ship.min():.1f}°, {heading_ship.max():.1f}°]")
+    print(f"  Image heading: [{heading_image.min():.1f}°, {heading_image.max():.1f}°]")
+    print(f"  Earth heading: [{heading_earth.min():.1f}°, {heading_earth.max():.1f}°]")
+
+    # Plot if requested
+    if args.plot:
+        import matplotlib.pyplot as plt
+
+        frame_idx = min(args.frame, len(frames) - 1)
+
+        if args.plot == 'all':
+            fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+            bearing_obj.plot_polar(frame_idx, ax=axes[0])
+            bearing_obj.plot_ship(frame_idx, ax=axes[1])
+            bearing_obj.plot_earth(frame_idx, ax=axes[2])
+            fig.tight_layout()
+        elif args.plot == 'polar':
+            bearing_obj.plot_polar(frame_idx)
+        elif args.plot == 'ship':
+            bearing_obj.plot_ship(frame_idx)
+        elif args.plot == 'earth':
+            bearing_obj.plot_earth(frame_idx)
+
+        plt.show()
+
+
+def main() -> None:
+    """Standalone CLI entry point."""
+    from argparse import ArgumentParser
+
+    parser = ArgumentParser(description="Calculate radar bearing from polar files")
+    parser.add_argument("stime", type=str, help="Start time")
+    parser.add_argument("etime", type=str, help="End time")
+    parser.add_argument("polar_path", type=str, help="Path to polar files")
+    parser.add_argument("--config", "-c", type=str, default=None,
+                        help="YAML configuration file")
+    parser.add_argument("--radar-height", type=float, default=None,
+                        help="Radar height above water (m)")
+    parser.add_argument("--max-frames", type=int, default=10,
+                        help="Maximum frames to process (default: 10)")
+    parser.add_argument("--no-refine", action="store_true",
+                        help="Disable shadow refinement")
+    parser.add_argument("--plot", choices=['polar', 'ship', 'earth', 'all'],
+                        default=None, help="Plot type")
+    parser.add_argument("--frame", type=int, default=0,
+                        help="Frame index to plot (default: 0)")
+    parser.add_argument("--verbose", "-v", action="store_true",
+                        help="Verbose output")
+    args = parser.parse_args()
+    run(args)
+
+
+if __name__ == "__main__":
+    main()

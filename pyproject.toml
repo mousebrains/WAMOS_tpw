@@ -1,0 +1,92 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wamos_tpw"
+version = "0.1.0"
+description = "WAMOS marine radar data processing pipeline"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    {name = "WAMOS Team"},
+]
+keywords = ["wamos", "radar", "marine", "oceanography"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+]
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "matplotlib>=3.7",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+]
+
+[project.scripts]
+wamos = "wamos_tpw.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wamos_tpw"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/docs",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.mypy]
+ignore_missing_imports = true
+warn_return_any = false
+warn_unused_ignores = false
+# Disable specific error codes for scientific/visualization code:
+# - union-attr: matplotlib API returns Optional types requiring excessive guards
+# - index: Indexing into Optional lists after None-checks not recognized
+# - attr-defined: matplotlib polar axes have methods mypy doesn't recognize
+# - call-overload: numpy datetime64/timedelta64 typing stubs are incomplete
+# - return-value: numpy array dtype variations cause false positives
+# - arg-type: matplotlib accepts lists where stubs require tuples
+# - assignment: numpy/matplotlib return type variations
+# - operator: numpy array operations with Optional types
+# - var-annotated: accumulator patterns in loops
+# - has-type: matplotlib inset axes type inference
+# - misc: numpy bool vs Python bool, matplotlib scatter kwargs
+disable_error_code = [
+    "union-attr",
+    "index",
+    "attr-defined",
+    "call-overload",
+    "return-value",
+    "arg-type",
+    "assignment",
+    "operator",
+    "var-annotated",
+    "has-type",
+    "misc",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E501"]  # Line too long
