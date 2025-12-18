@@ -81,7 +81,7 @@ def generate_movie(args: Namespace, config: "WamosConfig") -> None:
             skipped_count = 0
 
             # Get grouped file lists (without loading frames yet)
-            groups = pframes.groupby()
+            groups = pframes.groups()
 
             logging.debug("Starting group iteration...")
             for period, file_list in groups.items():
