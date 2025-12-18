@@ -1021,6 +1021,13 @@ def _add_arguments(parser) -> None:
         "--fps", type=int, default=10, help="Frames per second for movie (default: 10)"
     )
     parser.add_argument(
+        "--workers",
+        "-w",
+        type=int,
+        default=None,
+        help="Number of parallel workers for movie generation (default: auto)",
+    )
+    parser.add_argument(
         "--netcdf", type=str, default=None, help="Output NetCDF file (e.g., output.nc)"
     )
     parser.add_argument("--show-track", action="store_true", help="Show separate ship track plot")
