@@ -93,8 +93,8 @@ class TestDestreak:
         # Result should be same shape
         assert result.shape == frame.intensity.shape, "Output shape should match input"
 
-        # Result should be floating point
-        assert result.dtype == np.float64, "Output should be float64"
+        # Result should be floating point (float32 for memory efficiency)
+        assert result.dtype == np.float32, "Output should be float32"
 
     def test_destreak_with_neighbors(self, april_polar_files: list[Path]):
         """Test destreaking with neighboring frames."""
@@ -130,7 +130,7 @@ class TestDestreak:
         )
 
         assert result.shape == frame.intensity.shape
-        assert result.dtype == np.float64
+        assert result.dtype == np.float32
 
 
 class TestProcessingPipeline:

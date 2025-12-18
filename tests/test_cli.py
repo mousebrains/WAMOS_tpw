@@ -57,7 +57,7 @@ class TestCLI:
 
         result = subprocess.run(
             [
-                sys.executable, "-m", "wamos_tpw.cli", "list",
+                sys.executable, "-m", "wamos_tpw.cli", "-v", "list",
                 "202204051400", "202204051401",
                 str(test_data_dir)
             ],
@@ -66,21 +66,25 @@ class TestCLI:
         )
         # Should find files and exit successfully
         assert result.returncode == 0
-        assert ".pol" in result.stdout or "file" in result.stdout.lower()
+        # Output now goes to stderr via logging
+        output = result.stdout + result.stderr
+        assert ".pol" in output or "file" in output.lower()
 
     def test_cli_parse_with_test_file(self, single_polar_file: Path):
         """Test parse command with actual test file."""
         result = subprocess.run(
             [
-                sys.executable, "-m", "wamos_tpw.cli", "parse",
+                sys.executable, "-m", "wamos_tpw.cli", "-v", "parse",
                 str(single_polar_file)
             ],
             capture_output=True,
             text=True
         )
         assert result.returncode == 0
+        # Output now goes to stderr via logging
+        output = result.stdout + result.stderr
         # Should output some info about the file
-        assert "frame" in result.stdout.lower() or "polar" in result.stdout.lower()
+        assert "frame" in output.lower() or "polar" in output.lower()
 
 
 class TestCLIModuleImports:
