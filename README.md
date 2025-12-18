@@ -3,7 +3,7 @@
 [![CI](https://github.com/mousebrains/WAMOS_tpw/actions/workflows/ci.yml/badge.svg)](https://github.com/mousebrains/WAMOS_tpw/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/mousebrains/WAMOS_tpw/branch/main/graph/badge.svg)](https://codecov.io/gh/mousebrains/WAMOS_tpw)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 WAMOS (Wave and Meteorological Observation System) marine radar data processing pipeline.
 
@@ -68,4 +68,4 @@ Derived from code developed at [CORDC at SIO](https://cordc.ucsd.edu).
 
 ## License
 
-GPL-3.0-or-later
+MIT License - see [LICENSE](LICENSE) for details.

@@ -1,7 +1,6 @@
 """Tests for combine_netcdf module."""
 
 from pathlib import Path
-from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -66,6 +65,7 @@ class TestNetCDFWriter:
 
         # Read back and verify
         import netCDF4 as nc
+
         with nc.Dataset(filepath, "r") as ds:
             assert "intensity" in ds.variables
             assert "lat" in ds.variables
@@ -99,6 +99,7 @@ class TestNetCDFWriter:
 
         # Verify both groups were written
         import netCDF4 as nc
+
         with nc.Dataset(filepath, "r") as ds:
             assert ds.dimensions["group"].size == 2
             assert ds.variables["intensity"].shape[0] == 2
@@ -123,6 +124,7 @@ class TestNetCDFWriter:
             writer.append_group(group_data)
 
         import netCDF4 as nc
+
         with nc.Dataset(filepath, "r") as ds:
             # Check scalar metadata
             assert ds.variables["ref_lat"][0] == pytest.approx(group_data["ref_lat"], rel=1e-5)
@@ -157,6 +159,7 @@ class TestNetCDFWriter:
             writer.append_group(group_data)
 
         import netCDF4 as nc
+
         with nc.Dataset(filepath, "r") as ds:
             assert ds.Conventions == "CF-1.8"
             assert ds.title == "WAMOS Radar Combined Gridded Data"
@@ -197,6 +200,7 @@ class TestNetCDFWriter:
             writer.append_group(group2)
 
         import netCDF4 as nc
+
         with nc.Dataset(filepath, "r") as ds:
             # Check ragged array indices
             track_start = ds.variables["track_start"][:]
@@ -211,8 +215,8 @@ class TestNetCDFWriter:
             for i in range(2):
                 start = track_start[i]
                 count = track_count[i]
-                ship_lat = ds.variables["ship_lat"][start:start+count]
-                ship_lon = ds.variables["ship_lon"][start:start+count]
+                ship_lat = ds.variables["ship_lat"][start : start + count]
+                ship_lon = ds.variables["ship_lon"][start : start + count]
                 assert len(ship_lat) == count
                 assert len(ship_lon) == count
 
@@ -240,6 +244,7 @@ class TestNetCDFWriterVariableAttributes:
             writer.append_group(group_data)
 
         import netCDF4 as nc
+
         with nc.Dataset(filepath, "r") as ds:
             # Check units
             assert ds.variables["ref_lat"].units == "degrees_north"
@@ -271,10 +276,19 @@ class TestNetCDFWriterVariableAttributes:
             writer.append_group(group_data)
 
         import netCDF4 as nc
+
         with nc.Dataset(filepath, "r") as ds:
             # All variables should have long_name
-            for var_name in ["intensity", "lat", "lon", "ref_lat", "ref_lon",
-                            "n_frames", "n_pixels", "travel_distance_m"]:
+            for var_name in [
+                "intensity",
+                "lat",
+                "lon",
+                "ref_lat",
+                "ref_lon",
+                "n_frames",
+                "n_pixels",
+                "travel_distance_m",
+            ]:
                 assert hasattr(ds.variables[var_name], "long_name")
                 assert len(ds.variables[var_name].long_name) > 0
 
@@ -298,6 +312,7 @@ class TestNetCDFWriterVariableAttributes:
             writer.append_group(group_data)
 
         import netCDF4 as nc
+
         with nc.Dataset(filepath, "r") as ds:
             # Check that intensity is compressed
             intensity_var = ds.variables["intensity"]

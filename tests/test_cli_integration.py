@@ -8,8 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 
 class TestCombineCLI:
     """Integration tests for the combine command."""
@@ -91,8 +89,6 @@ class TestCombineCLI:
             text=True,
             timeout=120,
         )
-
-        output = result.stdout + result.stderr
 
         assert result.returncode == 0
         assert frames_dir.exists()

@@ -477,16 +477,24 @@ def run(args) -> None:
             warnings.append(f"shadow.width ({config.shadow.width}deg) is unusually small")
 
         # Offset sanity checks
-        total_offset = abs(config.offsets.compass) + abs(config.offsets.bow_to_radar) + abs(config.offsets.heading_delay)
+        total_offset = (
+            abs(config.offsets.compass)
+            + abs(config.offsets.bow_to_radar)
+            + abs(config.offsets.heading_delay)
+        )
         if total_offset > 45:
             warnings.append(f"Total offset ({total_offset}deg) is unusually large")
 
         # Destreak checks
         if config.destreak.threshold_sigma < 3:
-            warnings.append(f"destreak.threshold_sigma ({config.destreak.threshold_sigma}) is low - may remove valid data")
+            warnings.append(
+                f"destreak.threshold_sigma ({config.destreak.threshold_sigma}) is low - may remove valid data"
+            )
 
         if config.destreak.threshold_sigma > 10:
-            warnings.append(f"destreak.threshold_sigma ({config.destreak.threshold_sigma}) is high - may miss streaks")
+            warnings.append(
+                f"destreak.threshold_sigma ({config.destreak.threshold_sigma}) is high - may miss streaks"
+            )
 
         # Report results
         logging.info("=== Configuration Validation ===")

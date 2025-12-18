@@ -194,9 +194,7 @@ class Theta:
         median_size = np.median(segment_sizes)
 
         # Find segments that are likely missing a transition
-        suspicious = np.where(
-            segment_sizes > median_size * self._SEGMENT_SUSPICIOUS_MULTIPLIER
-        )[0]
+        suspicious = np.where(segment_sizes > median_size * self._SEGMENT_SUSPICIOUS_MULTIPLIER)[0]
 
         new_transitions = []
         for seg_idx in suspicious:
@@ -438,9 +436,7 @@ class Theta:
 
         return left_edge, right_edge, left_edge_idx, right_edge_idx
 
-    def _compute_shadow_statistics(
-        self, left_edges: list[float], right_edges: list[float]
-    ) -> None:
+    def _compute_shadow_statistics(self, left_edges: list[float], right_edges: list[float]) -> None:
         """
         Compute circular statistics for detected shadow edges.
 
@@ -460,9 +456,7 @@ class Theta:
             self._shadow_right_mean = None
             self._shadow_right_std = None
 
-    def _apply_shadow_correction(
-        self, left_edges: list[float], right_edges: list[float]
-    ) -> None:
+    def _apply_shadow_correction(self, left_edges: list[float], right_edges: list[float]) -> None:
         """
         Apply shadow-based bearing correction if sufficient detections available.
 

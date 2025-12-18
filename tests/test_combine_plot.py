@@ -1,8 +1,7 @@
 """Tests for combine_plot module."""
 
-import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -57,7 +56,7 @@ class TestPlotDiagnostics:
 
     @pytest.mark.skipif(
         True,  # Skip by default as it opens a window
-        reason="Interactive plot - enable manually for visual testing"
+        reason="Interactive plot - enable manually for visual testing",
     )
     def test_plot_diagnostics_interactive(self, single_polar_file: Path):
         """Test interactive diagnostics plot (manual testing only)."""
@@ -92,6 +91,7 @@ class TestPlotDiagnostics:
         # Mock plt.show to prevent window
         with patch("matplotlib.pyplot.show"):
             from wamos_tpw.combine_plot import plot_diagnostics
+
             plot_diagnostics(combine, n_along=50, n_cross=50, workers=1)
 
 

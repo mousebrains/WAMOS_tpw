@@ -25,29 +25,40 @@ import pandas as pd
 if TYPE_CHECKING:
     from wamos_tpw.config import WamosConfig
 
-# Re-export for backward compatibility
-from wamos_tpw.combine_shadow import (
-    detect_shadow_edges as _detect_shadow_edges,
+# Re-export for backward compatibility (noqa: F401)
+from wamos_tpw.combine_shadow import (  # noqa: F401
     compute_chunk_shadow_offset as _compute_chunk_shadow_offset,
+    detect_shadow_edges as _detect_shadow_edges,
 )
-from wamos_tpw.combine_streaming import (
-    load_file_metadata as _load_file_metadata,
+from wamos_tpw.combine_streaming import (  # noqa: F401
     compute_grid_bounds_from_metadata as _compute_grid_bounds_from_metadata,
-    process_single_frame as _process_single_frame,
     grid_frame_streaming as _grid_frame_streaming,
+    load_file_metadata as _load_file_metadata,
     normalize_frames as _normalize_frames,
+    process_single_frame as _process_single_frame,
 )
 
 
 def _save_gridded_frame(
-    gridded, x_edges, y_edges, output_path: str,
-    ref_lat: float, ref_lon: float,
-    first_timestamp, last_timestamp, n_frames: int,
-    ship_x, ship_y,
-    ship_speeds, ship_headings, wind_speeds, wind_dirs,
+    gridded,
+    x_edges,
+    y_edges,
+    output_path: str,
+    ref_lat: float,
+    ref_lon: float,
+    first_timestamp,
+    last_timestamp,
+    n_frames: int,
+    ship_x,
+    ship_y,
+    ship_speeds,
+    ship_headings,
+    wind_speeds,
+    wind_dirs,
 ) -> None:
     """Save the gridded data as a PNG image with ship/wind polar insets."""
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -171,8 +182,16 @@ def _save_gridded_frame(
     duration_str = f"{duration_s:.0f}s" if duration_s < 60 else f"{duration_s / 60:.1f}m"
 
     info_text = f"{start_str} - {end_str}  |  {n_frames} frames  |  Duration: {duration_str}"
-    ax_info.text(0.5, 0.5, info_text, transform=ax_info.transAxes,
-                 ha="center", va="center", fontfamily="monospace", fontsize=9)
+    ax_info.text(
+        0.5,
+        0.5,
+        info_text,
+        transform=ax_info.transAxes,
+        ha="center",
+        va="center",
+        fontfamily="monospace",
+        fontsize=9,
+    )
 
     # Save
     fig.savefig(output_path, dpi=100, bbox_inches="tight", facecolor="white", edgecolor="none")
@@ -233,8 +252,20 @@ def _process_group(
         if bounds_result is None:
             return (period_str, None, time.perf_counter() - start_time)
 
-        (all_metadata, x_min, x_max, y_min, y_max, max_range, ship_x, ship_y,
-         ship_speeds, ship_headings, wind_speeds, wind_dirs) = bounds_result
+        (
+            all_metadata,
+            x_min,
+            x_max,
+            y_min,
+            y_max,
+            max_range,
+            ship_x,
+            ship_y,
+            ship_speeds,
+            ship_headings,
+            wind_speeds,
+            wind_dirs,
+        ) = bounds_result
         n_total_frames = len(all_metadata)
         del all_metadata  # Free metadata list
 
@@ -306,17 +337,29 @@ def _process_group(
                     # Note: offset already applied to theta, so pass 0 for deramp offset
                     for j, frame in enumerate(chunk_frames):
                         process_single_frame(
-                            j, frame, theta, config,
+                            j,
+                            frame,
+                            theta,
+                            config,
                             0.0,  # offset already applied to theta
-                            shadow_start, shadow_end,
+                            shadow_start,
+                            shadow_end,
                         )
 
                 # Sequential gridding
                 for j, frame in enumerate(chunk_frames):
                     grid_frame_streaming(
-                        frame, j, theta, bearing_obj, config,
-                        x_edges, y_edges, sum_total, count_total,
-                        ref_lat, ref_lon,
+                        frame,
+                        j,
+                        theta,
+                        bearing_obj,
+                        config,
+                        x_edges,
+                        y_edges,
+                        sum_total,
+                        count_total,
+                        ref_lat,
+                        ref_lon,
                     )
 
                 # Clear chunk memory
@@ -329,7 +372,7 @@ def _process_group(
                 del chunk_frames, theta, bearing_obj
                 gc.collect()
 
-                frame_idx_global += (chunk_end - i)
+                frame_idx_global += chunk_end - i
                 i = chunk_end
 
                 if max_frames and frame_idx_global >= max_frames:
@@ -346,9 +389,21 @@ def _process_group(
 
         # Save the frame image
         _save_gridded_frame(
-            gridded, x_edges, y_edges, output_path,
-            ref_lat, ref_lon, first_timestamp, last_timestamp, n_total_frames,
-            ship_x, ship_y, ship_speeds, ship_headings, wind_speeds, wind_dirs,
+            gridded,
+            x_edges,
+            y_edges,
+            output_path,
+            ref_lat,
+            ref_lon,
+            first_timestamp,
+            last_timestamp,
+            n_total_frames,
+            ship_x,
+            ship_y,
+            ship_speeds,
+            ship_headings,
+            wind_speeds,
+            wind_dirs,
         )
 
         del gridded
@@ -360,6 +415,7 @@ def _process_group(
         elapsed = time.perf_counter() - start_time
         logging.error(f"Error processing group {period_str}: {e}")
         import traceback
+
         traceback.print_exc()
         return (period_str, None, elapsed)
 
@@ -540,9 +596,13 @@ def generate_movie(args, config: "WamosConfig") -> None:
                         _, result_path, elapsed = future.result()
                         if result_path:
                             frame_paths.append(result_path)
-                            logging.info(f"Group {completed}/{n_work}: {ts_str} completed in {elapsed:.1f}s")
+                            logging.info(
+                                f"Group {completed}/{n_work}: {ts_str} completed in {elapsed:.1f}s"
+                            )
                         else:
-                            logging.warning(f"Group {completed}/{n_work}: {ts_str} failed after {elapsed:.1f}s")
+                            logging.warning(
+                                f"Group {completed}/{n_work}: {ts_str} failed after {elapsed:.1f}s"
+                            )
                     except Exception as e:
                         logging.error(f"Group {completed}/{n_work}: {ts_str} error: {e}")
 

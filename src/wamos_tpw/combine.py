@@ -74,7 +74,9 @@ class Combine:
             self._theta = theta
         else:
             self._theta = Theta(frames, config, refine=True)
-        self._bearing = Bearing(self._theta, radar_height=radar_height, cache_coordinates=cache_coordinates)
+        self._bearing = Bearing(
+            self._theta, radar_height=radar_height, cache_coordinates=cache_coordinates
+        )
 
         # Create Timestamp for ship position calculation
         self._timestamp = Timestamp(frames, config)
@@ -748,7 +750,9 @@ class Combine:
 
         # Expand shadow mask efficiently (broadcast instead of repeat)
         n_bearings, n_distances = intensity.shape
-        shadow_flat = np.broadcast_to(shadow_mask_1d[:, np.newaxis], (n_bearings, n_distances)).ravel()
+        shadow_flat = np.broadcast_to(
+            shadow_mask_1d[:, np.newaxis], (n_bearings, n_distances)
+        ).ravel()
 
         # Clip to valid range and exclude shadow region
         valid = (x_idx >= 0) & (x_idx < n_x) & (y_idx >= 0) & (y_idx < n_y) & ~shadow_flat

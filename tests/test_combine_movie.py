@@ -1,11 +1,9 @@
 """Tests for combine_movie module."""
 
-import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import numpy as np
-import pytest
 
 
 class TestDetectShadowEdges:
@@ -121,8 +119,20 @@ class TestComputeGridBoundsFromMetadata:
         )
 
         assert result is not None
-        (all_metadata, x_min, x_max, y_min, y_max, max_range,
-         ship_x, ship_y, ship_speeds, ship_headings, wind_speeds, wind_dirs) = result
+        (
+            all_metadata,
+            x_min,
+            x_max,
+            y_min,
+            y_max,
+            max_range,
+            ship_x,
+            ship_y,
+            ship_speeds,
+            ship_headings,
+            wind_speeds,
+            wind_dirs,
+        ) = result
 
         # Check bounds are valid
         assert x_min < x_max
@@ -206,9 +216,17 @@ class TestGridFrameStreaming:
 
         # Grid the frame
         _grid_frame_streaming(
-            frame, 0, theta, bearing, config,
-            x_edges, y_edges, sum_total, count_total,
-            ref_lat, ref_lon
+            frame,
+            0,
+            theta,
+            bearing,
+            config,
+            x_edges,
+            y_edges,
+            sum_total,
+            count_total,
+            ref_lat,
+            ref_lon,
         )
 
         # Should have some gridded values
@@ -248,9 +266,21 @@ class TestSaveGriddedFrame:
         wind_dirs = [270.0, 272.0, 274.0]
 
         _save_gridded_frame(
-            gridded, x_edges, y_edges, output_path,
-            ref_lat, ref_lon, first_ts, last_ts, 10,
-            ship_x, ship_y, ship_speeds, ship_headings, wind_speeds, wind_dirs
+            gridded,
+            x_edges,
+            y_edges,
+            output_path,
+            ref_lat,
+            ref_lon,
+            first_ts,
+            last_ts,
+            10,
+            ship_x,
+            ship_y,
+            ship_speeds,
+            ship_headings,
+            wind_speeds,
+            wind_dirs,
         )
 
         # Check file was created
@@ -275,9 +305,21 @@ class TestSaveGriddedFrame:
 
         # No ship/wind data
         _save_gridded_frame(
-            gridded, x_edges, y_edges, output_path,
-            18.0, 142.0, first_ts, last_ts, 5,
-            ship_x, ship_y, [], [], [], []
+            gridded,
+            x_edges,
+            y_edges,
+            output_path,
+            18.0,
+            142.0,
+            first_ts,
+            last_ts,
+            5,
+            ship_x,
+            ship_y,
+            [],
+            [],
+            [],
+            [],
         )
 
         assert Path(output_path).exists()

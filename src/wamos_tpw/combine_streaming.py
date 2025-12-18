@@ -43,7 +43,10 @@ def compute_grid_bounds_from_metadata(
     radar_height: float | None,
     max_frames: int | None,
     workers: int = 8,
-) -> tuple[list, float, float, float, float, float, np.ndarray, np.ndarray, list, list, list, list] | None:
+) -> (
+    tuple[list, float, float, float, float, float, np.ndarray, np.ndarray, list, list, list, list]
+    | None
+):
     """
     Compute grid bounds from file metadata without loading frame data.
 
@@ -153,8 +156,20 @@ def compute_grid_bounds_from_metadata(
     y_min = ship_y.min() - max_range
     y_max = ship_y.max() + max_range
 
-    return (all_metadata, x_min, x_max, y_min, y_max, max_range, ship_x, ship_y,
-            ship_speeds, ship_headings, wind_speeds, wind_dirs)
+    return (
+        all_metadata,
+        x_min,
+        x_max,
+        y_min,
+        y_max,
+        max_range,
+        ship_x,
+        ship_y,
+        ship_speeds,
+        ship_headings,
+        wind_speeds,
+        wind_dirs,
+    )
 
 
 def process_single_frame(
@@ -188,8 +203,11 @@ def process_single_frame(
     bearing_arr = theta.bearing_for_frame(frame_idx)
     bearing_arr_refined = (bearing_arr - offset) % 360
     deramp = Deramp(
-        frame, config, bearing=bearing_arr_refined,
-        shadow_start=shadow_start, shadow_end=shadow_end,
+        frame,
+        config,
+        bearing=bearing_arr_refined,
+        shadow_start=shadow_start,
+        shadow_end=shadow_end,
     )
     frame.deramped_intensity = deramp.corrected_intensity
 
@@ -200,10 +218,17 @@ def process_single_frame(
 
 
 def grid_frame_streaming(
-    frame, frame_idx: int, theta, bearing_obj, config: "WamosConfig",
-    x_edges: np.ndarray, y_edges: np.ndarray,
-    sum_total: np.ndarray, count_total: np.ndarray,
-    ref_lat: float, ref_lon: float,
+    frame,
+    frame_idx: int,
+    theta,
+    bearing_obj,
+    config: "WamosConfig",
+    x_edges: np.ndarray,
+    y_edges: np.ndarray,
+    sum_total: np.ndarray,
+    count_total: np.ndarray,
+    ref_lat: float,
+    ref_lon: float,
 ) -> None:
     """
     Grid a single frame into accumulator arrays (in-place).

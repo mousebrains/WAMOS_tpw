@@ -258,9 +258,21 @@ class TestMovieGenerationEdgeCases:
         ship_y = np.array([])
 
         _save_gridded_frame(
-            gridded, x_edges, y_edges, output_path,
-            18.0, 142.0, first_ts, last_ts, 5,
-            ship_x, ship_y, [], [], [], []
+            gridded,
+            x_edges,
+            y_edges,
+            output_path,
+            18.0,
+            142.0,
+            first_ts,
+            last_ts,
+            5,
+            ship_x,
+            ship_y,
+            [],
+            [],
+            [],
+            [],
         )
 
         assert Path(output_path).exists()
@@ -282,9 +294,21 @@ class TestMovieGenerationEdgeCases:
         ship_y = np.linspace(-500, 500, 10)
 
         _save_gridded_frame(
-            gridded, x_edges, y_edges, output_path,
-            18.0, 142.0, first_ts, last_ts, 5,
-            ship_x, ship_y, [], [], [], []
+            gridded,
+            x_edges,
+            y_edges,
+            output_path,
+            18.0,
+            142.0,
+            first_ts,
+            last_ts,
+            5,
+            ship_x,
+            ship_y,
+            [],
+            [],
+            [],
+            [],
         )
 
         assert Path(output_path).exists()
