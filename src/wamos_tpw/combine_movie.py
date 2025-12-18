@@ -132,6 +132,17 @@ def _save_gridded_frame(
 
     ax_main.set_xlim(lon_min, lon_max)
     ax_main.set_ylim(lat_min, lat_max)
+
+    # Format axes to show fractional degrees without scientific notation
+    from matplotlib.ticker import FuncFormatter
+
+    def format_coord(val, pos):
+        """Format coordinate as fractional degrees with up to 4 decimal places."""
+        return f"{val:.4f}"
+
+    ax_main.xaxis.set_major_formatter(FuncFormatter(format_coord))
+    ax_main.yaxis.set_major_formatter(FuncFormatter(format_coord))
+
     ax_main.set_xlabel("Longitude (°)")
     ax_main.set_ylabel("Latitude (°)")
     ax_main.set_title(title_str, fontsize=11)
