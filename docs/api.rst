@@ -1,17 +1,6 @@
 API Reference
 =============
 
-High-Level API
---------------
-
-WamosDataset
-~~~~~~~~~~~~
-
-.. autoclass:: wamos_tpw.WamosDataset
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 Core Classes
 ------------
 

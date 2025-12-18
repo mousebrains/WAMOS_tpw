@@ -111,5 +111,8 @@ select = ["E", "F", "W"]
 ignore = ["E501"]  # Line too long
 
 [tool.bandit]
-# Skip assert_used check - assertions are used for internal invariants
-skips = ["B101"]
+# Skip checks that are false positives for this codebase:
+# - B101: assertions used for internal invariants
+# - B404: subprocess import (needed for ffmpeg movie generation)
+# - B603: subprocess call (ffmpeg invocation with controlled arguments)
+skips = ["B101", "B404", "B603"]
