@@ -229,9 +229,10 @@ class Destreak:
             q = np.vstack([q, np.zeros((1, n_distances), dtype=bool)])
 
         # Ensure q matches center_frame dimensions
-        assert q.shape == (n_bearings, n_distances), (
-            f"Mask shape {q.shape} doesn't match frame shape {(n_bearings, n_distances)}"
-        )
+        assert q.shape == (
+            n_bearings,
+            n_distances,
+        ), f"Mask shape {q.shape} doesn't match frame shape {(n_bearings, n_distances)}"
 
         # Mark streak pixels as NaN (modify center_data in-place since it's not needed after)
         center_data[q] = np.nan
