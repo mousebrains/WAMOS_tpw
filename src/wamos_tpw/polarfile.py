@@ -266,13 +266,15 @@ class PolarFile:
             try:
                 length = int(length_bytes.decode("utf-8", errors="ignore").strip())
             except ValueError:
-                logging.warning(f"Invalid length field at frame {idx}")
+                logging.warning(f"{self._filepath}: Invalid length field at frame {idx}")
                 break
 
             # Read binary data
             buffer = fp.read(length)
             if len(buffer) != length:
-                logging.warning(f"Frame {idx}: expected {length} bytes, got {len(buffer)}")
+                logging.warning(
+                    f"{self._filepath}: Frame {idx}: expected {length} bytes, got {len(buffer)}"
+                )
                 break
 
             # Parse as uint16 little-endian
@@ -286,7 +288,9 @@ class PolarFile:
                 else:
                     # Truncate to fit
                     usable = n_radials * n_samples
-                    logging.warning(f"Frame {idx}: truncating {data.size - usable} values")
+                    logging.warning(
+                        f"{self._filepath}: Frame {idx}: truncating {data.size - usable} values"
+                    )
                     data = data[:usable].reshape((n_radials, n_samples))
 
             frame = Frame(data, metadata)
