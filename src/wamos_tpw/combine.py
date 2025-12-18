@@ -465,10 +465,16 @@ class Combine:
             else frame.intensity
         )
 
+        # Get shadow mask (1D per bearing) and expand to 2D
+        shadow_mask_1d = self._bearing._theta.in_shadow(frame_idx)
+        n_distances = intensity.shape[1]
+        shadow_mask_2d = np.repeat(shadow_mask_1d[:, np.newaxis], n_distances, axis=1)
+
         # Flatten for binning
         x_flat = x_earth.ravel()
         y_flat = y_earth.ravel()
         values_flat = intensity.ravel().astype(np.float64)
+        shadow_flat = shadow_mask_2d.ravel()
 
         # Compute bin indices
         n_x = len(x_edges) - 1
@@ -477,8 +483,8 @@ class Combine:
         x_idx = np.searchsorted(x_edges, x_flat) - 1
         y_idx = np.searchsorted(y_edges, y_flat) - 1
 
-        # Clip to valid range
-        valid = (x_idx >= 0) & (x_idx < n_x) & (y_idx >= 0) & (y_idx < n_y)
+        # Clip to valid range and exclude shadow region
+        valid = (x_idx >= 0) & (x_idx < n_x) & (y_idx >= 0) & (y_idx < n_y) & ~shadow_flat
         x_idx = x_idx[valid]
         y_idx = y_idx[valid]
         values_valid = values_flat[valid]
@@ -707,10 +713,16 @@ class Combine:
             else frame.intensity
         )
 
+        # Get shadow mask (1D per bearing) and expand to 2D
+        shadow_mask_1d = self._bearing._theta.in_shadow(frame_idx)
+        n_distances = intensity.shape[1]
+        shadow_mask_2d = np.repeat(shadow_mask_1d[:, np.newaxis], n_distances, axis=1)
+
         # Flatten
         x_flat = x_rot.ravel()
         y_flat = y_rot.ravel()
         values_flat = intensity.ravel().astype(np.float64)
+        shadow_flat = shadow_mask_2d.ravel()
 
         # Bin indices using searchsorted (works with non-uniform edges)
         n_x = len(x_edges) - 1
@@ -719,8 +731,8 @@ class Combine:
         x_idx = np.searchsorted(x_edges, x_flat) - 1
         y_idx = np.searchsorted(y_edges, y_flat) - 1
 
-        # Clip to valid range
-        valid = (x_idx >= 0) & (x_idx < n_x) & (y_idx >= 0) & (y_idx < n_y)
+        # Clip to valid range and exclude shadow region
+        valid = (x_idx >= 0) & (x_idx < n_x) & (y_idx >= 0) & (y_idx < n_y) & ~shadow_flat
         x_idx = x_idx[valid]
         y_idx = y_idx[valid]
         values_valid = values_flat[valid]
