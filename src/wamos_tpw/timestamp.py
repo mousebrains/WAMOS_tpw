@@ -413,6 +413,16 @@ class Timestamp:
         pass
 
 
+def _add_arguments(parser) -> None:
+    """Add command arguments to parser."""
+    from wamos_tpw.filenames import add_common_arguments
+    add_common_arguments(parser)
+    parser.add_argument("--config", "-c", type=str, default=None,
+                        help="YAML configuration file")
+    parser.add_argument("--max-frames", type=int, default=10,
+                        help="Maximum frames to process (default: 10)")
+
+
 def add_subparser(subparsers) -> None:
     """Register the 'timestamp' subcommand."""
     p = subparsers.add_parser(
@@ -420,52 +430,35 @@ def add_subparser(subparsers) -> None:
         help='Timestamp analysis',
         description="Calculate radial timing from polar files"
     )
-    p.add_argument("stime", type=str, help="Start time")
-    p.add_argument("etime", type=str, help="End time")
-    p.add_argument("polar_path", type=str, help="Path to polar files")
-    p.add_argument("--config", "-c", type=str, default=None,
-                   help="YAML configuration file")
-    p.add_argument("--max-frames", type=int, default=10,
-                   help="Maximum frames to process (default: 10)")
-    p.add_argument("--verbose", "-v", action="store_true",
-                   help="Verbose output")
+    _add_arguments(p)
     p.set_defaults(func=run)
 
 
 def run(args) -> None:
     """Execute the 'timestamp' command."""
-    from wamos_tpw.filenames import Filenames, _parse_timestamp
+    from wamos_tpw.filenames import Filenames
     from wamos_tpw.polarfile import load_polar_file
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s"
-    )
-
-    # Parse times
-    stime = _parse_timestamp(args.stime)
-    etime = _parse_timestamp(args.etime)
-
-    # Find files
-    filenames = Filenames(stime, etime, args.polar_path)
-    print(f"Found {len(filenames)} files")
+    # Find files (args.stime/etime already parsed by argparse)
+    filenames = Filenames(args.stime, args.etime, args.polar_path)
+    logging.info(f"Found {len(filenames)} files")
 
     if not filenames:
-        print("No files found")
+        logging.warning("No files found")
         return
 
     # Load frames
-    print(f"Loading up to {args.max_frames} frames...")
+    logging.info(f"Loading up to {args.max_frames} frames...")
     frames = []
     for filepath in filenames.files[:args.max_frames]:
         frame = load_polar_file(filepath)
         if frame is not None:
             frames.append(frame)
 
-    print(f"Loaded {len(frames)} frames")
+    logging.info(f"Loaded {len(frames)} frames")
 
     if not frames:
-        print("No valid frames")
+        logging.warning("No valid frames")
         return
 
     # Load config
@@ -473,46 +466,41 @@ def run(args) -> None:
 
     # Calculate timing
     timestamp = Timestamp(frames, config)
-    print(f"\n{timestamp}")
+    logging.info(f"{timestamp}")
 
     # Show timing statistics
-    print("\nTiming Statistics:")
+    logging.info("Timing Statistics:")
     total_radials = len(timestamp)
-    print(f"  Total radials: {total_radials}")
-    print(f"  Frame start times: {timestamp.frame_start_times}")
+    logging.info(f"  Total radials: {total_radials}")
+    logging.info(f"  Frame start times: {timestamp.frame_start_times}")
 
     for i in range(min(3, len(frames))):
         times = timestamp.times_for_frame(i)
         dt = timestamp.time_step(i)
-        print(f"\n  Frame {i}:")
-        print(f"    Radials: {len(times)}")
-        print(f"    Time range: {times[0]:.4f}s to {times[-1]:.4f}s")
-        print(f"    Mean step: {dt*1000:.3f} ms")
+        logging.info(f"  Frame {i}:")
+        logging.info(f"    Radials: {len(times)}")
+        logging.info(f"    Time range: {times[0]:.4f}s to {times[-1]:.4f}s")
+        logging.info(f"    Mean step: {dt*1000:.3f} ms")
 
         # Show position
         lat, lon = timestamp.position_for_frame(i)
-        print(f"    Position range: ({lat[0]:.6f}, {lon[0]:.6f}) to ({lat[-1]:.6f}, {lon[-1]:.6f})")
+        logging.info(f"    Position range: ({lat[0]:.6f}, {lon[0]:.6f}) to ({lat[-1]:.6f}, {lon[-1]:.6f})")
 
         # Show absolute times
         abs_times = timestamp.absolute_times_for_frame(i)
-        print(f"    Absolute times: {abs_times[0]} to {abs_times[-1]}")
+        logging.info(f"    Absolute times: {abs_times[0]} to {abs_times[-1]}")
 
 
 def main() -> None:
     """Standalone CLI entry point."""
     from argparse import ArgumentParser
+    from wamos_tpw.logging_config import add_logging_arguments, setup_logging
 
     parser = ArgumentParser(description="Calculate radial timing from polar files")
-    parser.add_argument("stime", type=str, help="Start time")
-    parser.add_argument("etime", type=str, help="End time")
-    parser.add_argument("polar_path", type=str, help="Path to polar files")
-    parser.add_argument("--config", "-c", type=str, default=None,
-                        help="YAML configuration file")
-    parser.add_argument("--max-frames", type=int, default=10,
-                        help="Maximum frames to process (default: 10)")
-    parser.add_argument("--verbose", "-v", action="store_true",
-                        help="Verbose output")
+    add_logging_arguments(parser)
+    _add_arguments(parser)
     args = parser.parse_args()
+    setup_logging(args)
     run(args)
 
 

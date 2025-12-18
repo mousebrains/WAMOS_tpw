@@ -242,12 +242,18 @@ class Combine:
         Returns:
             Array of intensity values, shape (total_pixels,)
         """
-        intensities = []
+        # Pre-allocate to avoid multiple copies from list append + concatenate
+        total = sum(f.n_bearings * f.n_distances for f in self._frames)
+        result = np.empty(total, dtype=np.float32)
+        offset = 0
         for frame in self._frames:
-            data = getattr(frame, 'corrected_intensity',
-                          getattr(frame, 'deramped_intensity', frame.intensity))
-            intensities.append(data.ravel())
-        return np.concatenate(intensities)
+            data = (frame.corrected_intensity if frame.corrected_intensity is not None
+                    else frame.deramped_intensity if frame.deramped_intensity is not None
+                    else frame.intensity)
+            size = data.size
+            result[offset:offset + size] = data.ravel()
+            offset += size
+        return result
 
     def ship_track_xy(self) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -447,8 +453,9 @@ class Combine:
 
         # Get intensity (use corrected if available)
         frame = self._frames[frame_idx]
-        intensity = getattr(frame, 'corrected_intensity',
-                           getattr(frame, 'deramped_intensity', frame.intensity))
+        intensity = (frame.corrected_intensity if frame.corrected_intensity is not None
+                    else frame.deramped_intensity if frame.deramped_intensity is not None
+                    else frame.intensity)
 
         # Flatten for binning
         x_flat = x_earth.ravel()
@@ -682,8 +689,9 @@ class Combine:
 
         # Get intensity (use processed if available)
         frame = self._frames[frame_idx]
-        intensity = getattr(frame, 'corrected_intensity',
-                           getattr(frame, 'deramped_intensity', frame.intensity))
+        intensity = (frame.corrected_intensity if frame.corrected_intensity is not None
+                    else frame.deramped_intensity if frame.deramped_intensity is not None
+                    else frame.intensity)
 
         # Flatten
         x_flat = x_rot.ravel()
@@ -858,6 +866,10 @@ class Combine:
 
         return lon_edges, lat_edges
 
+    # -------------------------------------------------------------------------
+    # Plotting methods (delegate to combine_plot module)
+    # -------------------------------------------------------------------------
+
     def plot_diagnostics(self,
                          figsize: tuple[float, float] = (10, 10),
                          n_along: int = 1200,
@@ -871,290 +883,14 @@ class Combine:
 
         Args:
             figsize: Figure size
-            n_along: Grid bins along ship track (default 600)
-            n_cross: Grid bins cross track (default 800)
+            n_along: Grid bins along ship track (default 1200)
+            n_cross: Grid bins cross track (default 1600)
             workers: Number of parallel workers for gridding (None = auto)
             show_track: Show separate ship track plot (default False)
-
-        Displays:
-        - Combined intensity in lat/lon coordinates (gridded)
-        - Polar scatter plots for ship speed/heading and wind
-        - Optional ship track detail plot
-        - Statistics panel
         """
-        import matplotlib.pyplot as plt
-
-        # Get ship track (fast - doesn't require full coordinate computation)
-        print("Computing ship track...", flush=True)
-        ship_x, ship_y = self.ship_track_xy()
-        ship_lat, ship_lon = self.ship_track()
-        travel = self.travel_distance()
-        n_radials = len(ship_x)
-        n_frames = len(self._frames)
-
-        # Estimate pixel count
-        n_pixels = sum(f.n_bearings * f.n_distances for f in self._frames)
-
-        # Use rotated grid for speed, then display in lat/lon
-        print(f"Gridding {n_pixels:,} pixels from {n_frames} frames "
-              f"to {n_cross}x{n_along} rotated grid (parallel)...", flush=True)
-
-        # Grid all frames in parallel with rotation
-        x_edges, y_edges, gridded, angle = self.grid_parallel_rotated(
-            n_along=n_along, n_cross=n_cross, workers=workers
-        )
-
-        # Convert edges to lat/lon for display
-        # For rotated grid, we need to rotate back first
-        # Create corner points of the grid and rotate back
-        cos_a = np.cos(-angle)
-        sin_a = np.sin(-angle)
-
-        # Create meshgrid of rotated coordinates
-        xx_rot, yy_rot = np.meshgrid(x_edges, y_edges)
-
-        # Rotate back to earth coordinates
-        xx_earth = xx_rot * cos_a - yy_rot * sin_a
-        yy_earth = xx_rot * sin_a + yy_rot * cos_a
-
-        # Convert to lat/lon
-        meters_per_deg_lat = np.pi * self._EARTH_RADIUS / 180.0
-        meters_per_deg_lon = meters_per_deg_lat * np.cos(np.deg2rad(self._ref_lat))
-
-        lon_grid = self._ref_lon + xx_earth / meters_per_deg_lon
-        lat_grid = self._ref_lat + yy_earth / meters_per_deg_lat
-
-        # Calculate intensity limits from gridded data (ignoring NaN)
-        valid_data = gridded[~np.isnan(gridded)]
-        if len(valid_data) > 0:
-            vmin, vmax = np.percentile(valid_data, [1, 99])
-        else:
-            vmin, vmax = 0, 1
-
-        print("Creating plot...", flush=True)
-
-        # Collect ship and wind data from all frames for polar plots
-        ship_speeds = []
-        ship_headings = []
-        wind_speeds = []
-        wind_dirs = []
-        for frame in self._frames:
-            meta = frame.metadata
-            # Ship data
-            speed = meta.ship_speed
-            heading = meta.ship_course if meta.ship_course is not None else meta.heading
-            if speed is not None and heading is not None:
-                ship_speeds.append(speed)
-                ship_headings.append(heading)
-            # Wind data
-            wind_spd = meta.wind_speed
-            wind_dir = meta.wind_direction
-            if wind_spd is not None and wind_dir is not None:
-                wind_speeds.append(wind_spd)
-                wind_dirs.append(wind_dir)
-
-        # Create figure layout
-        if show_track:
-            # With track: 2 columns top, stats bottom
-            fig = plt.figure(figsize=figsize)
-            gs = fig.add_gridspec(2, 2, height_ratios=[3, 1], hspace=0.25, wspace=0.3)
-            ax_main = fig.add_subplot(gs[0, 0])
-            ax_track = fig.add_subplot(gs[0, 1])
-            ax_info = fig.add_subplot(gs[1, :])
-        else:
-            # No track: main plot with polar insets, stats bottom
-            fig = plt.figure(figsize=figsize)
-            gs = fig.add_gridspec(2, 1, height_ratios=[12, 1], hspace=0.02)
-            ax_main = fig.add_subplot(gs[0, 0])
-            ax_info = fig.add_subplot(gs[1, 0])
-            fig.subplots_adjust(left=0.12, right=0.88, top=0.88, bottom=0.12)
-
-        # Round start time down, end time up to nearest second
-        import pandas as pd
-        start_ts = pd.Timestamp(self._frames[0].timestamp).floor('s')
-        end_ts = pd.Timestamp(self._frames[-1].timestamp).ceil('s')
-        title_str = f'{start_ts} to {end_ts}'
-
-        # Main plot: Combined intensity in lat/lon
-        im = ax_main.pcolormesh(lon_grid, lat_grid, gridded,
-                                cmap='viridis', vmin=vmin, vmax=vmax,
-                                shading='flat')
-        plt.colorbar(im, ax=ax_main, label='Intensity')
-
-        # Overlay ship track (subsample if too many points)
-        if n_radials > 5000:
-            step = n_radials // 5000
-            track_lon = ship_lon[::step]
-            track_lat = ship_lat[::step]
-        else:
-            track_lon = ship_lon
-            track_lat = ship_lat
-
-        ax_main.plot(track_lon, track_lat, 'r-', linewidth=1.5)
-
-        # Find extent of valid (non-NaN, non-zero) intensity data
-        valid_mask = np.logical_and(
-                np.logical_not(np.isnan(gridded)),
-                (gridded != 0))
-        valid_rows, valid_cols = np.where(valid_mask)
-
-        if len(valid_rows) > 0:
-            # Get lon/lat bounds from all valid data pixels
-            lon_vals = lon_grid[valid_rows, valid_cols]
-            lon_min, lon_max = lon_vals.min(), lon_vals.max()
-            lat_vals = lat_grid[valid_rows, valid_cols]
-            lat_min, lat_max = lat_vals.min(), lat_vals.max()
-        else:
-            lon_min, lon_max = lon_grid.min(), lon_grid.max()
-            lat_min, lat_max = lat_grid.min(), lat_grid.max()
-
-        # Aspect ratio for lat/lon: 1/cos(lat) because longitude degrees shrink with latitude
-        mean_lat = (lat_min + lat_max) / 2
-        aspect_ratio = 1.0 / np.cos(np.deg2rad(mean_lat))
-
-        data_lon_range = lon_max - lon_min
-        data_lat_range = lat_max - lat_min
-
-        # Get axes dimensions in figure coordinates to determine available space
-        fig_width, fig_height = fig.get_size_inches()
-        plot_width = fig_width * (0.88 - 0.12)
-        plot_height = fig_height * (0.88 - 0.12) * (12/13)
-
-        # Current data dimensions in "distance units" (lat as reference)
-        data_width_dist = data_lon_range / aspect_ratio
-        data_height_dist = data_lat_range
-
-        # Determine which dimension to expand to fill plot
-        plot_aspect = plot_width / plot_height
-        data_aspect = data_width_dist / data_height_dist if data_height_dist > 0 else 1.0
-
-        if plot_aspect > data_aspect:
-            # Plot is wider than data - expand longitude
-            new_lon_range = data_lat_range * plot_aspect * aspect_ratio
-            lon_center = (lon_min + lon_max) / 2
-            lon_min = lon_center - new_lon_range / 2
-            lon_max = lon_center + new_lon_range / 2
-        else:
-            # Plot is taller than data - expand latitude
-            new_lat_range = data_width_dist / plot_aspect
-            lat_center = (lat_min + lat_max) / 2
-            lat_min = lat_center - new_lat_range / 2
-            lat_max = lat_center + new_lat_range / 2
-
-        ax_main.set_xlim(lon_min, lon_max)
-        ax_main.set_ylim(lat_min, lat_max)
-
-        ax_main.set_xlabel('Longitude (°)')
-        ax_main.set_ylabel('Latitude (°)')
-        ax_main.set_title(title_str, fontsize=11)
-        ax_main.set_aspect(aspect_ratio)
-        ax_main.margins(0)
-        ax_main.grid(True, linestyle='--', linewidth=0.5, alpha=0.7)
-
-        # Add polar scatter plots as insets (if not showing track)
-        if not show_track:
-            # Ship polar in upper right corner of main axes
-            if ship_speeds and ship_headings:
-                ax_ship = ax_main.inset_axes([0.88, 0.85, 0.11, 0.14], projection='polar')
-                ax_ship.set_theta_zero_location('N')
-                ax_ship.set_theta_direction(-1)
-                headings_rad = np.deg2rad(ship_headings)
-                # Color by age - viridis is colorblind-friendly (dark=oldest, bright=newest)
-                ages = np.linspace(0, 1, len(ship_speeds))
-                ax_ship.scatter(headings_rad, ship_speeds, c=ages, cmap='viridis',
-                               s=6, alpha=0.8)
-                ax_ship.set_xticklabels([])  # Remove angular labels
-                ax_ship.tick_params(labelsize=4)
-                ax_ship.set_facecolor('white')
-                ax_ship.patch.set_alpha(0.8)
-                ax_ship.grid(True, linewidth=0.3, alpha=0.5)
-                # Label northwest of polar plot (left of and near top)
-                ax_main.text(0.87, 0.99, 'Ship', transform=ax_main.transAxes,
-                            fontsize=7, ha='right', va='top')
-
-            # Wind polar in lower right corner of main axes
-            if wind_speeds and wind_dirs:
-                ax_wind = ax_main.inset_axes([0.88, 0.01, 0.11, 0.14], projection='polar')
-                ax_wind.set_theta_zero_location('N')
-                ax_wind.set_theta_direction(-1)
-                wind_rad = np.deg2rad(wind_dirs)
-                # Color by age - viridis is colorblind-friendly (dark=oldest, bright=newest)
-                ages = np.linspace(0, 1, len(wind_speeds))
-                ax_wind.scatter(wind_rad, wind_speeds, c=ages, cmap='viridis',
-                               s=6, alpha=0.8)
-                ax_wind.set_xticklabels([])  # Remove angular labels
-                ax_wind.tick_params(labelsize=4)
-                ax_wind.set_facecolor('white')
-                ax_wind.patch.set_alpha(0.8)
-                ax_wind.grid(True, linewidth=0.3, alpha=0.5)
-                # Label southwest of polar plot (left of and near bottom)
-                ax_main.text(0.87, 0.01, 'Wind', transform=ax_main.transAxes,
-                            fontsize=7, ha='right', va='bottom')
-
-        # Optional track detail plot
-        if show_track:
-            if n_radials > 10000:
-                step = n_radials // 10000
-                track_x = ship_x[::step]
-                track_y = ship_y[::step]
-                colors = np.linspace(0, 1, len(track_x))
-            else:
-                track_x = ship_x
-                track_y = ship_y
-                colors = np.linspace(0, 1, n_radials)
-
-            ax_track.scatter(track_x, track_y, c=colors, cmap='coolwarm', s=2)
-            ax_track.plot(ship_x[0], ship_y[0], 'go', markersize=10, label='Start', zorder=5)
-            ax_track.plot(ship_x[-1], ship_y[-1], 'r^', markersize=10, label='End', zorder=5)
-
-            ax_track.set_xlabel('X - East (m)')
-            ax_track.set_ylabel('Y - North (m)')
-            ax_track.set_title('Ship Track During Scan')
-            ax_track.legend(fontsize=8, loc='best')
-            ax_track.set_aspect('equal')
-            ax_track.axhline(0, color='gray', linestyle=':', alpha=0.5)
-            ax_track.axvline(0, color='gray', linestyle=':', alpha=0.5)
-
-        # Statistics text
-        ax_info.axis('off')
-
-        # Get frame metadata
-        meta = self._frames[0].metadata
-        ship_heading = meta.heading or 0.0
-        ship_speed_val = meta.ship_speed or 0.0
-        ship_course = meta.ship_course
-        wind_speed_val = meta.wind_speed
-        wind_dir_val = meta.wind_direction
-
-        # Calculate coverage
-        x_range = x_edges[-1] - x_edges[0]
-        y_range = y_edges[-1] - y_edges[0]
-        n_x = len(x_edges) - 1
-        n_y = len(y_edges) - 1
-
-        info_text = (
-            f"Reference: ({self._ref_lat:.6f}°, {self._ref_lon:.6f}°)    "
-            f"Coverage: {x_range:.0f}m × {y_range:.0f}m    "
-            f"Grid: {n_x}×{n_y}\n"
-            f"Ship Motion: {travel['duration_s']:.1f}s, {travel['total_m']:.1f}m total "
-            f"(E: {travel['x_m']:.1f}m, N: {travel['y_m']:.1f}m), "
-            f"avg {travel['speed_m_s']:.2f} m/s\n"
-            f"Navigation: heading {ship_heading:.1f}°, speed {ship_speed_val:.2f} m/s"
-        )
-        if ship_course is not None:
-            info_text += f", course {ship_course:.1f}°"
-        if wind_speed_val is not None and wind_dir_val is not None:
-            info_text += f"    Wind: {wind_speed_val:.1f} m/s from {wind_dir_val:.0f}°"
-        info_text += f"\nFrames: {n_frames}, Radials: {n_radials:,}, Pixels: {n_pixels:,}"
-
-        ax_info.text(0.5, 0.5, info_text,
-                     transform=ax_info.transAxes,
-                     ha='center', va='center',
-                     fontfamily='monospace',
-                     fontsize=9)
-
-        print("Displaying...", flush=True)
-        plt.show()
+        from wamos_tpw.combine_plot import plot_diagnostics as _plot_diagnostics
+        _plot_diagnostics(self, figsize=figsize, n_along=n_along, n_cross=n_cross,
+                          workers=workers, show_track=show_track)
 
     def save_frame(self,
                    output_path: str,
@@ -1174,171 +910,9 @@ class Combine:
             workers: Number of parallel workers for gridding
             dpi: Image resolution
         """
-        import matplotlib
-        matplotlib.use('Agg')  # Non-interactive backend
-        import matplotlib.pyplot as plt
-
-        # Get ship track
-        ship_x, ship_y = self.ship_track_xy()
-        ship_lat, ship_lon = self.ship_track()
-        n_radials = len(ship_x)
-        n_frames = len(self._frames)
-
-        # Grid all frames in parallel with rotation
-        x_edges, y_edges, gridded, angle = self.grid_parallel_rotated(
-            n_along=n_along, n_cross=n_cross, workers=workers
-        )
-
-        # Rotate grid back to earth coordinates and convert to lat/lon
-        cos_a = np.cos(-angle)
-        sin_a = np.sin(-angle)
-        xx_rot, yy_rot = np.meshgrid(x_edges, y_edges)
-        xx_earth = xx_rot * cos_a - yy_rot * sin_a
-        yy_earth = xx_rot * sin_a + yy_rot * cos_a
-
-        meters_per_deg_lat = np.pi * self._EARTH_RADIUS / 180.0
-        meters_per_deg_lon = meters_per_deg_lat * np.cos(np.deg2rad(self._ref_lat))
-        lon_grid = self._ref_lon + xx_earth / meters_per_deg_lon
-        lat_grid = self._ref_lat + yy_earth / meters_per_deg_lat
-
-        # Calculate intensity limits
-        valid_data = gridded[~np.isnan(gridded)]
-        if len(valid_data) > 0:
-            vmin, vmax = np.percentile(valid_data, [1, 99])
-        else:
-            vmin, vmax = 0, 1
-
-        # Collect ship and wind data
-        ship_speeds, ship_headings, wind_speeds, wind_dirs = [], [], [], []
-        for frame in self._frames:
-            meta = frame.metadata
-            speed = meta.ship_speed
-            heading = meta.ship_course if meta.ship_course is not None else meta.heading
-            if speed is not None and heading is not None:
-                ship_speeds.append(speed)
-                ship_headings.append(heading)
-            if meta.wind_speed is not None and meta.wind_direction is not None:
-                wind_speeds.append(meta.wind_speed)
-                wind_dirs.append(meta.wind_direction)
-
-        # Create figure
-        fig = plt.figure(figsize=figsize)
-        gs = fig.add_gridspec(2, 1, height_ratios=[12, 1], hspace=0.02)
-        ax_main = fig.add_subplot(gs[0, 0])
-        ax_info = fig.add_subplot(gs[1, 0])
-        fig.subplots_adjust(left=0.12, right=0.88, top=0.88, bottom=0.12)
-
-        # Title with rounded timestamps
-        import pandas as pd
-        start_ts = pd.Timestamp(self._frames[0].timestamp).floor('s')
-        end_ts = pd.Timestamp(self._frames[-1].timestamp).ceil('s')
-        title_str = f'{start_ts} to {end_ts}'
-
-        # Main plot
-        im = ax_main.pcolormesh(lon_grid, lat_grid, gridded,
-                                cmap='viridis', vmin=vmin, vmax=vmax,
-                                shading='flat')
-        plt.colorbar(im, ax=ax_main, label='Intensity')
-
-        # Ship track overlay
-        if n_radials > 5000:
-            step = n_radials // 5000
-            track_lon, track_lat = ship_lon[::step], ship_lat[::step]
-        else:
-            track_lon, track_lat = ship_lon, ship_lat
-        ax_main.plot(track_lon, track_lat, 'r-', linewidth=1.5)
-
-        # Find valid data extent
-        valid_mask = np.logical_and(np.logical_not(np.isnan(gridded)), gridded != 0)
-        valid_rows, valid_cols = np.where(valid_mask)
-        if len(valid_rows) > 0:
-            lon_vals = lon_grid[valid_rows, valid_cols]
-            lon_min, lon_max = lon_vals.min(), lon_vals.max()
-            lat_vals = lat_grid[valid_rows, valid_cols]
-            lat_min, lat_max = lat_vals.min(), lat_vals.max()
-        else:
-            lon_min, lon_max = lon_grid.min(), lon_grid.max()
-            lat_min, lat_max = lat_grid.min(), lat_grid.max()
-
-        # Aspect ratio and limits
-        mean_lat = (lat_min + lat_max) / 2
-        aspect_ratio = 1.0 / np.cos(np.deg2rad(mean_lat))
-        data_lon_range = lon_max - lon_min
-        data_lat_range = lat_max - lat_min
-
-        fig_width, fig_height = fig.get_size_inches()
-        plot_width = fig_width * (0.88 - 0.12)
-        plot_height = fig_height * (0.88 - 0.12) * (12/13)
-        data_width_dist = data_lon_range / aspect_ratio
-        data_height_dist = data_lat_range
-        plot_aspect = plot_width / plot_height
-        data_aspect = data_width_dist / data_height_dist if data_height_dist > 0 else 1.0
-
-        if plot_aspect > data_aspect:
-            new_lon_range = data_lat_range * plot_aspect * aspect_ratio
-            lon_center = (lon_min + lon_max) / 2
-            lon_min, lon_max = lon_center - new_lon_range/2, lon_center + new_lon_range/2
-        else:
-            new_lat_range = data_width_dist / plot_aspect
-            lat_center = (lat_min + lat_max) / 2
-            lat_min, lat_max = lat_center - new_lat_range/2, lat_center + new_lat_range/2
-
-        ax_main.set_xlim(lon_min, lon_max)
-        ax_main.set_ylim(lat_min, lat_max)
-        ax_main.set_xlabel('Longitude (°)')
-        ax_main.set_ylabel('Latitude (°)')
-        ax_main.set_title(title_str, fontsize=11)
-        ax_main.set_aspect(aspect_ratio)
-        ax_main.margins(0)
-        ax_main.grid(True, linestyle='--', linewidth=0.5, alpha=0.7)
-
-        # Polar insets
-        if ship_speeds and ship_headings:
-            ax_ship = ax_main.inset_axes([0.88, 0.85, 0.11, 0.14], projection='polar')
-            ax_ship.set_theta_zero_location('N')
-            ax_ship.set_theta_direction(-1)
-            ages = np.linspace(0, 1, len(ship_speeds))
-            ax_ship.scatter(np.deg2rad(ship_headings), ship_speeds, c=ages,
-                           cmap='viridis', s=6, alpha=0.8)
-            ax_ship.set_xticklabels([])
-            ax_ship.tick_params(labelsize=4)
-            ax_ship.set_facecolor('white')
-            ax_ship.patch.set_alpha(0.8)
-            ax_ship.grid(True, linewidth=0.3, alpha=0.5)
-            ax_main.text(0.87, 0.99, 'Ship', transform=ax_main.transAxes,
-                        fontsize=7, ha='right', va='top')
-
-        if wind_speeds and wind_dirs:
-            ax_wind = ax_main.inset_axes([0.88, 0.01, 0.11, 0.14], projection='polar')
-            ax_wind.set_theta_zero_location('N')
-            ax_wind.set_theta_direction(-1)
-            ages = np.linspace(0, 1, len(wind_speeds))
-            ax_wind.scatter(np.deg2rad(wind_dirs), wind_speeds, c=ages,
-                           cmap='viridis', s=6, alpha=0.8)
-            ax_wind.set_xticklabels([])
-            ax_wind.tick_params(labelsize=4)
-            ax_wind.set_facecolor('white')
-            ax_wind.patch.set_alpha(0.8)
-            ax_wind.grid(True, linewidth=0.3, alpha=0.5)
-            ax_main.text(0.87, 0.01, 'Wind', transform=ax_main.transAxes,
-                        fontsize=7, ha='right', va='bottom')
-
-        # Info panel
-        ax_info.axis('off')
-        travel = self.travel_distance()
-        meta = self._frames[0].metadata
-        info_text = (
-            f"Ship: {travel['total_m']:.0f}m in {travel['duration_s']:.0f}s "
-            f"({travel['speed_m_s']:.2f} m/s)    "
-            f"Frames: {n_frames}"
-        )
-        ax_info.text(0.5, 0.5, info_text, transform=ax_info.transAxes,
-                     ha='center', va='center', fontfamily='monospace', fontsize=9)
-
-        # Save
-        fig.savefig(output_path, dpi=dpi, bbox_inches='tight',
-                    facecolor='white', edgecolor='none')
-        plt.close(fig)
+        from wamos_tpw.combine_plot import save_frame as _save_frame
+        _save_frame(self, output_path, figsize=figsize, n_along=n_along, n_cross=n_cross,
+                    workers=workers, dpi=dpi)
 
     def __len__(self) -> int:
         """Return number of frames."""
@@ -1354,129 +928,68 @@ class Combine:
         )
 
 
-def _process_and_save_group(args_tuple) -> str:
-    """
-    Process a single group and save its frame image.
-    Used for parallel movie generation.
+# -----------------------------------------------------------------------------
+# CLI
+# -----------------------------------------------------------------------------
 
-    Args:
-        args_tuple: (group_idx, period, frames, config, radar_height, output_path, process_frames)
-
-    Returns:
-        Path to saved frame image
-    """
-    import matplotlib
-    matplotlib.use('Agg')
-
-    from wamos_tpw.processed import ProcessedFrames
-
-    group_idx, period, frames, config, radar_height, output_path, process_frames = args_tuple
-
-    # Process frames if requested
-    if process_frames:
-        pframes = ProcessedFrames.__new__(ProcessedFrames)
-        pframes._config = config
-        pframes._radar_height = radar_height
-        pframes.refine_theta(frames)
-        pframes.deramp_frames(frames)
-        corrected = pframes.destreak_frames(frames)
-        normalized = pframes.normalize_frames(corrected)
-        for frame, corr in zip(frames, normalized):
-            frame.corrected_intensity = corr
-
-    # Create Combine and save frame
-    combine = Combine(frames, config, radar_height=radar_height)
-    combine.save_frame(output_path)
-
-    return output_path
+def _add_arguments(parser) -> None:
+    """Add command arguments to parser."""
+    from wamos_tpw.filenames import add_common_arguments
+    add_common_arguments(parser)
+    parser.add_argument("--groupby", "-g", type=str, default='h',
+                        help="Groupby frequency (default: h)")
+    parser.add_argument("--config", "-c", type=str, default=None,
+                        help="YAML configuration file")
+    parser.add_argument("--radar-height", type=float, default=None,
+                        help="Radar height above water (m)")
+    parser.add_argument("--max-frames", type=int, default=None,
+                        help="Maximum frames to process per group")
+    parser.add_argument("--no-process", dest="process", action="store_false",
+                        help="Skip processing (deramp + destreak)")
+    parser.set_defaults(process=True)
+    parser.add_argument("--plot", action="store_true",
+                        help="Show interactive viewer with prev/next/play buttons")
+    parser.add_argument("--movie", type=str, default=None,
+                        help="Output movie file (e.g., output.mp4)")
+    parser.add_argument("--frames-dir", type=str, default=None,
+                        help="Directory to save frame images (persistent, not deleted)")
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume from checkpoint (skip existing frames in --frames-dir)")
+    parser.add_argument("--fps", type=int, default=10,
+                        help="Frames per second for movie (default: 10)")
+    parser.add_argument("--netcdf", type=str, default=None,
+                        help="Output NetCDF file (e.g., output.nc)")
+    parser.add_argument("--show-track", action="store_true",
+                        help="Show separate ship track plot")
 
 
 def add_subparser(subparsers) -> None:
     """Register the 'combine' subcommand."""
     p = subparsers.add_parser(
         'combine',
-        help='Combine frames into earth coordinate image',
-        description="Combine multiple radar frames into earth-referenced images with ship motion compensation"
+        help='Combine frames into earth coordinates',
+        description="Combine multiple frames with ship motion compensation"
     )
-    p.add_argument("stime", type=str, help="Start time (YYYYMMDDHHMM or ISO format)")
-    p.add_argument("etime", type=str, help="End time (YYYYMMDDHHMM or ISO format)")
-    p.add_argument("polar_path", type=str, help="Path to POLAR files directory")
-    p.add_argument("--groupby", "-g", type=str, default='h',
-                   help="Groupby frequency (default: h)")
-    p.add_argument("--config", "-c", type=str, default=None,
-                   help="YAML configuration file")
-    p.add_argument("--radar-height", type=float, default=None,
-                   help="Radar height above water (m)")
-    p.add_argument("--max-frames", type=int, default=None,
-                   help="Maximum frames to process per group")
-    p.add_argument("--process", action="store_true",
-                   help="Apply processing (deramp + destreak)")
-    p.add_argument("--plot", action="store_true",
-                   help="Show diagnostic plots")
-    p.add_argument("--movie", type=str, default=None,
-                   help="Output movie file (e.g., output.mp4)")
-    p.add_argument("--fps", type=int, default=10,
-                   help="Frames per second for movie (default: 10)")
-    p.add_argument("--show-track", action="store_true",
-                   help="Show separate ship track plot")
-    p.add_argument("--verbose", "-v", action="store_true",
-                   help="Verbose output")
+    _add_arguments(p)
     p.set_defaults(func=run)
 
 
 def run(args) -> None:
     """Execute the 'combine' command."""
-    from wamos_tpw.processed import ProcessedFrames
+    import gc
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s"
-    )
+    from wamos_tpw.combine_netcdf import NetCDFWriter
+    from wamos_tpw.combine_plot import CombineViewer, grid_group
+    from wamos_tpw.processed import ProcessedFrames
 
     # Load config
     config = WamosConfig(args.config) if args.config else WamosConfig()
 
-    with ProcessedFrames(
-        stime=args.stime,
-        etime=args.etime,
-        polar_path=args.polar_path,
-        groupby=args.groupby,
-        config=config,
-        radar_height=args.radar_height,
-    ) as pframes:
-        print(f"Discovered {len(pframes)} files")
-
-        for period, frames in pframes.itergroups():
-            frames = list(frames)
-            if args.max_frames:
-                frames = frames[:args.max_frames]
-            print(f"\n{period}: {len(frames)} frames")
-
-            if not frames:
-                continue
-
-            # Optionally process frames
-            if args.process:
-                print("  Processing: refine_theta, deramp, destreak...")
-                corrected = pframes.process_group(frames)
-                for frame, corr in zip(frames, corrected):
-                    frame.corrected_intensity = corr
-
-            # Create Combine object
-            combine = Combine(frames, config, radar_height=args.radar_height)
-            print(f"  {combine}")
-
-            # Plot if requested
-            if args.plot:
-                combine.plot_diagnostics(show_track=args.show_track)
-
-    # Movie generation mode
-    if args.movie:
-        import tempfile
-        import subprocess
-        from concurrent.futures import ProcessPoolExecutor, as_completed
-
-        print(f"\nGenerating movie: {args.movie}")
+    # For --plot: grid each group immediately to minimize memory usage
+    if args.plot:
+        # Create viewer (we'll count groups as we go)
+        viewer = CombineViewer(total_groups=0)
+        n_groups = 0
 
         with ProcessedFrames(
             stime=args.stime,
@@ -1486,133 +999,132 @@ def run(args) -> None:
             config=config,
             radar_height=args.radar_height,
         ) as pframes:
-            # Collect all groups
-            groups = []
+            logging.info(f"Discovered {len(pframes)} files")
+
             for period, frames in pframes.itergroups():
                 frames = list(frames)
                 if args.max_frames:
                     frames = frames[:args.max_frames]
-                if frames:
-                    groups.append((period, frames))
+                logging.info(f"{period}: {len(frames)} frames")
 
-            if not groups:
-                print("No frames to process")
-                return
+                if not frames:
+                    continue
 
-            print(f"Found {len(groups)} groups to render")
+                # Optionally process frames
+                if args.process:
+                    logging.debug("Processing: refine_theta, deramp, destreak...")
+                    corrected = pframes.process_group(frames)
+                    for frame, corr in zip(frames, corrected):
+                        frame.corrected_intensity = corr
 
-            # Create temp directory for frames
-            with tempfile.TemporaryDirectory() as tmpdir:
-                # Prepare arguments for parallel processing
-                tasks = []
-                for idx, (period, frames) in enumerate(groups):
-                    output_path = f"{tmpdir}/frame_{idx:06d}.png"
-                    tasks.append((
-                        idx, period, frames, config, args.radar_height,
-                        output_path, args.process
-                    ))
+                # Create Combine, grid immediately, then discard frames
+                combine = Combine(frames, config, radar_height=args.radar_height)
+                logging.debug(f"{combine}")
 
-                # Process groups in parallel
-                n_workers = min(len(tasks), 8)
-                print(f"Rendering {len(tasks)} frames with {n_workers} workers...")
+                # Grid this group immediately
+                group_data = grid_group(str(period), combine, 1200, 1600)
+                n_groups += 1
+                logging.info(f"Gridded group {n_groups}: {group_data['period']}")
 
-                completed = 0
-                frame_paths = [None] * len(tasks)
-                with ProcessPoolExecutor(max_workers=n_workers) as executor:
-                    futures = {
-                        executor.submit(_process_and_save_group, task): task[0]
-                        for task in tasks
-                    }
-                    for future in as_completed(futures):
-                        idx = futures[future]
-                        try:
-                            path = future.result()
-                            frame_paths[idx] = path
-                            completed += 1
-                            print(f"  Rendered frame {completed}/{len(tasks)}", flush=True)
-                        except Exception as e:
-                            print(f"  Error rendering frame {idx}: {e}")
+                # Add to viewer (only gridded data retained, frames discarded)
+                viewer.add_group_data(group_data)
 
-                # Filter out failed frames
-                frame_paths = [p for p in frame_paths if p is not None]
+                # Clear caches and free memory
+                combine.bearing._theta.clear_shadow_data()
+                combine.bearing.clear_cache()
+                for frame in combine.frames:
+                    frame.clear_cache()
+                del combine, frames, group_data
+                gc.collect()
 
-                if not frame_paths:
-                    print("No frames were rendered successfully")
-                    return
+        if n_groups == 0:
+            logging.warning("No groups to display")
+            return
 
-                # Create movie with ffmpeg
-                print(f"Creating MP4 with ffmpeg ({args.fps} fps)...")
+        # Mark loading complete
+        viewer.set_loading_complete()
+        logging.info(f"All {n_groups} groups loaded.")
+        logging.info("Navigation: <- -> keys, Prev/Next buttons, Space=Play/Stop")
 
-                # Check if ffmpeg is available
-                import shutil
-                ffmpeg_path = shutil.which('ffmpeg')
-                if ffmpeg_path is None:
-                    print("Error: ffmpeg not found. Install with: brew install ffmpeg")
-                    print("Frame images saved in temp directory (will be deleted)")
-                    # Copy frames to output directory as fallback
-                    import os
-                    frames_dir = args.movie.replace('.mp4', '_frames')
-                    os.makedirs(frames_dir, exist_ok=True)
-                    for i, path in enumerate(frame_paths):
-                        if path:
-                            import shutil as sh
-                            sh.copy(path, f"{frames_dir}/frame_{i:06d}.png")
-                    print(f"Frames saved to: {frames_dir}/")
-                    print("To create movie manually:")
-                    print(f"  ffmpeg -framerate {args.fps} -i {frames_dir}/frame_%06d.png "
-                          f"-vf 'scale=trunc(iw/2)*2:trunc(ih/2)*2' "
-                          f"-c:v libx264 -pix_fmt yuv420p {args.movie}")
-                else:
-                    # Use ffmpeg with H.264 codec for web compatibility
-                    ffmpeg_cmd = [
-                        ffmpeg_path, '-y',  # Overwrite output
-                        '-framerate', str(args.fps),
-                        '-i', f'{tmpdir}/frame_%06d.png',
-                        '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',  # H.264 needs even dimensions
-                        '-c:v', 'libx264',
-                        '-preset', 'medium',
-                        '-crf', '23',  # Quality (lower = better, 18-28 typical)
-                        '-pix_fmt', 'yuv420p',  # Web compatibility
-                        '-movflags', '+faststart',  # Web streaming
-                        args.movie
-                    ]
+        # Show viewer
+        viewer.show()
+        return
 
-                    result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
-                    if result.returncode != 0:
-                        print(f"ffmpeg error: {result.stderr}")
-                    else:
-                        print(f"Movie saved to: {args.movie}")
+    # For --netcdf: grid each group and append immediately to minimize memory
+    if args.netcdf:
+        n_groups = 0
+
+        with NetCDFWriter(args.netcdf) as nc_writer:
+            with ProcessedFrames(
+                stime=args.stime,
+                etime=args.etime,
+                polar_path=args.polar_path,
+                groupby=args.groupby,
+                config=config,
+                radar_height=args.radar_height,
+            ) as pframes:
+                logging.info(f"Discovered {len(pframes)} files")
+                logging.info(f"Writing to: {args.netcdf}")
+
+                for period, frames in pframes.itergroups():
+                    frames = list(frames)
+                    if args.max_frames:
+                        frames = frames[:args.max_frames]
+                    logging.info(f"{period}: {len(frames)} frames")
+
+                    if not frames:
+                        continue
+
+                    # Optionally process frames
+                    if args.process:
+                        logging.debug("Processing: refine_theta, deramp, destreak...")
+                        corrected = pframes.process_group(frames)
+                        for frame, corr in zip(frames, corrected):
+                            frame.corrected_intensity = corr
+
+                    # Create Combine, grid immediately, then discard frames
+                    combine = Combine(frames, config, radar_height=args.radar_height)
+                    logging.debug(f"{combine}")
+
+                    # Grid this group immediately
+                    group_data = grid_group(str(period), combine, 1200, 1600)
+                    n_groups += 1
+                    logging.info(f"Gridded and saved group {n_groups}: {group_data['period']}")
+
+                    # Append to NetCDF (writes to disk immediately)
+                    nc_writer.append_group(group_data)
+
+                    # Clear caches and free memory
+                    combine.bearing._theta.clear_shadow_data()
+                    combine.bearing.clear_cache()
+                    for frame in combine.frames:
+                        frame.clear_cache()
+                    del combine, frames, group_data
+                    gc.collect()
+
+        if n_groups == 0:
+            logging.warning("No groups to save")
+        else:
+            logging.info(f"Saved {n_groups} groups to: {args.netcdf}")
+        return
+
+    # Movie generation mode
+    if args.movie:
+        from wamos_tpw.combine_movie import generate_movie
+        generate_movie(args, config)
+        return
 
 
 def main() -> None:
     """Standalone CLI entry point."""
     from argparse import ArgumentParser
+    from wamos_tpw.logging_config import add_logging_arguments, setup_logging
 
     parser = ArgumentParser(description="Combine frames into earth coordinate image")
-    parser.add_argument("stime", type=str, help="Start time (YYYYMMDDHHMM or ISO format)")
-    parser.add_argument("etime", type=str, help="End time (YYYYMMDDHHMM or ISO format)")
-    parser.add_argument("polar_path", type=str, help="Path to POLAR files directory")
-    parser.add_argument("--groupby", "-g", type=str, default='h',
-                        help="Groupby frequency (default: h)")
-    parser.add_argument("--config", "-c", type=str, default=None,
-                        help="YAML configuration file")
-    parser.add_argument("--radar-height", type=float, default=None,
-                        help="Radar height above water (m)")
-    parser.add_argument("--max-frames", type=int, default=None,
-                        help="Maximum frames to process per group")
-    parser.add_argument("--process", action="store_true",
-                        help="Apply processing (deramp + destreak)")
-    parser.add_argument("--plot", action="store_true",
-                        help="Show diagnostic plots")
-    parser.add_argument("--movie", type=str, default=None,
-                        help="Output movie file (e.g., output.mp4)")
-    parser.add_argument("--fps", type=int, default=10,
-                        help="Frames per second for movie (default: 10)")
-    parser.add_argument("--show-track", action="store_true",
-                        help="Show separate ship track plot")
-    parser.add_argument("--verbose", "-v", action="store_true",
-                        help="Verbose output")
+    add_logging_arguments(parser)
+    _add_arguments(parser)
     args = parser.parse_args()
+    setup_logging(args)
     run(args)
 
 

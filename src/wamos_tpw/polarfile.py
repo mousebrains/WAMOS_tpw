@@ -452,6 +452,12 @@ def load_polar_file_all(filepath: str) -> list[Frame]:
         return []
 
 
+def _add_arguments(parser) -> None:
+    """Add command arguments to parser."""
+    parser.add_argument("filename", nargs="+", help="Polar file(s) to parse")
+    parser.add_argument("--show-header", action="store_true", help="Show full header")
+
+
 def add_subparser(subparsers) -> None:
     """Register the 'parse' subcommand."""
     p = subparsers.add_parser(
@@ -459,41 +465,34 @@ def add_subparser(subparsers) -> None:
         help='Parse single POLAR file',
         description="Parse WAMOS polar file and display information"
     )
-    p.add_argument("filename", nargs="+", help="Polar file(s) to parse")
-    p.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
-    p.add_argument("--show-header", action="store_true", help="Show full header")
+    _add_arguments(p)
     p.set_defaults(func=run)
 
 
 def run(args) -> None:
     """Execute the 'parse' command."""
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s"
-    )
-
     for filepath in args.filename:
-        print(f"\n{'='*60}")
-        print(f"Parsing: {filepath}")
-        print('='*60)
+        logging.info(f"{'='*60}")
+        logging.info(f"Parsing: {filepath}")
+        logging.info('='*60)
 
         try:
             pf = PolarFile(filepath)
-            print(pf)
+            logging.info(f"{pf}")
 
             if args.show_header:
-                print("\nHeader:")
+                logging.info("Header:")
                 for key, value in sorted(pf.header.items()):
-                    print(f"  {key}: {value}")
+                    logging.info(f"  {key}: {value}")
 
             if pf:
                 frame = pf.frame()
-                print("\nFirst frame:")
-                print(f"  Timestamp: {frame.timestamp}")
-                print(f"  Shape: {frame.shape}")
-                print(f"  Intensity range: [{frame.intensity.min()}, {frame.intensity.max()}]")
-                print(f"  Bit12 (PPS) any: {frame.bit12.any()}")
-                print(f"  Bit13 (bearing) any: {frame.bit13.any()}")
+                logging.info("First frame:")
+                logging.info(f"  Timestamp: {frame.timestamp}")
+                logging.info(f"  Shape: {frame.shape}")
+                logging.info(f"  Intensity range: [{frame.intensity.min()}, {frame.intensity.max()}]")
+                logging.info(f"  Bit12 (PPS) any: {frame.bit12.any()}")
+                logging.info(f"  Bit13 (bearing) any: {frame.bit13.any()}")
 
         except Exception as e:
             logging.error(f"Failed to parse {filepath}: {e}")
@@ -502,12 +501,13 @@ def run(args) -> None:
 def main() -> None:
     """Standalone CLI entry point."""
     from argparse import ArgumentParser
+    from wamos_tpw.logging_config import add_logging_arguments, setup_logging
 
     parser = ArgumentParser(description="Parse WAMOS polar file")
-    parser.add_argument("filename", nargs="+", help="Polar file(s) to parse")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
-    parser.add_argument("--show-header", action="store_true", help="Show full header")
+    add_logging_arguments(parser)
+    _add_arguments(parser)
     args = parser.parse_args()
+    setup_logging(args)
     run(args)
 
 

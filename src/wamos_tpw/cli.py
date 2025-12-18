@@ -6,7 +6,57 @@ Master command that provides access to all WAMOS processing tools via subcommand
 """
 
 import argparse
+import logging
 import sys
+from pathlib import Path
+
+from wamos_tpw.exceptions import WamosError, ConfigError, PolarFileError, ValidationError
+from wamos_tpw.logging_config import add_logging_arguments, setup_logging
+
+
+logger = logging.getLogger(__name__)
+
+
+def _validate_path(path: str, must_exist: bool = True, is_file: bool = False) -> Path:
+    """
+    Validate a path argument.
+
+    Args:
+        path: Path string to validate
+        must_exist: If True, path must exist
+        is_file: If True, path must be a file (not directory)
+
+    Returns:
+        Path object
+
+    Raises:
+        ValidationError: If path validation fails
+    """
+    p = Path(path)
+    if must_exist and not p.exists():
+        raise ValidationError(f"Path does not exist: {path}", parameter="path")
+    if is_file and p.exists() and not p.is_file():
+        raise ValidationError(f"Not a file: {path}", parameter="path")
+    return p
+
+
+def _handle_error(error: Exception) -> None:
+    """Log user-friendly error message and exit."""
+    if isinstance(error, ConfigError):
+        logger.error(f"Configuration error: {error}")
+    elif isinstance(error, PolarFileError):
+        logger.error(f"Polar file error: {error}")
+    elif isinstance(error, ValidationError):
+        logger.error(f"Validation error: {error}")
+    elif isinstance(error, WamosError):
+        logger.error(f"Error: {error}")
+    elif isinstance(error, FileNotFoundError):
+        logger.error(f"File not found: {error}")
+    elif isinstance(error, ValueError):
+        logger.error(f"Invalid value: {error}")
+    else:
+        logger.error(f"Unexpected error: {error}")
+    sys.exit(1)
 
 
 def main() -> None:
@@ -22,8 +72,14 @@ Examples:
   wamos view "2022-04-05 14:00" "2022-04-05 15:00" /path/to/POLAR --plot-intensity
   wamos list "2022-04-05 14:00" "2022-04-05 15:00" /path/to/POLAR
   wamos parse /path/to/file.pol --show-header
+  wamos combine --dry-run "2022-04-05 14:00" "2022-04-05 15:00" /path/to/POLAR
 """
     )
+
+    # Global options
+    parser.add_argument("--dry-run", "-n", action="store_true",
+                        help="Show what would be done without executing")
+    add_logging_arguments(parser)
 
     subparsers = parser.add_subparsers(
         dest='command',
@@ -51,12 +107,32 @@ Examples:
     # Parse arguments
     args = parser.parse_args()
 
+    # Configure logging based on flags
+    setup_logging(args)
+
     if args.command is None:
         parser.print_help()
         sys.exit(1)
 
-    # Call the command's function
-    args.func(args)
+    # Handle dry-run mode
+    if args.dry_run:
+        logger.info("Dry-run mode enabled")
+        logger.info(f"[DRY-RUN] Would execute: wamos {args.command}")
+        logger.info(f"[DRY-RUN] Arguments: {vars(args)}")
+        sys.exit(0)
+
+    # Call the command's function with error handling
+    try:
+        args.func(args)
+    except KeyboardInterrupt:
+        logger.warning("Interrupted by user")
+        sys.exit(130)
+    except (WamosError, FileNotFoundError, ValueError) as e:
+        _handle_error(e)
+    except Exception as e:
+        # Unexpected error - show full traceback for debugging
+        logger.exception(f"Unexpected error: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

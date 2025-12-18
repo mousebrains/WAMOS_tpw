@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 
 from wamos_tpw.config import WamosConfig
@@ -20,11 +22,51 @@ class Deramp:
     Calculates a quantile intensity profile as a function of range
     (excluding shadowed regions), smooths it, and subtracts from the data.
 
-    Algorithm:
-    1. Identify shadow region from config (bearings to exclude)
-    2. Calculate quantile intensity at each range bin (excluding shadow)
-    3. Smooth the profile with a moving average
-    4. Subtract smoothed profile from intensity data
+    Algorithm Overview
+    ------------------
+
+    Marine radar intensity decreases with range due to the radar equation:
+    received power falls off as 1/r⁴ (for surface targets). This creates
+    a radial intensity gradient that obscures sea surface features.
+
+    **Step 1: Shadow Mask Creation**
+
+    The ship's superstructure blocks radar returns in a sector (typically
+    around 180° from bow). These bearings are excluded from profile
+    calculation since they don't represent true sea surface returns.
+
+    The shadow region is defined by:
+    - center: Direction of shadow center from bow (default: 180° = stern)
+    - width: Total angular width of shadow (default: 90°)
+
+    The mask handles 360°/0° wraparound correctly.
+
+    **Step 2: Quantile Profile Calculation**
+
+    For each range bin (column), compute the specified quantile (default: 10th
+    percentile) of intensity values across all non-shadowed bearings. The
+    quantile is used instead of the mean because:
+
+    - Ocean waves create high-intensity returns that skew the mean
+    - The lower quantile better represents the "background" intensity level
+    - It's more robust to outliers from ships, rain, or artifacts
+
+    The result is a 1D profile: intensity vs. range.
+
+    **Step 3: Profile Smoothing**
+
+    Apply a moving average filter to the profile to reduce noise while
+    preserving the overall trend. The window size is 2% of the range bins
+    (minimum 3 bins). Edge handling uses 'edge' padding mode to avoid
+    boundary artifacts.
+
+    **Step 4: Correction**
+
+    Subtract the smoothed profile from each bearing's intensity:
+        corrected[bearing, range] = intensity[bearing, range] - profile[range]
+
+    This flattens the range-dependent falloff while preserving relative
+    intensity variations (waves, ships, etc.).
 
     Example:
         >>> deramp = Deramp(frame, config, quantile=0.25)
@@ -40,7 +82,9 @@ class Deramp:
                  config: WamosConfig | None = None,
                  bearing: np.ndarray | None = None,
                  quantile: float = 0.10,
-                 smooth_window: int | None = None) -> None:
+                 smooth_window: int | None = None,
+                 shadow_start: float | None = None,
+                 shadow_end: float | None = None) -> None:
         """
         Initialize Deramp for a single frame.
 
@@ -51,11 +95,16 @@ class Deramp:
                      If None, assumes uniform 0-360 distribution.
             quantile: Quantile to use for profile (0.0-1.0, default 0.10)
             smooth_window: Smoothing window size in bins (default: 2% of range bins)
+            shadow_start: Detected shadow start angle (degrees). Overrides config if provided.
+            shadow_end: Detected shadow end angle (degrees). Overrides config if provided.
         """
         self._frame = frame
         self._config = config or WamosConfig()
         self._bearing = bearing
         self._quantile = quantile
+        # Store detected shadow bounds (override config if provided)
+        self._shadow_start = shadow_start
+        self._shadow_end = shadow_end
         # Calculate default window as 2% of range bins, minimum 3
         if smooth_window is None:
             smooth_window = max(3, int(frame.n_distances * self._SMOOTH_WINDOW_FRACTION))
@@ -109,22 +158,28 @@ class Deramp:
         return self._shadow_mask
 
     def _compute_shadow_mask(self) -> None:
-        """Compute mask for shadow region based on config."""
+        """Compute mask for shadow region based on detected edges or config."""
         n_bearings = self._frame.n_bearings
 
-        # Get shadow parameters from config
-        shadow_center = self._config.shadow.center  # degrees from bow
-        shadow_width = self._config.shadow.width    # total width in degrees
+        # Use detected shadow bounds if provided, otherwise fall back to config
+        if self._shadow_start is not None and self._shadow_end is not None:
+            # Use detected shadow edges directly
+            shadow_start = self._shadow_start
+            shadow_end = self._shadow_end
+        else:
+            # Fall back to config-based shadow region
+            shadow_center = self._config.shadow.center  # degrees from bow
+            shadow_width = self._config.shadow.width    # total width in degrees
 
-        if shadow_center is None or shadow_width is None or shadow_width <= 0:
-            # No shadow defined - no masking
-            self._shadow_mask = np.zeros(n_bearings, dtype=bool)
-            return
+            if shadow_center is None or shadow_width is None or shadow_width <= 0:
+                # No shadow defined - no masking
+                self._shadow_mask = np.zeros(n_bearings, dtype=bool)
+                return
 
-        # Calculate shadow bounds
-        half_width = shadow_width / 2.0
-        shadow_start = (shadow_center - half_width) % 360
-        shadow_end = (shadow_center + half_width) % 360
+            # Calculate shadow bounds from center and width
+            half_width = shadow_width / 2.0
+            shadow_start = (shadow_center - half_width) % 360
+            shadow_end = (shadow_center + half_width) % 360
 
         # Determine bearing for each row
         if self._bearing is not None:
@@ -143,7 +198,8 @@ class Deramp:
 
     def _compute_deramp(self) -> None:
         """Compute the range-corrected intensity using smoothed quantile profile."""
-        intensity = self._frame.intensity.astype(np.float64)
+        # Use float32 - sufficient for 12-bit intensity data (0-4095), saves 50% memory
+        intensity = self._frame.intensity.astype(np.float32)
         n_bearings, n_distances = intensity.shape
 
         # Get shadow mask
@@ -157,7 +213,7 @@ class Deramp:
 
         # Calculate quantile profile at each range bin (excluding shadow)
         non_shadow_data = intensity[non_shadow_idx, :]
-        self._raw_profile = np.quantile(non_shadow_data, self._quantile, axis=0)
+        self._raw_profile = self._fast_quantile(non_shadow_data, self._quantile)
 
         # Smooth the profile
         self._smooth_profile = self._smooth_moving_average(
@@ -166,6 +222,52 @@ class Deramp:
 
         # Subtract the smoothed profile from intensity data
         self._corrected = intensity - self._smooth_profile[np.newaxis, :]
+
+    @staticmethod
+    def _fast_quantile(data: np.ndarray, q: float) -> np.ndarray:
+        """
+        Compute quantile along axis 0 using np.partition for O(n) performance.
+
+        Much faster than np.quantile for large arrays since partition is O(n)
+        vs O(n log n) for full sorting. Uses vectorized operations across all
+        columns simultaneously.
+
+        Args:
+            data: 2D array of shape (n_samples, n_features)
+            q: Quantile value between 0 and 1
+
+        Returns:
+            1D array of quantile values for each column
+        """
+        n_samples, n_features = data.shape
+
+        if n_samples == 0:
+            return np.zeros(n_features)
+
+        if n_samples == 1:
+            return data[0, :].copy()
+
+        # Calculate indices for linear interpolation
+        idx = q * (n_samples - 1)
+        k_low = int(np.floor(idx))
+        k_high = min(k_low + 1, n_samples - 1)
+        frac = idx - k_low
+
+        # Transpose to (n_features, n_samples) for row-wise partition
+        data_t = data.T
+
+        if k_high > k_low and frac > 0:
+            # Need both k_low and k_high for interpolation
+            # Partition both indices simultaneously in O(n) - more efficient than
+            # partitioning once then scanning for min
+            partitioned = np.partition(data_t, [k_low, k_high], axis=1)
+            low_vals = partitioned[:, k_low]
+            high_vals = partitioned[:, k_high]
+            return low_vals + frac * (high_vals - low_vals)
+        else:
+            # Only need k_low
+            partitioned = np.partition(data_t, k_low, axis=1)
+            return partitioned[:, k_low]
 
     @staticmethod
     def _smooth_moving_average(data: np.ndarray, window: int) -> np.ndarray:
@@ -204,7 +306,7 @@ class Deramp:
         # Ensure computation is done
         _ = self.corrected_intensity
 
-        original = self._frame.intensity.astype(np.float64)
+        original = self._frame.intensity.astype(np.float32)
         corrected = self._corrected
         distances = self.slant_range
 
@@ -303,6 +405,19 @@ class Deramp:
         plt.show()
 
 
+def _add_arguments(parser) -> None:
+    """Add command arguments to parser."""
+    parser.add_argument("filename", help="Polar file to process")
+    parser.add_argument("--config", "-c", type=str, default=None,
+                        help="YAML configuration file")
+    parser.add_argument("--quantile", "-q", type=float, default=0.10,
+                        help="Quantile for profile (0.0-1.0, default: 0.10)")
+    parser.add_argument("--smooth-window", "-s", type=int, default=None,
+                        help="Smoothing window size in bins (default: 2%% of range bins)")
+    parser.add_argument("--plot", action="store_true",
+                        help="Show diagnostic plots")
+
+
 def add_subparser(subparsers) -> None:
     """Register the 'deramp' subcommand."""
     p = subparsers.add_parser(
@@ -310,15 +425,7 @@ def add_subparser(subparsers) -> None:
         help='Standalone deramp tool',
         description="Test deramp on a polar file"
     )
-    p.add_argument("filename", help="Polar file to process")
-    p.add_argument("--config", "-c", type=str, default=None,
-                   help="YAML configuration file")
-    p.add_argument("--quantile", "-q", type=float, default=0.10,
-                   help="Quantile for profile (0.0-1.0, default: 0.10)")
-    p.add_argument("--smooth-window", "-s", type=int, default=None,
-                   help="Smoothing window size in bins (default: 2%% of range bins)")
-    p.add_argument("--plot", action="store_true",
-                   help="Show diagnostic plots")
+    _add_arguments(p)
     p.set_defaults(func=run)
 
 
@@ -332,21 +439,21 @@ def run(args) -> None:
     # Load polar file
     pf = PolarFile(args.filename)
     if not pf:
-        print(f"No frames in {args.filename}")
+        logging.warning(f"No frames in {args.filename}")
         return
 
     frame = pf.frame()
-    print(f"Loaded: {frame}")
+    logging.info(f"Loaded: {frame}")
 
     # Apply deramp
     deramp = Deramp(frame, config, quantile=args.quantile, smooth_window=args.smooth_window)
     corrected = deramp.corrected_intensity
 
-    print(f"\nQuantile: {args.quantile*100:.0f}%")
-    print(f"Smooth window: {args.smooth_window} bins")
-    print(f"\nOriginal intensity range: [{frame.intensity.min()}, {frame.intensity.max()}]")
-    print(f"Corrected intensity range: [{corrected.min():.1f}, {corrected.max():.1f}]")
-    print(f"Smooth profile range: [{deramp.smooth_profile.min():.1f}, {deramp.smooth_profile.max():.1f}]")
+    logging.info(f"Quantile: {args.quantile*100:.0f}%")
+    logging.info(f"Smooth window: {args.smooth_window} bins")
+    logging.info(f"Original intensity range: [{frame.intensity.min()}, {frame.intensity.max()}]")
+    logging.info(f"Corrected intensity range: [{corrected.min():.1f}, {corrected.max():.1f}]")
+    logging.info(f"Smooth profile range: [{deramp.smooth_profile.min():.1f}, {deramp.smooth_profile.max():.1f}]")
 
     if args.plot:
         deramp.plot_diagnostics()
@@ -355,18 +462,13 @@ def run(args) -> None:
 def main() -> None:
     """Standalone CLI entry point."""
     from argparse import ArgumentParser
+    from wamos_tpw.logging_config import add_logging_arguments, setup_logging
 
     parser = ArgumentParser(description="Test deramp on a polar file")
-    parser.add_argument("filename", help="Polar file to process")
-    parser.add_argument("--config", "-c", type=str, default=None,
-                        help="YAML configuration file")
-    parser.add_argument("--quantile", "-q", type=float, default=0.10,
-                        help="Quantile for profile (0.0-1.0, default: 0.10)")
-    parser.add_argument("--smooth-window", "-s", type=int, default=None,
-                        help="Smoothing window size in bins (default: 2%% of range bins)")
-    parser.add_argument("--plot", action="store_true",
-                        help="Show diagnostic plots")
+    add_logging_arguments(parser)
+    _add_arguments(parser)
     args = parser.parse_args()
+    setup_logging(args)
     run(args)
 
 

@@ -7,11 +7,45 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from wamos_tpw.exceptions import ConfigError
+
+
+def _validate_range(
+    value: float | None,
+    param: str,
+    min_val: float | None = None,
+    max_val: float | None = None,
+    allow_none: bool = True
+) -> None:
+    """
+    Validate a numeric value is within bounds.
+
+    Args:
+        value: Value to validate
+        param: Parameter name for error messages
+        min_val: Minimum allowed value (inclusive), or None for no minimum
+        max_val: Maximum allowed value (inclusive), or None for no maximum
+        allow_none: Whether None is a valid value
+
+    Raises:
+        ConfigError: If value is out of bounds
+    """
+    if value is None:
+        if not allow_none:
+            raise ConfigError("value is required", parameter=param)
+        return
+
+    if min_val is not None and value < min_val:
+        raise ConfigError(f"must be >= {min_val}", parameter=param, value=value)
+    if max_val is not None and value > max_val:
+        raise ConfigError(f"must be <= {max_val}", parameter=param, value=value)
 
 
 @dataclass
@@ -19,6 +53,11 @@ class ShadowConfig:
     """Configuration for radar shadow region."""
     center: float = 180.0      # Degrees from bow (aft)
     width: float = 90.0        # Total width in degrees (±45°)
+
+    def __post_init__(self) -> None:
+        """Validate shadow configuration."""
+        _validate_range(self.center, "shadow.center", min_val=0.0, max_val=360.0, allow_none=False)
+        _validate_range(self.width, "shadow.width", min_val=0.0, max_val=360.0, allow_none=False)
 
     @property
     def start(self) -> float:
@@ -38,6 +77,12 @@ class OffsetsConfig:
     bow_to_radar: float = 0.0      # Bow to radar angle (BO2RA)
     heading_delay: float = 0.0     # Heading delay (HDGDL)
 
+    def __post_init__(self) -> None:
+        """Validate offsets configuration."""
+        _validate_range(self.compass, "offsets.compass", min_val=-360.0, max_val=360.0, allow_none=False)
+        _validate_range(self.bow_to_radar, "offsets.bow_to_radar", min_val=-360.0, max_val=360.0, allow_none=False)
+        _validate_range(self.heading_delay, "offsets.heading_delay", min_val=-360.0, max_val=360.0, allow_none=False)
+
 
 @dataclass
 class ThetaRefinementConfig:
@@ -47,12 +92,22 @@ class ThetaRefinementConfig:
     min_frames: int = 3             # Minimum frames for refinement
     intensity_threshold: float = 0.2  # Fraction of max for shadow detection
 
+    def __post_init__(self) -> None:
+        """Validate theta refinement configuration."""
+        _validate_range(self.search_range, "theta_refinement.search_range", min_val=0.0, max_val=180.0, allow_none=False)
+        _validate_range(self.min_frames, "theta_refinement.min_frames", min_val=1, allow_none=False)
+        _validate_range(self.intensity_threshold, "theta_refinement.intensity_threshold", min_val=0.0, max_val=1.0, allow_none=False)
+
 
 @dataclass
 class RadarConfig:
     """Configuration for radar physical parameters."""
     height: float | None = None     # Height above water (meters)
     tower: str = "UNKNOWN"          # Tower identifier
+
+    def __post_init__(self) -> None:
+        """Validate radar configuration."""
+        _validate_range(self.height, "radar.height", min_val=0.0)
 
 
 @dataclass
@@ -63,12 +118,28 @@ class PlottingConfig:
     intensity_vmax: float = 4095.0
     dpi: int = 150
 
+    def __post_init__(self) -> None:
+        """Validate plotting configuration."""
+        _validate_range(self.intensity_vmin, "plotting.intensity_vmin", min_val=0.0, allow_none=False)
+        _validate_range(self.intensity_vmax, "plotting.intensity_vmax", min_val=0.0, allow_none=False)
+        _validate_range(self.dpi, "plotting.dpi", min_val=1, max_val=1200, allow_none=False)
+        if self.intensity_vmin >= self.intensity_vmax:
+            raise ConfigError(
+                f"intensity_vmin ({self.intensity_vmin}) must be < intensity_vmax ({self.intensity_vmax})",
+                parameter="plotting.intensity_vmin"
+            )
+
 
 @dataclass
 class DestreakConfig:
     """Configuration for destreaking algorithm."""
     min_streak_length: int = 10       # Minimum contiguous flagged bins required
     threshold_sigma: float = 7.5      # Number of one-sided standard deviations for threshold
+
+    def __post_init__(self) -> None:
+        """Validate destreak configuration."""
+        _validate_range(self.min_streak_length, "destreak.min_streak_length", min_val=1, allow_none=False)
+        _validate_range(self.threshold_sigma, "destreak.threshold_sigma", min_val=0.0, allow_none=False)
 
 
 class WamosConfig:
@@ -296,6 +367,14 @@ destreak:
 """
 
 
+def _add_arguments(parser) -> None:
+    """Add command arguments to parser."""
+    parser.add_argument("config", nargs="?", type=str, default=None,
+                        help="YAML configuration file")
+    parser.add_argument("--create-sample", action="store_true",
+                        help="Create a sample configuration file")
+
+
 def add_subparser(subparsers) -> None:
     """Register the 'config' subcommand."""
     p = subparsers.add_parser(
@@ -303,10 +382,7 @@ def add_subparser(subparsers) -> None:
         help='Show/validate configuration',
         description="Test WAMOS configuration loading"
     )
-    p.add_argument("config", nargs="?", type=str, default=None,
-                   help="YAML configuration file")
-    p.add_argument("--create-sample", action="store_true",
-                   help="Create a sample configuration file")
+    _add_arguments(p)
     p.set_defaults(func=run)
 
 
@@ -315,41 +391,38 @@ def run(args) -> None:
     if args.create_sample:
         output_file = Path("wamos_config.yaml")
         output_file.write_text(SAMPLE_CONFIG)
-        print(f"Created sample configuration: {output_file}")
+        logging.info(f"Created sample configuration: {output_file}")
         return
 
     # Load and display configuration
     config = WamosConfig(args.config)
-    print(f"Configuration: {config}")
-    print()
-    print(f"Tower: {config.tower}")
-    print(f"Radar height: {config.radar.height}")
-    print(f"Shadow region: {config.shadow.start:.1f}° to {config.shadow.end:.1f}°")
-    print(f"Shadow center: {config.shadow.center}°")
-    print(f"Shadow width: {config.shadow.width}°")
-    print()
-    print("Offsets:")
-    print(f"  Compass: {config.offsets.compass}°")
-    print(f"  Bow to radar: {config.offsets.bow_to_radar}°")
-    print(f"  Heading delay: {config.offsets.heading_delay}°")
-    print()
-    print("Theta refinement:")
-    print(f"  Enabled: {config.theta_refinement.enabled}")
-    print(f"  Search range: {config.theta_refinement.search_range}°")
-    print(f"  Min frames: {config.theta_refinement.min_frames}")
-    print(f"  Intensity threshold: {config.theta_refinement.intensity_threshold}")
+    logging.info(f"Configuration: {config}")
+    logging.info(f"Tower: {config.tower}")
+    logging.info(f"Radar height: {config.radar.height}")
+    logging.info(f"Shadow region: {config.shadow.start:.1f}deg to {config.shadow.end:.1f}deg")
+    logging.info(f"Shadow center: {config.shadow.center}deg")
+    logging.info(f"Shadow width: {config.shadow.width}deg")
+    logging.info("Offsets:")
+    logging.info(f"  Compass: {config.offsets.compass}deg")
+    logging.info(f"  Bow to radar: {config.offsets.bow_to_radar}deg")
+    logging.info(f"  Heading delay: {config.offsets.heading_delay}deg")
+    logging.info("Theta refinement:")
+    logging.info(f"  Enabled: {config.theta_refinement.enabled}")
+    logging.info(f"  Search range: {config.theta_refinement.search_range}deg")
+    logging.info(f"  Min frames: {config.theta_refinement.min_frames}")
+    logging.info(f"  Intensity threshold: {config.theta_refinement.intensity_threshold}")
 
 
 def main() -> None:
     """Standalone CLI entry point."""
     from argparse import ArgumentParser
+    from wamos_tpw.logging_config import add_logging_arguments, setup_logging
 
     parser = ArgumentParser(description="Test WAMOS configuration loading")
-    parser.add_argument("config", nargs="?", type=str, default=None,
-                        help="YAML configuration file")
-    parser.add_argument("--create-sample", action="store_true",
-                        help="Create a sample configuration file")
+    add_logging_arguments(parser)
+    _add_arguments(parser)
     args = parser.parse_args()
+    setup_logging(args)
     run(args)
 
 

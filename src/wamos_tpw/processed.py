@@ -11,6 +11,7 @@ import logging
 from typing import Callable
 
 import numpy as np
+from tqdm import tqdm
 
 from wamos_tpw.bearing import Theta, Bearing
 from wamos_tpw.config import WamosConfig
@@ -74,27 +75,39 @@ class ProcessedFrames(Files):
         """Return the radar height."""
         return self._radar_height
 
-    def refine_theta(self, frames: list[Frame], shadow_diagnostics: bool = False) -> None:
+    def refine_theta(self, frames: list[Frame], shadow_diagnostics: bool = False) -> Theta:
         """
-        Refine the angle with respect to the vessel by using the shadowed regions
+        Refine the angle with respect to the vessel by using the shadowed regions.
+
+        The detected shadow edges are stored and can be used for deramping.
 
         Args:
             frames: List of Frame objects to optimize the theta for
             shadow_diagnostics: If True, show shadow detection diagnostic plots and stop
+
+        Returns:
+            Theta object with detected shadow edges (access via shadow_left_mean, shadow_right_mean)
         """
         # Create Theta to get shadow analysis (refinement does the edge detection)
         theta = Theta(frames, self._config, refine=True)
 
-        # Print shadow statistics
+        # Log shadow statistics
         if theta.shadow_stats:
-            print(f"Shadow {theta.shadow_stats}")
+            logging.debug(f"Shadow {theta.shadow_stats}")
 
         if shadow_diagnostics:
             theta.plot_shadow_diagnostics()
             raise RuntimeError("Shadow diagnostic plots complete - stopping execution")
 
+        return theta
+
     def deramp_frames(self, frames: list[Frame],
-                      diagnostics: bool = False) -> None:
+                      diagnostics: bool = False,
+                      show_progress: bool = True,
+                      shadow_start: float | None = None,
+                      shadow_end: float | None = None,
+                      theta: Theta | None = None,
+                      parallel: bool = True) -> None:
         """
         Remove range-dependent intensity fall-off from frames.
 
@@ -105,20 +118,58 @@ class ProcessedFrames(Files):
         Args:
             frames: List of Frame objects to deramp
             diagnostics: If True, show diagnostic plots for each frame
+            show_progress: If True, show progress bar
+            shadow_start: Detected shadow start angle (degrees). If None, uses config.
+            shadow_end: Detected shadow end angle (degrees). If None, uses config.
+            theta: Theta object with bearing arrays for each frame (optional)
+            parallel: If True, process frames in parallel using threads
         """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import os
+
+        n_frames = len(frames)
+
+        # Diagnostics require sequential processing
+        if diagnostics or not parallel or n_frames < 4:
+            frame_iter = tqdm(frames, desc="Deramping", disable=not show_progress)
+            for i, frame in enumerate(frame_iter):
+                bearing = theta.bearing_for_frame(i) if theta is not None else None
+                deramp = Deramp(frame, self._config, bearing=bearing,
+                               shadow_start=shadow_start, shadow_end=shadow_end)
+                frame.deramped_intensity = deramp.corrected_intensity
+                if diagnostics:
+                    deramp.plot_diagnostics()
+            return
+
+        # Parallel processing using threads (numpy/scipy release GIL)
+        def process_frame(args):
+            i, frame = args
+            bearing = theta.bearing_for_frame(i) if theta is not None else None
+            deramp = Deramp(frame, self._config, bearing=bearing,
+                           shadow_start=shadow_start, shadow_end=shadow_end)
+            return i, deramp.corrected_intensity
+
+        n_workers = min(os.cpu_count() or 4, n_frames)
+        results = [None] * n_frames
+
+        with ThreadPoolExecutor(max_workers=n_workers) as executor:
+            futures = {executor.submit(process_frame, (i, f)): i
+                      for i, f in enumerate(frames)}
+
+            with tqdm(total=n_frames, desc="Deramping", disable=not show_progress) as pbar:
+                for future in as_completed(futures):
+                    i, corrected = future.result()
+                    results[i] = corrected
+                    pbar.update(1)
+
+        # Assign results to frames
         for i, frame in enumerate(frames):
-            deramp = Deramp(frame, self._config)
-            # Store deramped intensity on frame for destreak to use
-            frame.deramped_intensity = deramp.corrected_intensity
-
-            logging.debug(f"Frame {i}: smooth profile range [{deramp.smooth_profile.min():.1f}, "
-                         f"{deramp.smooth_profile.max():.1f}]")
-
-            if diagnostics:
-                deramp.plot_diagnostics()
+            frame.deramped_intensity = results[i]
 
     def destreak_frames(self, frames: list[Frame],
-                        diagnostics: bool = False) -> list[np.ndarray]:
+                        diagnostics: bool = False,
+                        show_progress: bool = True,
+                        parallel: bool = True) -> list[np.ndarray]:
         """
         Remove radial streak artifacts from a list of frames.
 
@@ -132,53 +183,175 @@ class ProcessedFrames(Files):
         Args:
             frames: List of Frame objects to destreak
             diagnostics: If True, show diagnostic plots for each frame
+            show_progress: If True, show progress bar
+            parallel: If True, process frames in parallel using threads
 
         Returns:
             List of corrected intensity arrays (same order as input frames)
         """
-        corrected = []
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import os
 
+        n_frames = len(frames)
+
+        # Diagnostics require sequential processing
+        if diagnostics or not parallel or n_frames < 4:
+            corrected = []
+            frame_iter = tqdm(enumerate(frames), total=n_frames,
+                             desc="Destreaking", disable=not show_progress)
+            for i, center in frame_iter:
+                prev_frame = frames[i - 1] if i > 0 else None
+                next_frame = frames[i + 1] if i < n_frames - 1 else None
+                ds = Destreak(prev_frame, center, next_frame, self._config)
+                corrected.append(ds.corrected_intensity)
+                if diagnostics:
+                    ds.plot_diagnostics()
+            return corrected
+
+        # Parallel processing using threads (numpy/scipy release GIL)
+        def process_frame(args):
+            i, prev_frame, center, next_frame = args
+            ds = Destreak(prev_frame, center, next_frame, self._config)
+            return i, ds.corrected_intensity
+
+        # Prepare work items with prev/next frame references
+        work_items = []
         for i, center in enumerate(frames):
             prev_frame = frames[i - 1] if i > 0 else None
-            next_frame = frames[i + 1] if i < len(frames) - 1 else None
+            next_frame = frames[i + 1] if i < n_frames - 1 else None
+            work_items.append((i, prev_frame, center, next_frame))
 
-            ds = Destreak(prev_frame, center, next_frame, self._config)
-            corrected.append(ds.corrected_intensity)
+        n_workers = min(os.cpu_count() or 4, n_frames)
+        results = [None] * n_frames
 
-            n_streaks = ds.streak_mask.sum()
-            total_pixels = ds.streak_mask.size
-            logging.debug(f"Frame {i}: {n_streaks}/{total_pixels} streak pixels "
-                         f"({100*n_streaks/total_pixels:.2f}%)")
+        with ThreadPoolExecutor(max_workers=n_workers) as executor:
+            futures = {executor.submit(process_frame, item): item[0]
+                      for item in work_items}
 
-            if diagnostics:
-                ds.plot_diagnostics()
+            with tqdm(total=n_frames, desc="Destreaking", disable=not show_progress) as pbar:
+                for future in as_completed(futures):
+                    i, corrected = future.result()
+                    results[i] = corrected
+                    pbar.update(1)
 
-        return corrected
+        return results
 
-    def normalize_frames(self, corrected: list[np.ndarray]) -> list[np.ndarray]:
+    def normalize_frames(self, corrected: list[np.ndarray],
+                         low_percentile: float = 2.0,
+                         high_percentile: float = 98.0,
+                         parallel: bool = True,
+                         show_progress: bool = False) -> list[np.ndarray]:
         """
-        Normalize each frame's intensity to the [0, 1] interval.
+        Normalize frames using global statistics for consistent distribution.
 
-        Uses min-max normalization: (x - min) / (max - min)
+        Uses percentile-based normalization across all frames to ensure
+        the intensity distribution is approximately the same across frames.
+        Values below low_percentile map to 0, above high_percentile map to 1.
 
         Args:
             corrected: List of intensity arrays to normalize
+            low_percentile: Lower percentile for normalization (default: 2.0)
+            high_percentile: Upper percentile for normalization (default: 98.0)
+            parallel: If True, process frames in parallel using threads
+            show_progress: If True, show progress bar
 
         Returns:
             List of normalized intensity arrays in [0, 1]
         """
-        normalized = []
-        for intensity in corrected:
-            min_val = intensity.min()
-            max_val = intensity.max()
-            if max_val > min_val:
-                norm = (intensity - min_val) / (max_val - min_val)
-            else:
-                # Constant array - set to 0.5
-                norm = np.full_like(intensity, 0.5)
-            normalized.append(norm)
-            logging.debug(f"Normalized: [{min_val:.2f}, {max_val:.2f}] -> [0, 1]")
-        return normalized
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import os
+
+        if not corrected:
+            return []
+
+        n_frames = len(corrected)
+
+        # Compute global percentiles using sampling for efficiency
+        # Sample up to 1M values total across all frames
+        max_samples = 1_000_000
+        samples_per_frame = max(1000, max_samples // n_frames)
+
+        sampled_values = []
+        for frame in corrected:
+            flat = frame.ravel()
+            valid = flat[~np.isnan(flat)]
+            if len(valid) > samples_per_frame:
+                # Random sample without replacement
+                idx = np.random.choice(len(valid), samples_per_frame, replace=False)
+                sampled_values.append(valid[idx])
+            elif len(valid) > 0:
+                sampled_values.append(valid)
+
+        if not sampled_values:
+            return [np.full_like(frame, 0.5) for frame in corrected]
+
+        all_samples = np.concatenate(sampled_values)
+
+        # Use partition-based percentile for O(n) performance
+        low_val = self._fast_percentile(all_samples, low_percentile)
+        high_val = self._fast_percentile(all_samples, high_percentile)
+
+        logging.debug(f"Global normalization: p{low_percentile}={low_val:.2f}, "
+                     f"p{high_percentile}={high_val:.2f}")
+
+        if high_val <= low_val:
+            return [np.full_like(frame, 0.5) for frame in corrected]
+
+        # Normalize frames
+        scale = 1.0 / (high_val - low_val)
+
+        if not parallel or n_frames < 4:
+            # Sequential processing
+            normalized = []
+            frame_iter = tqdm(corrected, desc="Normalizing", disable=not show_progress)
+            for intensity in frame_iter:
+                norm = np.clip((intensity - low_val) * scale, 0.0, 1.0)
+                normalized.append(norm)
+            return normalized
+
+        # Parallel processing
+        def normalize_frame(args):
+            i, intensity = args
+            norm = np.clip((intensity - low_val) * scale, 0.0, 1.0)
+            return i, norm
+
+        n_workers = min(os.cpu_count() or 4, n_frames)
+        results = [None] * n_frames
+
+        with ThreadPoolExecutor(max_workers=n_workers) as executor:
+            futures = {executor.submit(normalize_frame, (i, f)): i
+                      for i, f in enumerate(corrected)}
+
+            with tqdm(total=n_frames, desc="Normalizing", disable=not show_progress) as pbar:
+                for future in as_completed(futures):
+                    i, norm = future.result()
+                    results[i] = norm
+                    pbar.update(1)
+
+        return results
+
+    @staticmethod
+    def _fast_percentile(data: np.ndarray, percentile: float) -> float:
+        """
+        Compute percentile using partition for O(n) performance.
+
+        Args:
+            data: 1D array of values
+            percentile: Percentile value (0-100)
+
+        Returns:
+            Percentile value
+        """
+        n = len(data)
+        if n == 0:
+            return 0.0
+
+        k = int((percentile / 100.0) * (n - 1))
+        k = max(0, min(k, n - 1))
+
+        # Partition to get k-th smallest element
+        partitioned = np.partition(data, k)
+        return partitioned[k]
 
     def process_group(self,
                       frames: list[Frame],
@@ -187,6 +360,9 @@ class ProcessedFrames(Files):
                       destreak_diagnostics: bool = False) -> list[np.ndarray]:
         """
         Process a single group of frames: refine theta, deramp, destreak, normalize.
+
+        The shadow edges detected during theta refinement are propagated to the
+        deramp phase for accurate shadow region masking.
 
         Args:
             frames: List of Frame objects to process
@@ -199,11 +375,22 @@ class ProcessedFrames(Files):
         """
         frames = list(frames)  # Materialize generator if needed
 
-        # Refine theta for this group
-        self.refine_theta(frames, shadow_diagnostics=shadow_diagnostics)
+        # Refine theta for this group - returns Theta with detected shadow edges
+        theta = self.refine_theta(frames, shadow_diagnostics=shadow_diagnostics)
 
-        # Deramp frames first (remove range-dependent intensity fall-off)
-        self.deramp_frames(frames, diagnostics=deramp_diagnostics)
+        # Extract detected shadow edges from theta (if available)
+        shadow_start = theta.shadow_left_mean
+        shadow_end = theta.shadow_right_mean
+
+        if shadow_start is not None and shadow_end is not None:
+            logging.info(f"Using detected shadow region: {shadow_start:.1f}° - {shadow_end:.1f}°")
+        else:
+            logging.info("Using config-based shadow region (detection failed)")
+
+        # Deramp frames using detected shadow edges and bearing arrays
+        self.deramp_frames(frames, diagnostics=deramp_diagnostics,
+                          shadow_start=shadow_start, shadow_end=shadow_end,
+                          theta=theta)
 
         # Destreak frames (uses deramped_intensity if available)
         corrected = self.destreak_frames(frames, diagnostics=destreak_diagnostics)
@@ -247,7 +434,7 @@ class ProcessedFrames(Files):
         if shadow_diagnostics or deramp_diagnostics or destreak_diagnostics:
             for period, frames in self.itergroups():
                 frames = list(frames)
-                print(f"Processing {period}: {len(frames)} frames")
+                logging.info(f"Processing {period}: {len(frames)} frames")
                 corrected = self.process_group(frames,
                                                shadow_diagnostics=shadow_diagnostics,
                                                deramp_diagnostics=deramp_diagnostics,
@@ -267,7 +454,7 @@ class ProcessedFrames(Files):
 
         if use_parallel:
             # Parallel processing using threads
-            print(f"Processing {len(groups)} groups with {n_workers} workers...")
+            logging.info(f"Processing {len(groups)} groups with {n_workers} workers...")
 
             def process_one(period_frames):
                 period, frames = period_frames
@@ -282,13 +469,13 @@ class ProcessedFrames(Files):
                     try:
                         _, corrected = future.result()
                         results[period] = corrected
-                        print(f"  Completed {period}")
+                        logging.debug(f"  Completed {period}")
                     except Exception as e:
                         logging.error(f"Error processing {period}: {e}")
         else:
             # Sequential processing
             for period, frames in groups:
-                print(f"Processing {period}: {len(frames)} frames")
+                logging.info(f"Processing {period}: {len(frames)} frames")
                 corrected = self.process_group(frames)
                 results[period] = corrected
 
@@ -347,7 +534,7 @@ class ProcessedViewer(BaseViewer):
         # Use corrected_intensity if available, otherwise use original intensity
         if vmin is None or vmax is None:
             all_intensities = np.concatenate([
-                getattr(f, 'corrected_intensity', f.intensity).ravel()
+                (f.corrected_intensity if f.corrected_intensity is not None else f.intensity).ravel()
                 for f in frames
             ])
             q_vmin, q_vmax = quantile_limits(all_intensities)
@@ -415,7 +602,7 @@ class ProcessedViewer(BaseViewer):
         frame = self._frames[self._current_idx]
 
         # Use corrected_intensity if available, otherwise original intensity
-        data = getattr(frame, 'corrected_intensity', frame.intensity)
+        data = frame.corrected_intensity if frame.corrected_intensity is not None else frame.intensity
 
         # Clear previous plot and remove old insets
         self._ax.clear()
@@ -603,6 +790,33 @@ class ProcessedViewer(BaseViewer):
 # Main
 # -----------------------------------------------------------------------------
 
+def _add_arguments(parser) -> None:
+    """Add command arguments to parser."""
+    from wamos_tpw.filenames import add_common_arguments
+    add_common_arguments(parser)
+    parser.add_argument("--groupby", "-g", type=str, default='h',
+                        help="Groupby frequency (default: h)")
+    parser.add_argument("--workers", "-w", type=int, default=None,
+                        help="Number of workers")
+    parser.add_argument("--config", "-c", type=str, default=None,
+                        help="YAML configuration file")
+    parser.add_argument("--radar-height", type=float, default=None,
+                        help="Radar height above water (m)")
+    parser.add_argument("--plot", action="store_true",
+                        help="Launch interactive viewer")
+    parser.add_argument("--view", type=str, default='polar',
+                        choices=['polar', 'ship', 'earth'],
+                        help="Initial view type (default: polar)")
+    parser.add_argument("--cmap", type=str, default='viridis',
+                        help="Colormap (default: viridis)")
+    parser.add_argument("--shadow-diagnostics", action="store_true",
+                        help="Show shadow detection diagnostic plots")
+    parser.add_argument("--destreak-diagnostics", action="store_true",
+                        help="Show destreak diagnostic plots")
+    parser.add_argument("--deramp-diagnostics", action="store_true",
+                        help="Show deramp (range correction) diagnostic plots")
+
+
 def add_subparser(subparsers) -> None:
     """Register the 'process' subcommand."""
     p = subparsers.add_parser(
@@ -610,32 +824,7 @@ def add_subparser(subparsers) -> None:
         help='Process frames (destreak, deramp) with viewer',
         description="Load and process WAMOS polar frames"
     )
-    p.add_argument("stime", type=str, help="Start time")
-    p.add_argument("etime", type=str, help="End time")
-    p.add_argument("polar_path", type=str, help="Path to polar files")
-    p.add_argument("--groupby", "-g", type=str, default='h',
-                   help="Groupby frequency (default: h)")
-    p.add_argument("--workers", "-w", type=int, default=None,
-                   help="Number of workers")
-    p.add_argument("--config", "-c", type=str, default=None,
-                   help="YAML configuration file")
-    p.add_argument("--radar-height", type=float, default=None,
-                   help="Radar height above water (m)")
-    p.add_argument("--verbose", "-v", action="store_true",
-                   help="Verbose output")
-    p.add_argument("--plot", action="store_true",
-                   help="Launch interactive viewer")
-    p.add_argument("--view", type=str, default='polar',
-                   choices=['polar', 'ship', 'earth'],
-                   help="Initial view type (default: polar)")
-    p.add_argument("--cmap", type=str, default='viridis',
-                   help="Colormap (default: viridis)")
-    p.add_argument("--shadow-diagnostics", action="store_true",
-                   help="Show shadow detection diagnostic plots")
-    p.add_argument("--destreak-diagnostics", action="store_true",
-                   help="Show destreak diagnostic plots")
-    p.add_argument("--deramp-diagnostics", action="store_true",
-                   help="Show deramp (range correction) diagnostic plots")
+    _add_arguments(p)
     p.set_defaults(func=run)
 
 
@@ -663,14 +852,14 @@ def run(args) -> None:
         radar_height=args.radar_height,
     ) as pframes:
         t1 = time.time()
-        print(f"Discovered {len(pframes)} files in {t1-t0:.3f}s")
-        print(pframes)
+        logging.info(f"Discovered {len(pframes)} files in {t1-t0:.3f}s")
+        logging.debug(f"{pframes}")
 
         if args.plot:
             # Process and plot group by group
             for period, frames in pframes.itergroups():
                 frames = list(frames)
-                print(f"\n{period}: {len(frames)} frames")
+                logging.info(f"{period}: {len(frames)} frames")
 
                 # Process the group and store corrected intensities on frames
                 corrected = pframes.process_group(frames,
@@ -681,7 +870,7 @@ def run(args) -> None:
                     frame.corrected_intensity = corr_intensity
 
                 # Show viewer for this group
-                print(f"Plotting {len(frames)} frames...")
+                logging.info(f"Plotting {len(frames)} frames...")
                 viewer = ProcessedViewer(
                     frames,
                     cmap=args.cmap,
@@ -689,9 +878,9 @@ def run(args) -> None:
                     config=config,
                     view=args.view
                 )
-                print("Navigation: ← → keys, Prev/Next buttons, Space=Play/Stop")
-                print("Views: 1=Polar, 2=Ship, 3=Earth (or click buttons)")
-                print("Close window to continue to next group...")
+                logging.info("Navigation: <- -> keys, Prev/Next buttons, Space=Play/Stop")
+                logging.info("Views: 1=Polar, 2=Ship, 3=Earth (or click buttons)")
+                logging.info("Close window to continue to next group...")
                 viewer.show()
         else:
             # Process all groups
@@ -703,35 +892,13 @@ def run(args) -> None:
 def main() -> None:
     """Standalone CLI entry point."""
     from argparse import ArgumentParser
+    from wamos_tpw.logging_config import add_logging_arguments, setup_logging
 
     parser = ArgumentParser(description="Load and process WAMOS polar frames")
-    parser.add_argument("stime", type=str, help="Start time")
-    parser.add_argument("etime", type=str, help="End time")
-    parser.add_argument("polar_path", type=str, help="Path to polar files")
-    parser.add_argument("--groupby", "-g", type=str, default='h',
-                        help="Groupby frequency (default: h)")
-    parser.add_argument("--workers", "-w", type=int, default=None,
-                        help="Number of workers")
-    parser.add_argument("--config", "-c", type=str, default=None,
-                        help="YAML configuration file")
-    parser.add_argument("--radar-height", type=float, default=None,
-                        help="Radar height above water (m)")
-    parser.add_argument("--verbose", "-v", action="store_true",
-                        help="Verbose output")
-    parser.add_argument("--plot", action="store_true",
-                        help="Launch interactive viewer")
-    parser.add_argument("--view", type=str, default='polar',
-                        choices=['polar', 'ship', 'earth'],
-                        help="Initial view type (default: polar)")
-    parser.add_argument("--cmap", type=str, default='viridis',
-                        help="Colormap (default: viridis)")
-    parser.add_argument("--shadow-diagnostics", action="store_true",
-                        help="Show shadow detection diagnostic plots")
-    parser.add_argument("--destreak-diagnostics", action="store_true",
-                        help="Show destreak diagnostic plots")
-    parser.add_argument("--deramp-diagnostics", action="store_true",
-                        help="Show deramp (range correction) diagnostic plots")
+    add_logging_arguments(parser)
+    _add_arguments(parser)
     args = parser.parse_args()
+    setup_logging(args)
     run(args)
 
 

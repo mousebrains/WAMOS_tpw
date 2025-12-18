@@ -64,3 +64,6 @@ Thumbs.db
 
 # Debug artifacts
 debug_*.png
+
+# Data directories
+POLAR/

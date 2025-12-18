@@ -143,11 +143,12 @@ class Destreak:
         # Get intensity as float for calculations
         # Use deramped_intensity if available, otherwise use intensity
         # Frame shape: (n_bearings, n_distances)
+        # Use float32 - sufficient for 12-bit intensity data, saves 50% memory
         deramped = getattr(self._center, 'deramped_intensity', None)
         if deramped is not None:
-            center_data = deramped.astype(np.float64)
+            center_data = deramped.astype(np.float32)
         else:
-            center_data = self._center.intensity.astype(np.float64)
+            center_data = self._center.intensity.astype(np.float32)
         n_bearings, n_distances = center_data.shape
 
         # Build extended frame with neighbor data for edge detection
@@ -158,17 +159,27 @@ class Destreak:
 
         if has_prev:
             # Prepend last theta row from previous frame
-            prev_intensity = getattr(self._prev, 'deramped_intensity',
-                                     self._prev.intensity)
-            prev_last = prev_intensity[-1:, :].astype(np.float64)
-            frame = np.vstack([prev_last, frame])
+            prev_intensity = getattr(self._prev, 'deramped_intensity', None)
+            if prev_intensity is None:
+                prev_intensity = self._prev.intensity
+            if prev_intensity is not None:
+                prev_last = prev_intensity[-1:, :].astype(np.float32)
+                frame = np.vstack([prev_last, frame])
+            else:
+                # No valid intensity data, treat as no prev frame
+                has_prev = False
 
         if has_next:
             # Append first theta row from next frame
-            next_intensity = getattr(self._next, 'deramped_intensity',
-                                     self._next.intensity)
-            next_first = next_intensity[:1, :].astype(np.float64)
-            frame = np.vstack([frame, next_first])
+            next_intensity = getattr(self._next, 'deramped_intensity', None)
+            if next_intensity is None:
+                next_intensity = self._next.intensity
+            if next_intensity is not None:
+                next_first = next_intensity[:1, :].astype(np.float32)
+                frame = np.vstack([frame, next_first])
+            else:
+                # No valid intensity data, treat as no next frame
+                has_next = False
 
         # Calculate derivative along bearing direction
         # Matlab: a = diff(frame, 1, 2)  -> diff along theta (dim 2)
@@ -194,9 +205,8 @@ class Destreak:
 
         # Filter out radials that don't have at least min_streak_length contiguous flagged bins
         # A real streak should have a continuous run of detections, not scattered pixels
-        for i in range(q.shape[0]):
-            if not self._has_contiguous_run(q[i, :], self._min_streak_length):
-                q[i, :] = False  # Unflag radials without sufficient contiguous detections
+        # Use vectorized filtering for better performance
+        q = self._filter_streaks_vectorized(q, self._min_streak_length)
 
         # Store derivative for diagnostics
         self._derivative = a
@@ -220,14 +230,13 @@ class Destreak:
         assert q.shape == (n_bearings, n_distances), \
             f"Mask shape {q.shape} doesn't match frame shape {(n_bearings, n_distances)}"
 
-        # Copy center frame and mark streak pixels as NaN
-        b = center_data.copy()
-        b[q] = np.nan
+        # Mark streak pixels as NaN (modify center_data in-place since it's not needed after)
+        center_data[q] = np.nan
 
         # Fill missing values with moving mean along bearing direction
         # Matlab: c = fillmissing(b, "movmean", 3, 2) - along theta (dim 2)
         # Python: along axis 0 (bearings)
-        c = self._fill_missing_movmean(b, window=self._FILL_WINDOW, axis=0)
+        c = self._fill_missing_movmean(center_data, window=self._FILL_WINDOW, axis=0)
 
         self._corrected = c
         self._streak_mask = q
@@ -240,6 +249,8 @@ class Destreak:
         which represents the "normal" variation without being skewed by streak outliers
         in the upper tail. The threshold is set to N sigma above zero.
 
+        Uses np.partition for O(n) median computation instead of O(n log n) sorting.
+
         Args:
             derivative: 2D array of derivative values (after max(a, 0))
 
@@ -250,15 +261,24 @@ class Destreak:
         deriv_flat = derivative.ravel()
         deriv_pos = deriv_flat[deriv_flat > 0]
 
-        if len(deriv_pos) == 0:
+        n = len(deriv_pos)
+        if n == 0:
             self._threshold = 0.0
             self._one_sided_std = 0.0
             return 0.0
 
-        # Calculate one-sided standard deviation using values below the median
-        # This gives the "normal" spread without streak outlier contamination
-        median = np.median(deriv_pos)
-        lower_half = deriv_pos[deriv_pos <= median]
+        # Fast median using partition - O(n) instead of O(n log n)
+        mid = n // 2
+        partitioned = np.partition(deriv_pos, mid)
+        if n % 2 == 0:
+            median = (partitioned[mid - 1] + partitioned[mid]) / 2.0
+        else:
+            median = partitioned[mid]
+
+        # Get lower half using the already partitioned array
+        # Elements before mid are all <= median (approximately)
+        lower_half = partitioned[:mid + 1]
+        lower_half = lower_half[lower_half <= median]
 
         if len(lower_half) > 1:
             # One-sided std: sqrt(mean of squared deviations from median, for lower half)
@@ -303,6 +323,45 @@ class Destreak:
         return np.any(run_lengths >= min_length)
 
     @staticmethod
+    def _filter_streaks_vectorized(mask: np.ndarray, min_length: int) -> np.ndarray:
+        """
+        Filter streak mask to keep only rows with contiguous runs >= min_length.
+
+        Fully vectorized version using morphological erosion - no Python loops.
+
+        The key insight: if we erode the mask horizontally with a structuring
+        element of size min_length, any row that had a run >= min_length will
+        still have at least one True value after erosion.
+
+        Args:
+            mask: 2D boolean array (n_bearings, n_distances)
+            min_length: Minimum contiguous run length required
+
+        Returns:
+            Filtered mask with rows not meeting criteria set to False
+        """
+        from scipy.ndimage import binary_erosion
+
+        if min_length <= 1:
+            return mask.copy()
+
+        # Create horizontal structuring element of size min_length
+        # Shape (1, min_length) so erosion is only along axis 1 (distance)
+        struct = np.ones((1, min_length), dtype=bool)
+
+        # Erode the mask - a pixel survives only if all min_length neighbors are True
+        eroded = binary_erosion(mask, structure=struct, border_value=False)
+
+        # Rows that have ANY True value after erosion had a run >= min_length
+        rows_with_valid_runs = eroded.any(axis=1)
+
+        # Create output: keep original mask only for rows with valid runs
+        result = mask.copy()
+        result[~rows_with_valid_runs, :] = False
+
+        return result
+
+    @staticmethod
     def _fill_missing_movmean(data: np.ndarray,
                                window: int = 3,
                                axis: int = 0) -> np.ndarray:
@@ -312,6 +371,8 @@ class Destreak:
         For each NaN value, computes the mean of non-NaN values within
         the window centered on that position.
 
+        Uses vectorized operations for performance - O(n) instead of O(n*k).
+
         Args:
             data: Input array with NaN values to fill
             window: Size of the moving average window (should be odd)
@@ -320,55 +381,57 @@ class Destreak:
         Returns:
             Array with NaN values filled
         """
-        result = data.copy()
-        half_window = window // 2
+        from scipy.ndimage import uniform_filter1d
 
-        # Get indices of NaN values
         nan_mask = np.isnan(data)
 
         if not nan_mask.any():
-            return result
+            return data.copy()
 
-        # Get coordinates of NaN values
-        nan_coords = np.argwhere(nan_mask)
+        # Vectorized NaN-aware moving mean:
+        # 1. Replace NaN with 0 for sum computation
+        # 2. Create valid mask (1 where not NaN)
+        # 3. Compute sum and count using uniform_filter
+        # 4. Divide to get mean
 
-        for coord in nan_coords:
-            # Build slice for the window along the specified axis
-            slices = [slice(None)] * data.ndim
+        data_zero = np.where(nan_mask, 0.0, data)
+        valid_mask = (~nan_mask).astype(np.float32)
 
-            # Window bounds along the fill axis
-            idx = coord[axis]
-            start = max(0, idx - half_window)
-            end = min(data.shape[axis], idx + half_window + 1)
-            slices[axis] = slice(start, end)
+        # uniform_filter1d computes sum/window, so multiply by window to get sum
+        # Using mode='nearest' to handle boundaries
+        window_sum = uniform_filter1d(data_zero, size=window, axis=axis, mode='nearest') * window
+        window_count = uniform_filter1d(valid_mask, size=window, axis=axis, mode='nearest') * window
 
-            # For other axes, use the specific coordinate
-            for i, c in enumerate(coord):
-                if i != axis:
-                    slices[i] = c
+        # Compute mean where we have valid neighbors
+        # Avoid division by zero
+        with np.errstate(divide='ignore', invalid='ignore'):
+            fill_values = window_sum / window_count
 
-            # Get window values and compute mean of non-NaN values
-            window_vals = data[tuple(slices)]
-            valid_vals = window_vals[~np.isnan(window_vals)]
+        # Only fill NaN positions
+        result = data.copy()
+        result[nan_mask] = fill_values[nan_mask]
 
-            if len(valid_vals) > 0:
-                result[tuple(coord)] = np.mean(valid_vals)
-            # If all values in window are NaN, leave as NaN (will be handled by edge cases)
-
-        # Handle any remaining NaN values (edge cases) with nearest valid value
+        # Handle any remaining NaN (all neighbors were NaN - rare edge case)
         remaining_nans = np.isnan(result)
         if remaining_nans.any():
-            # Simple fill with axis-wise interpolation
-            from scipy.ndimage import generic_filter
+            # Use larger window or nearest valid value
+            # Try progressively larger windows
+            for larger_window in [window * 2, window * 4, data.shape[axis]]:
+                if not remaining_nans.any():
+                    break
+                window_sum = uniform_filter1d(data_zero, size=min(larger_window, data.shape[axis]),
+                                              axis=axis, mode='nearest') * larger_window
+                window_count = uniform_filter1d(valid_mask, size=min(larger_window, data.shape[axis]),
+                                                axis=axis, mode='nearest') * larger_window
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    fill_values = window_sum / window_count
+                result[remaining_nans] = fill_values[remaining_nans]
+                remaining_nans = np.isnan(result)
 
-            def nanmean_filter(x):
-                valid = x[~np.isnan(x)]
-                return np.mean(valid) if len(valid) > 0 else np.nan
-
-            # This is slower but handles edge cases
-            filled = generic_filter(result, nanmean_filter, size=window,
-                                    mode='nearest')
-            result[remaining_nans] = filled[remaining_nans]
+            # Last resort: fill with global mean
+            if remaining_nans.any():
+                global_mean = np.nanmean(data)
+                result[remaining_nans] = global_mean if not np.isnan(global_mean) else 0.0
 
         return result
 
@@ -395,8 +458,11 @@ class Destreak:
 
         # Ensure computation is done
         # Use deramped_intensity if available, otherwise use intensity
-        original = getattr(self._center, 'deramped_intensity',
-                           self._center.intensity).astype(np.float64)
+        deramped = getattr(self._center, 'deramped_intensity', None)
+        if deramped is not None:
+            original = deramped.astype(np.float32)
+        else:
+            original = self._center.intensity.astype(np.float32)
         corrected = self.corrected_intensity
         mask = self.streak_mask
         derivative = self._derivative
@@ -536,6 +602,23 @@ def destreak_frame(prev_frame: Frame | None,
     return ds.corrected_intensity
 
 
+def _add_arguments(parser) -> None:
+    """Add command arguments to parser."""
+    parser.add_argument("polar_files", nargs="+", help="Polar files to process")
+    parser.add_argument("--config", "-c", type=str, default=None,
+                        help="YAML configuration file")
+    parser.add_argument("--plot", "-p", action="store_true",
+                        help="Show diagnostic plots for each frame")
+    parser.add_argument("--cmap", type=str, default="viridis",
+                        help="Colormap for plots (default: viridis)")
+    parser.add_argument("--deramp", "-d", action="store_true",
+                        help="Apply deramping before destreaking")
+    parser.add_argument("--quantile", "-q", type=float, default=0.10,
+                        help="Deramp quantile (0.0-1.0, default: 0.10)")
+    parser.add_argument("--smooth-window", "-s", type=int, default=None,
+                        help="Deramp smoothing window in bins (default: 2%% of range bins)")
+
+
 def add_subparser(subparsers) -> None:
     """Register the 'destreak' subcommand."""
     p = subparsers.add_parser(
@@ -543,21 +626,7 @@ def add_subparser(subparsers) -> None:
         help='Standalone destreak tool',
         description="Test destreak algorithm"
     )
-    p.add_argument("polar_files", nargs="+", help="Polar files to process")
-    p.add_argument("--config", "-c", type=str, default=None,
-                   help="YAML configuration file")
-    p.add_argument("--plot", "-p", action="store_true",
-                   help="Show diagnostic plots for each frame")
-    p.add_argument("--cmap", type=str, default="viridis",
-                   help="Colormap for plots (default: viridis)")
-    p.add_argument("--verbose", "-v", action="store_true",
-                   help="Verbose output")
-    p.add_argument("--deramp", "-d", action="store_true",
-                   help="Apply deramping before destreaking")
-    p.add_argument("--quantile", "-q", type=float, default=0.10,
-                   help="Deramp quantile (0.0-1.0, default: 0.10)")
-    p.add_argument("--smooth-window", "-s", type=int, default=None,
-                   help="Deramp smoothing window in bins (default: 2%% of range bins)")
+    _add_arguments(p)
     p.set_defaults(func=run)
 
 
@@ -579,18 +648,18 @@ def run(args) -> None:
         frame = load_polar_file(filepath)
         if frame is not None:
             frames.append(frame)
-            print(f"Loaded: {filepath} -> {frame.timestamp}")
+            logging.debug(f"Loaded: {filepath} -> {frame.timestamp}")
 
     if len(frames) < 1:
-        print("No frames loaded")
+        logging.warning("No frames loaded")
         return
 
-    print(f"\nLoaded {len(frames)} frames")
+    logging.info(f"Loaded {len(frames)} frames")
 
     # Apply deramping if requested
     if args.deramp:
         from wamos_tpw.deramp import Deramp
-        print(f"\nApplying deramp (quantile={args.quantile*100:.0f}%, smooth_window={args.smooth_window or 'auto'})")
+        logging.info(f"Applying deramp (quantile={args.quantile*100:.0f}%, smooth_window={args.smooth_window or 'auto'})")
         for frame in frames:
             deramp = Deramp(frame, config, quantile=args.quantile, smooth_window=args.smooth_window)
             frame.deramped_intensity = deramp.corrected_intensity
@@ -601,15 +670,15 @@ def run(args) -> None:
         next_frame = frames[i + 1] if i < len(frames) - 1 else None
 
         ds = Destreak(prev_frame, center, next_frame, config)
-        print(f"\nFrame {i}: {ds}")
-        print(f"  Original intensity range: [{center.intensity.min():.1f}, {center.intensity.max():.1f}]")
+        logging.info(f"Frame {i}: {ds}")
+        logging.info(f"  Original intensity range: [{center.intensity.min():.1f}, {center.intensity.max():.1f}]")
 
         corrected = ds.corrected_intensity
-        print(f"  Corrected intensity range: [{corrected.min():.1f}, {corrected.max():.1f}]")
+        logging.info(f"  Corrected intensity range: [{corrected.min():.1f}, {corrected.max():.1f}]")
 
         n_streaks = ds.streak_mask.sum()
         total_pixels = ds.streak_mask.size
-        print(f"  Streaks detected: {n_streaks} / {total_pixels} ({100*n_streaks/total_pixels:.2f}%)")
+        logging.info(f"  Streaks detected: {n_streaks} / {total_pixels} ({100*n_streaks/total_pixels:.2f}%)")
 
         if args.plot:
             ds.plot_diagnostics(cmap=args.cmap)
@@ -618,24 +687,13 @@ def run(args) -> None:
 def main() -> None:
     """Standalone CLI entry point."""
     from argparse import ArgumentParser
+    from wamos_tpw.logging_config import add_logging_arguments, setup_logging
 
     parser = ArgumentParser(description="Test destreak algorithm")
-    parser.add_argument("polar_files", nargs="+", help="Polar files to process")
-    parser.add_argument("--config", "-c", type=str, default=None,
-                        help="YAML configuration file")
-    parser.add_argument("--plot", "-p", action="store_true",
-                        help="Show diagnostic plots for each frame")
-    parser.add_argument("--cmap", type=str, default="viridis",
-                        help="Colormap for plots (default: viridis)")
-    parser.add_argument("--verbose", "-v", action="store_true",
-                        help="Verbose output")
-    parser.add_argument("--deramp", "-d", action="store_true",
-                        help="Apply deramping before destreaking")
-    parser.add_argument("--quantile", "-q", type=float, default=0.10,
-                        help="Deramp quantile (0.0-1.0, default: 0.10)")
-    parser.add_argument("--smooth-window", "-s", type=int, default=None,
-                        help="Deramp smoothing window in bins (default: 2%% of range bins)")
+    add_logging_arguments(parser)
+    _add_arguments(parser)
     args = parser.parse_args()
+    setup_logging(args)
     run(args)
 
 

@@ -5,6 +5,7 @@
 # Dec-2025, Pat Welch, pat@mousebrains.com
 
 from __future__ import annotations
+import logging
 import numpy as np
 import os
 import re
@@ -428,6 +429,11 @@ def _parse_timestamp(ts: str) -> np.datetime64:
             YYYYMMDDHHmmssSSS       -> YYYY-MM-DDTHH:mm:ss.SSS (milliseconds)
             YYYYMMDDHHmmssSSSSSS    -> YYYY-MM-DDTHH:mm:ss.SSSSSS (microseconds)
 
+        Compact with T separator:
+            YYYYMMDDTHH             -> YYYY-MM-DDTHH:00:00
+            YYYYMMDDTHHmm           -> YYYY-MM-DDTHH:mm:00
+            YYYYMMDDTHHmmss         -> YYYY-MM-DDTHH:mm:ss
+
         ISO formats (with separators):
             YYYY-MM-DD
             YYYY-MM-DDTHH
@@ -447,7 +453,7 @@ def _parse_timestamp(ts: str) -> np.datetime64:
     """
     ts = ts.strip()
 
-    # Check if it's already in ISO format (contains separators)
+    # Check if it's already in ISO format (contains dashes)
     if '-' in ts:
         # Normalize space separator to T
         ts = ts.replace(' ', 'T')
@@ -456,7 +462,20 @@ def _parse_timestamp(ts: str) -> np.datetime64:
         except ValueError:
             raise ValueError(f"Invalid ISO timestamp format: {ts}")
 
-    # Handle compact formats (digits only, possibly with trailing fractional part)
+    # Handle compact format with T separator (e.g., 20220405T1400)
+    if 'T' in ts:
+        parts = ts.split('T')
+        if len(parts) == 2:
+            date_part, time_part = parts
+            if date_part.isdigit() and time_part.isdigit():
+                # Combine and parse as compact format
+                ts = date_part + time_part
+            else:
+                raise ValueError(f"Invalid compact timestamp with T separator: {ts}")
+        else:
+            raise ValueError(f"Invalid timestamp format: {ts}")
+
+    # Handle compact formats (digits only)
     if not ts.isdigit():
         raise ValueError(f"Compact timestamp must be all digits, got: {ts}")
 
@@ -493,6 +512,94 @@ def _parse_timestamp(ts: str) -> np.datetime64:
         raise ValueError(f"Invalid timestamp values in '{ts}': {e}")
 
 
+def _timestamp_type(ts: str) -> np.datetime64:
+    """
+    Argparse type function for timestamp validation.
+
+    Validates and converts timestamp strings to np.datetime64.
+    Used as the 'type' argument in argparse.add_argument().
+
+    Args:
+        ts: Timestamp string
+
+    Returns:
+        np.datetime64
+
+    Raises:
+        argparse.ArgumentTypeError: If timestamp format is invalid
+    """
+    from argparse import ArgumentTypeError
+    try:
+        return _parse_timestamp(ts)
+    except ValueError as e:
+        raise ArgumentTypeError(str(e))
+
+
+def _directory_type(path: str) -> Path:
+    """
+    Argparse type function for directory validation.
+
+    Validates that the path exists and is a directory.
+
+    Args:
+        path: Path string
+
+    Returns:
+        Path object
+
+    Raises:
+        argparse.ArgumentTypeError: If path doesn't exist or isn't a directory
+    """
+    from argparse import ArgumentTypeError
+    p = Path(path)
+    if not p.exists():
+        raise ArgumentTypeError(f"Directory does not exist: {path}")
+    if not p.is_dir():
+        raise ArgumentTypeError(f"Path is not a directory: {path}")
+    return p
+
+
+def add_common_arguments(parser) -> None:
+    """
+    Add stime, etime, and polar_path arguments to an argument parser.
+
+    Adds standardized positional arguments with type validation:
+    - stime: Start time (validated and converted to np.datetime64)
+    - etime: End time (validated and converted to np.datetime64)
+    - polar_path: Directory path (validated to exist and be a directory)
+
+    Supported timestamp formats:
+        Compact: YYYYMMDD, YYYYMMDDHHmm, YYYYMMDDHHmmss
+        Compact with T: YYYYMMDDTHHmm, YYYYMMDDTHHmmss
+        ISO: YYYY-MM-DD, YYYY-MM-DDTHH:mm, YYYY-MM-DDTHH:mm:ss
+
+    Args:
+        parser: argparse.ArgumentParser or subparser to add arguments to
+    """
+    parser.add_argument(
+        "stime",
+        type=_timestamp_type,
+        help="Start time (YYYYMMDD, YYYYMMDDTHHmm, or ISO format)"
+    )
+    parser.add_argument(
+        "etime",
+        type=_timestamp_type,
+        help="End time (YYYYMMDD, YYYYMMDDTHHmm, or ISO format)"
+    )
+    parser.add_argument(
+        "polar_path",
+        type=_directory_type,
+        help="Path to directory containing polar files"
+    )
+
+
+def _add_arguments(parser) -> None:
+    """Add command arguments to parser."""
+    add_common_arguments(parser)
+    parser.add_argument("--workers", "-w", type=int, default=None,
+                        help="Number of worker processes (default: CPU count)")
+
+
 def add_subparser(subparsers) -> None:
     """Register the 'list' subcommand."""
     p = subparsers.add_parser(
@@ -503,11 +610,7 @@ def add_subparser(subparsers) -> None:
                "YYYYMMDDHHmmss, YYYYMMDDHHmmssSSS (ms), YYYYMMDDHHmmssSSSSSS (us), "
                "or ISO format (YYYY-MM-DD, YYYY-MM-DDTHH:mm:ss, etc.)"
     )
-    p.add_argument("stime", type=str, help="Start time (see formats below)")
-    p.add_argument("etime", type=str, help="End time (see formats below)")
-    p.add_argument("polar_path", type=str, help="Path to the directory containing polar files")
-    p.add_argument("--workers", "-w", type=int, default=None,
-                   help="Number of worker processes (default: CPU count)")
+    _add_arguments(p)
     p.set_defaults(func=run)
 
 
@@ -517,8 +620,8 @@ def run(args) -> None:
 
     t0 = time.time()
     filenames = Filenames(
-        _parse_timestamp(args.stime),
-        _parse_timestamp(args.etime),
+        args.stime,
+        args.etime,
         args.polar_path,
         workers=args.workers
     )
@@ -526,13 +629,13 @@ def run(args) -> None:
     _ = filenames.files
     t1 = time.time()
 
-    print(f"Found {len(filenames)} files in {t1-t0:.3f}s")
+    logging.info(f"Found {len(filenames)} files in {t1-t0:.3f}s")
 
 
 def main() -> None:
     """Standalone CLI entry point."""
     from argparse import ArgumentParser
-    import time
+    from wamos_tpw.logging_config import add_logging_arguments, setup_logging
 
     parser = ArgumentParser(
         description="Extract WAMOS polar data files between two timestamps.",
@@ -540,25 +643,11 @@ def main() -> None:
                "YYYYMMDDHHmmss, YYYYMMDDHHmmssSSS (ms), YYYYMMDDHHmmssSSSSSS (us), "
                "or ISO format (YYYY-MM-DD, YYYY-MM-DDTHH:mm:ss, etc.)"
     )
-    parser.add_argument("stime", type=str, help="Start time (see formats below)")
-    parser.add_argument("etime", type=str, help="End time (see formats below)")
-    parser.add_argument("polar_path", type=str, help="Path to the directory containing polar files")
-    parser.add_argument("--workers", "-w", type=int, default=None,
-                        help="Number of worker processes (default: CPU count)")
+    add_logging_arguments(parser)
+    _add_arguments(parser)
     args = parser.parse_args()
-
-    t0 = time.time()
-    filenames = Filenames(
-        _parse_timestamp(args.stime),
-        _parse_timestamp(args.etime),
-        args.polar_path,
-        workers=args.workers
-    )
-    # Access .files to trigger the search
-    _ = filenames.files
-    t1 = time.time()
-
-    print(f"Found {len(filenames)} files in {t1-t0:.3f}s")
+    setup_logging(args)
+    run(args)
 
 
 if __name__ == "__main__":

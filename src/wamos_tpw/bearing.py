@@ -28,9 +28,38 @@ class Theta:
     Uses bit 13 encoding in the first distance bin to determine degree transitions,
     then optionally refines the estimate using the shadow region alignment.
 
-    The bearing is encoded in bit 13 of the first distance bin:
+    Algorithm Overview
+    ------------------
+
+    **Step 1: Bearing Extraction from Bit 13**
+
+    The WAMOS radar encodes bearing information in bit 13 of the first distance bin:
     - Bit 13 = 0: radial is within an even degree (e.g., 44.0° to 45.0°)
     - Bit 13 = 1: radial is within an odd degree (e.g., 45.0° to 46.0°)
+
+    The algorithm detects transitions in bit 13 to identify degree boundaries, then
+    interpolates bearing values within each segment. Missing transitions (due to
+    noise or dropouts) are detected by comparing segment sizes to the median and
+    synthetically inserted.
+
+    **Step 2: Shadow Refinement (Optional)**
+
+    The ship's superstructure creates a radar shadow typically centered at 180°
+    (stern). The algorithm refines the bearing estimate by:
+
+    1. For each frame, compute mean intensity in the first 25 range bins vs bearing
+    2. Apply Gaussian smoothing (σ=3) to the intensity profile
+    3. Calculate the intensity gradient (derivative)
+    4. Detect the left edge (most negative gradient = entering shadow)
+    5. Detect the right edge (most positive gradient = exiting shadow)
+    6. Compute the shadow center from the mean of detected edges
+    7. Calculate offset between detected and expected shadow center
+    8. Apply the offset correction to all bearings
+
+    The refinement requires a minimum number of frames (default: 3) with successfully
+    detected edges. Edge detection uses a gradient threshold of 0.01 to reject
+    noise. Results are reported using circular statistics (mean and standard
+    deviation) to properly handle the 360°/0° wraparound.
 
     All bearing values are wrapped to [0, 360).
 
@@ -482,7 +511,7 @@ class Theta:
         import matplotlib.pyplot as plt
 
         if not self._shadow_data:
-            print("No shadow data available (refinement may be disabled)")
+            logging.warning("No shadow data available (refinement may be disabled)")
             return
 
         expected_center = self._config.shadow.center
@@ -495,6 +524,7 @@ class Theta:
         n_rows = (n_frames + n_cols - 1) // n_cols + 2  # Extra rows for summary
 
         fig = plt.figure(figsize=(5 * n_cols, 4 * n_rows))
+        fig.suptitle('Shadow Edge Detection Diagnostics', fontsize=14, fontweight='bold')
 
         # Plot each frame's intensity vs bearing with edge detection
         for i, data in enumerate(self._shadow_data):
@@ -533,10 +563,6 @@ class Theta:
 
             ax.set_xlabel('Bearing (°)')
             ax.set_ylabel('Normalized Intensity')
-            title = f'Frame {i}: {data["timestamp"]}'
-            if data['detected_width'] is not None:
-                title += f'\nWidth: {data["detected_width"]:.1f}°'
-            ax.set_title(title, fontsize=9)
             ax.set_xlim(expected_center - search_range - 10, expected_center + search_range + 10)
             ax.set_ylim(0, 1.1)
             ax.legend(fontsize=6, loc='upper right')
@@ -568,7 +594,6 @@ class Theta:
 
         ax_edges.set_xlabel('Frame Index')
         ax_edges.set_ylabel('Bearing (°)')
-        ax_edges.set_title('Shadow Edge Detection Across Frames')
         ax_edges.legend(loc='upper right')
         ax_edges.grid(True, alpha=0.3)
 
@@ -611,7 +636,6 @@ class Theta:
         ax_stats.set_xlim(0, 1)
         ax_stats.set_ylim(0, 1)
         ax_stats.axis('off')
-        ax_stats.set_title('Shadow Detection Statistics')
 
         plt.tight_layout()
         plt.show()
@@ -656,13 +680,23 @@ class Theta:
             f"shadow_offset={self._shadow_offset:.2f}°)"
         )
 
+    def clear_shadow_data(self) -> None:
+        """
+        Clear shadow diagnostic data to free memory.
+
+        Call this after theta refinement is complete if you don't need
+        to call plot_shadow_diagnostics(). Frees ~600KB per 1000 frames.
+        """
+        self._shadow_data = []
+        logging.debug("Shadow diagnostic data cleared")
+
     def __enter__(self) -> 'Theta':
         """Enter context manager."""
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Exit context manager."""
-        pass
+        """Exit context manager - clears shadow data to free memory."""
+        self.clear_shadow_data()
 
 
 class Bearing:
@@ -676,6 +710,9 @@ class Bearing:
 
     Provides x/y cartesian coordinates for each radar pixel in both ship and earth frames.
 
+    Coordinate calculations are cached/memoized for performance. Use clear_cache()
+    to free memory if needed.
+
     Example:
         >>> config = WamosConfig('radar_config.yaml')
         >>> theta = Theta(frames, config)
@@ -686,17 +723,26 @@ class Bearing:
 
     def __init__(self,
                  theta: Theta,
-                 radar_height: float | None = None):
+                 radar_height: float | None = None,
+                 cache_coordinates: bool = True):
         """
         Initialize Bearing calculator.
 
         Args:
             theta: Theta object with calculated beam angles
             radar_height: Radar height above water (m). If None, uses config or metadata.
+            cache_coordinates: If True, cache xy_ship/xy_earth results (default True)
         """
         self._theta = theta
         self._config = theta.config
         self._frames = theta.frames
+        self._cache_enabled = cache_coordinates
+
+        # Coordinate caches
+        self._xy_ship_cache: dict[int, Tuple[np.ndarray, np.ndarray]] = {}
+        self._xy_earth_cache: dict[int, Tuple[np.ndarray, np.ndarray]] = {}
+        self._heading_ship_cache: dict[int, np.ndarray] = {}
+        self._heading_earth_cache: dict[int, np.ndarray] = {}
 
         # Determine radar height: parameter > config > metadata > wind sensor height
         if radar_height is not None:
@@ -708,6 +754,9 @@ class Bearing:
         else:
             # Fall back to wind sensor height
             self._radar_height = self._frames[0].metadata.wind_sensor_height
+
+        logging.debug(f"Bearing initialized: {len(self._frames)} frames, "
+                     f"radar_height={self._radar_height}, cache={cache_coordinates}")
 
     @property
     def theta(self) -> Theta:
@@ -728,6 +777,14 @@ class Bearing:
         """Get radar height with fallback to frame metadata."""
         return get_radar_height(self._radar_height, self._frames[frame_idx])
 
+    def clear_cache(self) -> None:
+        """Clear all cached coordinate calculations to free memory."""
+        self._xy_ship_cache.clear()
+        self._xy_earth_cache.clear()
+        self._heading_ship_cache.clear()
+        self._heading_earth_cache.clear()
+        logging.debug("Bearing cache cleared")
+
     def heading_ship(self, frame_idx: int) -> np.ndarray:
         """
         Get beam heading relative to ship bow.
@@ -740,9 +797,16 @@ class Bearing:
         Returns:
             Array of ship-relative headings in degrees [0, 360)
         """
+        if self._cache_enabled and frame_idx in self._heading_ship_cache:
+            return self._heading_ship_cache[frame_idx]
+
         theta = self._theta.bearing_for_frame(frame_idx)
         bo2ra = self._config.offsets.bow_to_radar
-        return (theta + bo2ra) % 360
+        result = (theta + bo2ra) % 360
+
+        if self._cache_enabled:
+            self._heading_ship_cache[frame_idx] = result
+        return result
 
     def heading_image(self, frame_idx: int) -> np.ndarray:
         """
@@ -773,6 +837,9 @@ class Bearing:
         Returns:
             Array of earth headings in degrees [0, 360), where 0=North, 90=East
         """
+        if self._cache_enabled and frame_idx in self._heading_earth_cache:
+            return self._heading_earth_cache[frame_idx]
+
         frame = self._frames[frame_idx]
         theta = self._theta.bearing_for_frame(frame_idx)
         bo2ra = self._config.offsets.bow_to_radar
@@ -780,7 +847,11 @@ class Bearing:
         gyroc = frame.metadata.heading or 0.0
         compass_offset = self._config.offsets.compass
 
-        return (theta + bo2ra + hdgdl + gyroc + compass_offset) % 360
+        result = (theta + bo2ra + hdgdl + gyroc + compass_offset) % 360
+
+        if self._cache_enabled:
+            self._heading_earth_cache[frame_idx] = result
+        return result
 
     def _heading_to_xy(self,
                        frame_idx: int,
@@ -822,6 +893,8 @@ class Bearing:
         Ship frame: +X = starboard, +Y = bow (forward)
         Origin at ship center.
 
+        Results are cached for performance.
+
         Args:
             frame_idx: Frame index
 
@@ -829,7 +902,14 @@ class Bearing:
             Tuple of (x, y) arrays, each shape (n_bearings, n_distances)
             in meters relative to ship center
         """
-        return self._heading_to_xy(frame_idx, self.heading_ship(frame_idx))
+        if self._cache_enabled and frame_idx in self._xy_ship_cache:
+            return self._xy_ship_cache[frame_idx]
+
+        result = self._heading_to_xy(frame_idx, self.heading_ship(frame_idx))
+
+        if self._cache_enabled:
+            self._xy_ship_cache[frame_idx] = result
+        return result
 
     def xy_earth(self, frame_idx: int) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -838,6 +918,8 @@ class Bearing:
         Earth frame: +X = East, +Y = North
         Origin at ship position.
 
+        Results are cached for performance.
+
         Args:
             frame_idx: Frame index
 
@@ -845,7 +927,14 @@ class Bearing:
             Tuple of (x, y) arrays, each shape (n_bearings, n_distances)
             in meters relative to ship position
         """
-        return self._heading_to_xy(frame_idx, self.heading_earth(frame_idx))
+        if self._cache_enabled and frame_idx in self._xy_earth_cache:
+            return self._xy_earth_cache[frame_idx]
+
+        result = self._heading_to_xy(frame_idx, self.heading_earth(frame_idx))
+
+        if self._cache_enabled:
+            self._xy_earth_cache[frame_idx] = result
+        return result
 
     def plot_polar(self,
                    frame_idx: int,
@@ -853,7 +942,8 @@ class Bearing:
                    vmin: float = 0,
                    vmax: float = 4095,
                    cmap: str = 'viridis',
-                   colorbar: bool = True):
+                   colorbar: bool = True,
+                   title: bool = True):
         """
         Plot frame in polar coordinates (bearing vs distance).
 
@@ -863,6 +953,7 @@ class Bearing:
             vmin, vmax: Colorbar limits
             cmap: Colormap name
             colorbar: Whether to add colorbar
+            title: Whether to add subplot title
 
         Returns:
             Tuple of (figure, axes, image)
@@ -899,7 +990,8 @@ class Bearing:
             fig.colorbar(im, ax=ax, label='Intensity')
         ax.set_xlabel(x_label)
         ax.set_ylabel('Bearing (°)')
-        ax.set_title(self._format_title(frame_idx, 'Polar'))
+        if title:
+            ax.set_title(self._format_title(frame_idx, 'Polar'))
 
         return fig, ax, im
 
@@ -909,7 +1001,8 @@ class Bearing:
                   vmin: float = 0,
                   vmax: float = 4095,
                   cmap: str = 'viridis',
-                  colorbar: bool = True):
+                  colorbar: bool = True,
+                  title: bool = True):
         """
         Plot frame in ship-relative x/y coordinates.
 
@@ -921,6 +1014,7 @@ class Bearing:
             vmin, vmax: Colorbar limits
             cmap: Colormap name
             colorbar: Whether to add colorbar
+            title: Whether to add subplot title
 
         Returns:
             Tuple of (figure, axes, image)
@@ -956,7 +1050,8 @@ class Bearing:
         max_range = np.sqrt(x**2 + y**2).max()
         add_range_rings(ax, max_range, interval=1000.0)
 
-        ax.set_title(self._format_title(frame_idx, 'Ship Coordinates'))
+        if title:
+            ax.set_title(self._format_title(frame_idx, 'Ship Coordinates'))
 
         return fig, ax, im
 
@@ -966,7 +1061,8 @@ class Bearing:
                    vmin: float = 0,
                    vmax: float = 4095,
                    cmap: str = 'viridis',
-                   colorbar: bool = True):
+                   colorbar: bool = True,
+                   title: bool = True):
         """
         Plot frame in earth x/y coordinates.
 
@@ -978,6 +1074,7 @@ class Bearing:
             vmin, vmax: Colorbar limits
             cmap: Colormap name
             colorbar: Whether to add colorbar
+            title: Whether to add subplot title
 
         Returns:
             Tuple of (figure, axes, image)
@@ -1013,7 +1110,8 @@ class Bearing:
         max_range = np.sqrt(x**2 + y**2).max()
         add_range_rings(ax, max_range, interval=1000.0)
 
-        ax.set_title(self._format_title(frame_idx, 'Earth Coordinates'))
+        if title:
+            ax.set_title(self._format_title(frame_idx, 'Earth Coordinates'))
 
         return fig, ax, im
 
@@ -1045,6 +1143,24 @@ class Bearing:
         pass
 
 
+def _add_arguments(parser) -> None:
+    """Add command arguments to parser."""
+    from wamos_tpw.filenames import add_common_arguments
+    add_common_arguments(parser)
+    parser.add_argument("--config", "-c", type=str, default=None,
+                        help="YAML configuration file")
+    parser.add_argument("--radar-height", type=float, default=None,
+                        help="Radar height above water (m)")
+    parser.add_argument("--max-frames", type=int, default=10,
+                        help="Maximum frames to process (default: 10)")
+    parser.add_argument("--no-refine", action="store_true",
+                        help="Disable shadow refinement")
+    parser.add_argument("--plot", choices=['polar', 'ship', 'earth', 'all'],
+                        default=None, help="Plot type")
+    parser.add_argument("--frame", type=int, default=0,
+                        help="Frame index to plot (default: 0)")
+
+
 def add_subparser(subparsers) -> None:
     """Register the 'bearing' subcommand."""
     p = subparsers.add_parser(
@@ -1052,94 +1168,69 @@ def add_subparser(subparsers) -> None:
         help='Bearing analysis and plotting',
         description="Calculate radar bearing from polar files"
     )
-    p.add_argument("stime", type=str, help="Start time")
-    p.add_argument("etime", type=str, help="End time")
-    p.add_argument("polar_path", type=str, help="Path to polar files")
-    p.add_argument("--config", "-c", type=str, default=None,
-                   help="YAML configuration file")
-    p.add_argument("--radar-height", type=float, default=None,
-                   help="Radar height above water (m)")
-    p.add_argument("--max-frames", type=int, default=10,
-                   help="Maximum frames to process (default: 10)")
-    p.add_argument("--no-refine", action="store_true",
-                   help="Disable shadow refinement")
-    p.add_argument("--plot", choices=['polar', 'ship', 'earth', 'all'],
-                   default=None, help="Plot type")
-    p.add_argument("--frame", type=int, default=0,
-                   help="Frame index to plot (default: 0)")
-    p.add_argument("--verbose", "-v", action="store_true",
-                   help="Verbose output")
+    _add_arguments(p)
     p.set_defaults(func=run)
 
 
 def run(args) -> None:
     """Execute the 'bearing' command."""
-    from wamos_tpw.filenames import Filenames, _parse_timestamp
+    from wamos_tpw.filenames import Filenames
     from wamos_tpw.polarfile import load_polar_file
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s"
-    )
-
-    # Parse times
-    stime = _parse_timestamp(args.stime)
-    etime = _parse_timestamp(args.etime)
-
-    # Find files
-    filenames = Filenames(stime, etime, args.polar_path)
-    print(f"Found {len(filenames)} files")
+    # Find files (args.stime/etime already parsed by argparse)
+    filenames = Filenames(args.stime, args.etime, args.polar_path)
+    logging.info(f"Found {len(filenames)} files")
 
     if not filenames:
-        print("No files found")
+        logging.warning("No files found")
         return
 
     # Load frames
-    print(f"Loading up to {args.max_frames} frames...")
+    logging.info(f"Loading up to {args.max_frames} frames...")
     frames = []
     for filepath in filenames.files[:args.max_frames]:
         frame = load_polar_file(filepath)
         if frame is not None:
             frames.append(frame)
 
-    print(f"Loaded {len(frames)} frames")
+    logging.info(f"Loaded {len(frames)} frames")
 
     if not frames:
-        print("No valid frames")
+        logging.warning("No valid frames")
         return
 
     # Load config
     config = WamosConfig(args.config) if args.config else WamosConfig()
-    print(f"Config: {config}")
+    logging.debug(f"Config: {config}")
 
     # Calculate theta
     theta = Theta(frames, config, refine=not args.no_refine)
-    print(f"\n{theta}")
+    logging.info(f"{theta}")
 
     # Show statistics
-    print("\nTheta Statistics:")
-    print(f"  Total radials: {len(theta)}")
+    logging.info("Theta Statistics:")
+    logging.info(f"  Total radials: {len(theta)}")
     for i in range(min(3, len(frames))):
         bearing = theta.bearing_for_frame(i)
-        print(f"  Frame {i}: bearing range [{bearing.min():.1f}°, {bearing.max():.1f}°]")
+        logging.info(f"  Frame {i}: bearing range [{bearing.min():.1f}deg, {bearing.max():.1f}deg]")
 
     if theta.shadow_offset != 0:
-        print("\nShadow Refinement:")
-        print(f"  Offset applied: {theta.shadow_offset:.2f}°")
-        print(f"  Quality (std): {theta.shadow_quality:.2f}°")
+        logging.info("Shadow Refinement:")
+        logging.info(f"  Offset applied: {theta.shadow_offset:.2f}deg")
+        logging.info(f"  Quality (std): {theta.shadow_quality:.2f}deg")
 
     # Create Bearing object
     bearing_obj = Bearing(theta, radar_height=args.radar_height)
-    print(f"\n{bearing_obj}")
+    logging.info(f"{bearing_obj}")
 
     # Show heading conversions for first frame
-    print("\nHeading conversions (frame 0):")
+    logging.info("Heading conversions (frame 0):")
     heading_ship = bearing_obj.heading_ship(0)
     heading_image = bearing_obj.heading_image(0)
     heading_earth = bearing_obj.heading_earth(0)
-    print(f"  Ship heading:  [{heading_ship.min():.1f}°, {heading_ship.max():.1f}°]")
-    print(f"  Image heading: [{heading_image.min():.1f}°, {heading_image.max():.1f}°]")
-    print(f"  Earth heading: [{heading_earth.min():.1f}°, {heading_earth.max():.1f}°]")
+    logging.info(f"  Ship heading:  [{heading_ship.min():.1f}deg, {heading_ship.max():.1f}deg]")
+    logging.info(f"  Image heading: [{heading_image.min():.1f}deg, {heading_image.max():.1f}deg]")
+    logging.info(f"  Earth heading: [{heading_earth.min():.1f}deg, {heading_earth.max():.1f}deg]")
 
     # Plot if requested
     if args.plot:
@@ -1148,11 +1239,15 @@ def run(args) -> None:
         frame_idx = min(args.frame, len(frames) - 1)
 
         if args.plot == 'all':
-            fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-            bearing_obj.plot_polar(frame_idx, ax=axes[0])
-            bearing_obj.plot_ship(frame_idx, ax=axes[1])
-            bearing_obj.plot_earth(frame_idx, ax=axes[2])
-            fig.tight_layout()
+            fig, axes = plt.subplots(1, 3, figsize=(20, 6))
+            _, _, im1 = bearing_obj.plot_polar(frame_idx, ax=axes[0], title=False, colorbar=False)
+            bearing_obj.plot_ship(frame_idx, ax=axes[1], title=False, colorbar=False)
+            bearing_obj.plot_earth(frame_idx, ax=axes[2], title=False, colorbar=False)
+            # Add single figure title and shared colorbar
+            frame = frames[frame_idx]
+            fig.suptitle(f'Frame {frame_idx + 1}/{len(frames)}: {frame.timestamp}')
+            fig.subplots_adjust(right=0.92)
+            fig.colorbar(im1, ax=axes, label='Intensity', shrink=0.8)
         elif args.plot == 'polar':
             bearing_obj.plot_polar(frame_idx)
         elif args.plot == 'ship':
@@ -1166,26 +1261,13 @@ def run(args) -> None:
 def main() -> None:
     """Standalone CLI entry point."""
     from argparse import ArgumentParser
+    from wamos_tpw.logging_config import add_logging_arguments, setup_logging
 
     parser = ArgumentParser(description="Calculate radar bearing from polar files")
-    parser.add_argument("stime", type=str, help="Start time")
-    parser.add_argument("etime", type=str, help="End time")
-    parser.add_argument("polar_path", type=str, help="Path to polar files")
-    parser.add_argument("--config", "-c", type=str, default=None,
-                        help="YAML configuration file")
-    parser.add_argument("--radar-height", type=float, default=None,
-                        help="Radar height above water (m)")
-    parser.add_argument("--max-frames", type=int, default=10,
-                        help="Maximum frames to process (default: 10)")
-    parser.add_argument("--no-refine", action="store_true",
-                        help="Disable shadow refinement")
-    parser.add_argument("--plot", choices=['polar', 'ship', 'earth', 'all'],
-                        default=None, help="Plot type")
-    parser.add_argument("--frame", type=int, default=0,
-                        help="Frame index to plot (default: 0)")
-    parser.add_argument("--verbose", "-v", action="store_true",
-                        help="Verbose output")
+    add_logging_arguments(parser)
+    _add_arguments(parser)
     args = parser.parse_args()
+    setup_logging(args)
     run(args)
 
 
