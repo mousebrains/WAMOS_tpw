@@ -245,6 +245,18 @@ class Files:
             file_list = file_list[:max_frames]
         return self._load_files(file_list)
 
+    def load_files(self, file_list: list[str]) -> list[Frame]:
+        """
+        Load frames from a list of file paths.
+
+        Args:
+            file_list: List of file paths to load
+
+        Returns:
+            List of Frame objects
+        """
+        return self._load_files(file_list)
+
     def load_all(self) -> list[Frame]:
         """
         Load all frames from all files.

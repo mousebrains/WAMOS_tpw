@@ -80,8 +80,11 @@ def generate_movie(args: Namespace, config: "WamosConfig") -> None:
             group_idx = 0
             skipped_count = 0
 
+            # Get grouped file lists (without loading frames yet)
+            groups = pframes.groupby()
+
             logging.debug("Starting group iteration...")
-            for period, frames in pframes.itergroups():
+            for period, file_list in groups.items():
                 # Format timestamp for filename: YYYYMMDD_HHMMSS (sorts chronologically)
                 ts_str = str(period).replace("-", "").replace(":", "").replace(" ", "_")
                 output_path = f"{frames_dir}/frame_{ts_str}.png"
@@ -94,8 +97,9 @@ def generate_movie(args: Namespace, config: "WamosConfig") -> None:
                     logging.debug(f"Group {group_idx}: {period} - skipped (checkpoint)")
                     continue
 
+                # Now load the frames (only if we need to render)
                 logging.debug(f"Group {group_idx}: {period} - loading...")
-                frames = list(frames)
+                frames = pframes.load_files(file_list)
                 if args.max_frames:
                     frames = frames[: args.max_frames]
                 if not frames:
