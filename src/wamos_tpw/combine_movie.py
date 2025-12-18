@@ -81,13 +81,30 @@ def _process_group(
             # Refine theta (shadow detection)
             theta = Theta(frames, config, refine=True)
 
-            # Deramp
-            deramp = Deramp(frames, config, theta=theta, radar_height=radar_height)
-            deramp.deramp_frames(frames, show_progress=False)
+            # Get shadow bounds from theta refinement
+            shadow_start = theta.shadow_left_mean
+            shadow_end = theta.shadow_right_mean
 
-            # Destreak
-            destreak = Destreak(frames, config, theta=theta)
-            corrected = destreak.destreak_frames(frames, show_progress=False)
+            # Deramp each frame
+            for i, frame in enumerate(frames):
+                bearing = theta.bearing_for_frame(i)
+                deramp = Deramp(
+                    frame,
+                    config,
+                    bearing=bearing,
+                    shadow_start=shadow_start,
+                    shadow_end=shadow_end,
+                )
+                frame.deramped_intensity = deramp.corrected_intensity
+
+            # Destreak each frame (uses temporal neighbors)
+            n_frames_count = len(frames)
+            corrected = []
+            for i, center in enumerate(frames):
+                prev_frame = frames[i - 1] if i > 0 else None
+                next_frame = frames[i + 1] if i < n_frames_count - 1 else None
+                ds = Destreak(prev_frame, center, next_frame, config)
+                corrected.append(ds.corrected_intensity)
 
             # Normalize
             normalized = _normalize_frames(corrected)
