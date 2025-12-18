@@ -54,20 +54,19 @@ jobs:
       with:
         repository-url: https://test.pypi.org/legacy/
 
-  # Uncomment the following job when ready to publish to PyPI
-  # publish-pypi:
-  #   runs-on: ubuntu-latest
-  #   needs: publish-testpypi
-  #   environment: pypi
-  #   permissions:
-  #     id-token: write
-  #
-  #   steps:
-  #   - name: Download artifacts
-  #     uses: actions/download-artifact@v4
-  #     with:
-  #       name: dist
-  #       path: dist/
-  #
-  #   - name: Publish to PyPI
-  #     uses: pypa/gh-action-pypi-publish@release/v1
+  publish-pypi:
+    runs-on: ubuntu-latest
+    needs: publish-testpypi
+    environment: pypi
+    permissions:
+      id-token: write
+
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: dist
+        path: dist/
+
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
