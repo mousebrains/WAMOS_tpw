@@ -16,6 +16,8 @@ import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import TYPE_CHECKING
 
+import pandas as pd
+
 if TYPE_CHECKING:
     from wamos_tpw.config import WamosConfig
 
@@ -226,8 +228,9 @@ def generate_movie(args, config: "WamosConfig") -> None:
             skipped_count = 0
 
             for period, file_list in groups.items():
-                # Format timestamp for filename: YYYYMMDD_HHMMSS (sorts chronologically)
-                ts_str = str(period).replace("-", "").replace(":", "").replace(" ", "_")
+                # Format timestamp for filename: YYYYmmddTHHMMSS (sorts chronologically)
+                ts = pd.Timestamp(period)
+                ts_str = ts.strftime("%Y%m%dT%H%M%S")
                 output_path = f"{frames_dir}/frame_{ts_str}.png"
 
                 # Checkpoint: skip if frame already exists and --resume is set
