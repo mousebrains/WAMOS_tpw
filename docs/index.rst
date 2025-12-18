@@ -18,18 +18,19 @@ Quick Start
 
 .. code-block:: python
 
-   from wamos_tpw import WamosDataset
+   from wamos_tpw import ProcessedFrames, Combine
 
    # Load and process data
-   ds = WamosDataset('/path/to/POLAR', '2022-04-05', '2022-04-06')
-   ds.load()
-   ds.process()
-
-   # Export to NetCDF
-   ds.to_netcdf('output.nc')
-
-   # Create animation
-   ds.animate('output.mp4')
+   with ProcessedFrames(
+       stime='2022-04-05 14:00',
+       etime='2022-04-05 15:00',
+       polar_path='/path/to/POLAR'
+   ) as pf:
+       for period, frames in pf.itergroups():
+           frames = list(frames)
+           pf.process(frames)
+           combine = Combine(frames)
+           combine.save_frame('output.png')
 
 Installation
 ------------
@@ -71,16 +72,6 @@ Contents
 .. toctree::
    :maxdepth: 2
    :caption: Contents:
-
-   api
-   algorithms
-   cli
-
-API Reference
--------------
-
-.. toctree::
-   :maxdepth: 2
 
    api
 

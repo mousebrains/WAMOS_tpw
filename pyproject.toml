@@ -109,3 +109,7 @@ target-version = "py313"
 [tool.ruff.lint]
 select = ["E", "F", "W"]
 ignore = ["E501"]  # Line too long
+
+[tool.bandit]
+# Skip assert_used check - assertions are used for internal invariants
+skips = ["B101"]
