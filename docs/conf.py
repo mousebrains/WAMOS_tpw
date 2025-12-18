@@ -25,7 +25,19 @@ extensions = [
     "sphinx.ext.napoleon",
     "sphinx.ext.intersphinx",
     "sphinx.ext.mathjax",
+    "myst_parser",  # Support for markdown files
 ]
+
+# MyST parser settings
+myst_enable_extensions = [
+    "colon_fence",
+    "deflist",
+    "tasklist",
+]
+source_suffix = {
+    ".rst": "restructuredtext",
+    ".md": "markdown",
+}
 
 # Napoleon settings for Google/NumPy style docstrings
 napoleon_google_docstring = True

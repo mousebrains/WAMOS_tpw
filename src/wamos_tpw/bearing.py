@@ -150,57 +150,94 @@ class Theta:
         data = frame.raw
         n_radials = frame.n_bearings
 
-        # Extract bit 13 from first distance bin
+        # Step 1: Extract bit 13 transitions
         bit_13 = (data[:, 0] & self._MASK_BIT13) != 0
+        transitions = self._extract_transitions(bit_13, n_radials)
 
+        # Step 2: Fix missing transitions
+        transitions = self._fix_missing_transitions(transitions)
+
+        # Step 3: Interpolate bearing values
+        return self._interpolate_bearings(transitions, bit_13[0], n_radials)
+
+    def _extract_transitions(self, bit_13: np.ndarray, n_radials: int) -> np.ndarray:
+        """
+        Extract degree transition points from bit 13 pattern.
+
+        Args:
+            bit_13: Boolean array of bit 13 values for each radial
+            n_radials: Total number of radials
+
+        Returns:
+            Array of transition indices including boundaries
+        """
         # Find all degree transitions (bit changes)
         transitions = np.where(np.diff(bit_13.astype(int)) != 0)[0] + 1
 
         # Add boundaries (start and end)
-        transitions = np.concatenate([[0], transitions, [n_radials]])
+        return np.concatenate([[0], transitions, [n_radials]])
 
-        # Detect and handle missing transitions
-        if len(transitions) > 2:
-            segment_sizes = np.diff(transitions)
-            median_size = np.median(segment_sizes)
+    def _fix_missing_transitions(self, transitions: np.ndarray) -> np.ndarray:
+        """
+        Detect and insert missing transitions based on segment size analysis.
 
-            # Find segments that are likely missing a transition
-            suspicious = np.where(
-                segment_sizes > median_size * self._SEGMENT_SUSPICIOUS_MULTIPLIER
-            )[0]
+        Args:
+            transitions: Array of transition indices
 
-            new_transitions = []
-            for seg_idx in suspicious:
-                start_idx = transitions[seg_idx]
-                end_idx = transitions[seg_idx + 1]
-                segment_size = end_idx - start_idx
+        Returns:
+            Updated transitions array with missing transitions inserted
+        """
+        if len(transitions) <= 2:
+            return transitions
 
-                # Estimate number of missing transitions
-                expected_segments = int(np.round(segment_size / median_size))
-                if expected_segments > 1:
-                    for j in range(1, expected_segments):
-                        insert_idx = start_idx + int(j * segment_size / expected_segments)
-                        new_transitions.append(insert_idx)
+        segment_sizes = np.diff(transitions)
+        median_size = np.median(segment_sizes)
 
-            if new_transitions:
-                transitions = np.sort(np.concatenate([transitions, new_transitions]))
+        # Find segments that are likely missing a transition
+        suspicious = np.where(
+            segment_sizes > median_size * self._SEGMENT_SUSPICIOUS_MULTIPLIER
+        )[0]
 
-        # Initialize bearing array
+        new_transitions = []
+        for seg_idx in suspicious:
+            start_idx = transitions[seg_idx]
+            end_idx = transitions[seg_idx + 1]
+            segment_size = end_idx - start_idx
+
+            # Estimate number of missing transitions
+            expected_segments = int(np.round(segment_size / median_size))
+            if expected_segments > 1:
+                for j in range(1, expected_segments):
+                    insert_idx = start_idx + int(j * segment_size / expected_segments)
+                    new_transitions.append(insert_idx)
+
+        if new_transitions:
+            return np.sort(np.concatenate([transitions, new_transitions]))
+
+        return transitions
+
+    def _interpolate_bearings(
+        self, transitions: np.ndarray, first_bit_odd: bool, n_radials: int
+    ) -> np.ndarray:
+        """
+        Interpolate bearing values within each transition segment.
+
+        Args:
+            transitions: Array of transition indices
+            first_bit_odd: Whether first radial has odd degree (bit 13 = 1)
+            n_radials: Total number of radials
+
+        Returns:
+            Array of bearing angles for each radial
+        """
         bearing = np.zeros(n_radials)
 
         # Determine starting degree based on bit 13 parity
-        current_degree = 0.0
-        if bit_13[0]:
-            # First bearing is odd
-            current_degree = 1.0
-        # else first bearing is even (0)
+        current_degree = 1.0 if first_bit_odd else 0.0
 
         # Calculate nominal radials per degree
         n_segments = len(transitions) - 1
-        if n_segments > 0:
-            avg_radials_per_degree = n_radials / n_segments
-        else:
-            avg_radials_per_degree = n_radials / 360
+        avg_radials_per_degree = n_radials / n_segments if n_segments > 0 else n_radials / 360
 
         # Process each segment with adaptive width
         for i in range(len(transitions) - 1):
@@ -236,109 +273,181 @@ class Theta:
         Detects left and right edges of the shadow region using intensity
         gradients, then calculates the center and applies offset correction.
         """
-        from scipy.ndimage import gaussian_filter1d
+        # Step 1: Detect shadow edges for all frames
+        left_edges, right_edges = self._detect_all_shadow_edges()
 
-        # Get config parameters
-        expected_center = self._config.shadow.center
-        expected_width = self._config.shadow.width
-        search_range = expected_width
+        # Step 2: Compute statistics from detected edges
+        self._compute_shadow_statistics(left_edges, right_edges)
 
-        # Analyze shadow edges
+        # Step 3: Apply correction if sufficient detections
+        self._apply_shadow_correction(left_edges, right_edges)
+
+    def _detect_all_shadow_edges(self) -> Tuple[list[float], list[float]]:
+        """
+        Detect shadow edges for all frames.
+
+        Returns:
+            Tuple of (left_edges, right_edges) lists
+        """
         self._shadow_data = []
         left_edges = []
         right_edges = []
 
+        expected_center = self._config.shadow.center
+        search_range = self._config.shadow.width
+
         for frame_idx, frame in enumerate(self._frames):
             bearing = self._bearing_per_frame[frame_idx]
-
-            # Get intensity at first few distance bins (shadow is most visible there)
-            intensity = frame.intensity[:, : self._SHADOW_INTENSITY_BINS].mean(axis=1).astype(float)
-
-            # Sort by bearing for gradient calculation
-            sort_idx = np.argsort(bearing)
-            bearing_sorted = bearing[sort_idx]
-            intensity_sorted = intensity[sort_idx]
-
-            # Normalize intensity
-            intensity_norm = (
-                intensity_sorted / intensity_sorted.max()
-                if intensity_sorted.max() > 0
-                else intensity_sorted
+            edge_data = self._detect_frame_shadow_edges(
+                frame, bearing, frame_idx, expected_center, search_range
             )
 
-            # Smooth intensity for edge detection
-            intensity_smooth = gaussian_filter1d(intensity_norm, sigma=self._GAUSSIAN_SIGMA)
+            if edge_data["left_edge"] is not None:
+                left_edges.append(edge_data["left_edge"])
+            if edge_data["right_edge"] is not None:
+                right_edges.append(edge_data["right_edge"])
 
-            # Calculate gradient (derivative)
-            gradient = np.gradient(intensity_smooth)
+            self._shadow_data.append(edge_data)
 
-            # Detect edges in search region around expected center
-            search_start = (expected_center - search_range) % 360
-            search_end = (expected_center + search_range) % 360
-
-            if search_start < search_end:
-                in_search = (bearing_sorted >= search_start) & (bearing_sorted <= search_end)
-            else:
-                in_search = (bearing_sorted >= search_start) | (bearing_sorted <= search_end)
-
-            search_indices = np.where(in_search)[0]
-
-            # Find left edge (largest negative gradient - intensity dropping)
-            # Find right edge (largest positive gradient - intensity rising)
-            left_edge = None
-            right_edge = None
-            left_edge_idx = None
-            right_edge_idx = None
-
-            if len(search_indices) > 10:
-                search_gradient = gradient[search_indices]
-
-                # Left edge: most negative gradient (entering shadow)
-                neg_grad_idx = np.argmin(search_gradient)
-                if search_gradient[neg_grad_idx] < -self._GRADIENT_THRESHOLD:
-                    left_edge_idx = search_indices[neg_grad_idx]
-                    left_edge = bearing_sorted[left_edge_idx]
-                    left_edges.append(left_edge)
-
-                # Right edge: most positive gradient (exiting shadow)
-                pos_grad_idx = np.argmax(search_gradient)
-                if search_gradient[pos_grad_idx] > self._GRADIENT_THRESHOLD:
-                    right_edge_idx = search_indices[pos_grad_idx]
-                    right_edge = bearing_sorted[right_edge_idx]
-                    right_edges.append(right_edge)
-
-            # Calculate center from edges if both found
-            detected_center = None
-            detected_width = None
-            if left_edge is not None and right_edge is not None:
-                if right_edge < left_edge:
-                    right_edge_unwrap = right_edge + 360
-                else:
-                    right_edge_unwrap = right_edge
-                detected_center = ((left_edge + right_edge_unwrap) / 2) % 360
-                detected_width = (right_edge_unwrap - left_edge) % 360
-
-            self._shadow_data.append(
-                {
-                    "frame_idx": frame_idx,
-                    "bearing_sorted": bearing_sorted,
-                    "intensity_norm": intensity_norm,
-                    "intensity_smooth": intensity_smooth,
-                    "gradient": gradient,
-                    "left_edge": left_edge,
-                    "right_edge": right_edge,
-                    "left_edge_idx": left_edge_idx,
-                    "right_edge_idx": right_edge_idx,
-                    "detected_center": detected_center,
-                    "detected_width": detected_width,
-                    "timestamp": frame.timestamp,
-                }
-            )
-
-        # Store edge statistics
         self._shadow_left_edges = left_edges
         self._shadow_right_edges = right_edges
 
+        return left_edges, right_edges
+
+    def _detect_frame_shadow_edges(
+        self,
+        frame: Frame,
+        bearing: np.ndarray,
+        frame_idx: int,
+        expected_center: float,
+        search_range: float,
+    ) -> dict:
+        """
+        Detect shadow edges for a single frame using intensity gradients.
+
+        Args:
+            frame: Frame object
+            bearing: Bearing array for this frame
+            frame_idx: Index of the frame
+            expected_center: Expected shadow center in degrees
+            search_range: Angular range to search around expected center
+
+        Returns:
+            Dictionary with edge detection results and diagnostic data
+        """
+        from scipy.ndimage import gaussian_filter1d
+
+        # Get intensity at first few distance bins (shadow is most visible there)
+        intensity = frame.intensity[:, : self._SHADOW_INTENSITY_BINS].mean(axis=1).astype(float)
+
+        # Sort by bearing for gradient calculation
+        sort_idx = np.argsort(bearing)
+        bearing_sorted = bearing[sort_idx]
+        intensity_sorted = intensity[sort_idx]
+
+        # Normalize intensity
+        intensity_norm = (
+            intensity_sorted / intensity_sorted.max()
+            if intensity_sorted.max() > 0
+            else intensity_sorted
+        )
+
+        # Smooth intensity for edge detection
+        intensity_smooth = gaussian_filter1d(intensity_norm, sigma=self._GAUSSIAN_SIGMA)
+
+        # Calculate gradient (derivative)
+        gradient = np.gradient(intensity_smooth)
+
+        # Find edges in search region
+        left_edge, right_edge, left_edge_idx, right_edge_idx = self._find_edges_in_region(
+            bearing_sorted, gradient, expected_center, search_range
+        )
+
+        # Calculate center from edges if both found
+        detected_center = None
+        detected_width = None
+        if left_edge is not None and right_edge is not None:
+            right_edge_unwrap = right_edge + 360 if right_edge < left_edge else right_edge
+            detected_center = ((left_edge + right_edge_unwrap) / 2) % 360
+            detected_width = (right_edge_unwrap - left_edge) % 360
+
+        return {
+            "frame_idx": frame_idx,
+            "bearing_sorted": bearing_sorted,
+            "intensity_norm": intensity_norm,
+            "intensity_smooth": intensity_smooth,
+            "gradient": gradient,
+            "left_edge": left_edge,
+            "right_edge": right_edge,
+            "left_edge_idx": left_edge_idx,
+            "right_edge_idx": right_edge_idx,
+            "detected_center": detected_center,
+            "detected_width": detected_width,
+            "timestamp": frame.timestamp,
+        }
+
+    def _find_edges_in_region(
+        self,
+        bearing_sorted: np.ndarray,
+        gradient: np.ndarray,
+        expected_center: float,
+        search_range: float,
+    ) -> Tuple[float | None, float | None, int | None, int | None]:
+        """
+        Find left and right shadow edges within search region.
+
+        Args:
+            bearing_sorted: Sorted bearing array
+            gradient: Intensity gradient array
+            expected_center: Expected shadow center
+            search_range: Angular range to search
+
+        Returns:
+            Tuple of (left_edge, right_edge, left_edge_idx, right_edge_idx)
+        """
+        # Define search region
+        search_start = (expected_center - search_range) % 360
+        search_end = (expected_center + search_range) % 360
+
+        if search_start < search_end:
+            in_search = (bearing_sorted >= search_start) & (bearing_sorted <= search_end)
+        else:
+            in_search = (bearing_sorted >= search_start) | (bearing_sorted <= search_end)
+
+        search_indices = np.where(in_search)[0]
+
+        left_edge = None
+        right_edge = None
+        left_edge_idx = None
+        right_edge_idx = None
+
+        if len(search_indices) > 10:
+            search_gradient = gradient[search_indices]
+
+            # Left edge: most negative gradient (entering shadow)
+            neg_grad_idx = np.argmin(search_gradient)
+            if search_gradient[neg_grad_idx] < -self._GRADIENT_THRESHOLD:
+                left_edge_idx = search_indices[neg_grad_idx]
+                left_edge = bearing_sorted[left_edge_idx]
+
+            # Right edge: most positive gradient (exiting shadow)
+            pos_grad_idx = np.argmax(search_gradient)
+            if search_gradient[pos_grad_idx] > self._GRADIENT_THRESHOLD:
+                right_edge_idx = search_indices[pos_grad_idx]
+                right_edge = bearing_sorted[right_edge_idx]
+
+        return left_edge, right_edge, left_edge_idx, right_edge_idx
+
+    def _compute_shadow_statistics(
+        self, left_edges: list[float], right_edges: list[float]
+    ) -> None:
+        """
+        Compute circular statistics for detected shadow edges.
+
+        Args:
+            left_edges: List of detected left edge angles
+            right_edges: List of detected right edge angles
+        """
         if left_edges:
             self._shadow_left_mean, self._shadow_left_std = self._circular_stats(left_edges)
         else:
@@ -351,45 +460,57 @@ class Theta:
             self._shadow_right_mean = None
             self._shadow_right_std = None
 
-        # Apply correction if we have both edges
+    def _apply_shadow_correction(
+        self, left_edges: list[float], right_edges: list[float]
+    ) -> None:
+        """
+        Apply shadow-based bearing correction if sufficient detections available.
+
+        Args:
+            left_edges: List of detected left edge angles
+            right_edges: List of detected right edge angles
+        """
         min_frames = self._config.theta_refinement.min_frames
-        if len(left_edges) >= min_frames and len(right_edges) >= min_frames:
-            mean_left = self._shadow_left_mean
-            mean_right = self._shadow_right_mean
+        expected_center = self._config.shadow.center
 
-            # Calculate center from mean edges
-            if mean_right < mean_left:
-                width = mean_right + 360 - mean_left
-            else:
-                width = mean_right - mean_left
-            detected_center = (mean_left + width / 2) % 360
-
-            # Calculate offset from expected
-            offset = detected_center - expected_center
-            if offset > 180:
-                offset -= 360
-            elif offset < -180:
-                offset += 360
-
-            self._shadow_offset = offset
-            self._shadow_quality = (self._shadow_left_std + self._shadow_right_std) / 2
-
-            # Apply correction to all bearings and rewrap to [0, 360)
-            for i in range(len(self._bearing_per_frame)):
-                self._bearing_per_frame[i] = (self._bearing_per_frame[i] - offset) % 360
-
-            self._bearing = np.concatenate(self._bearing_per_frame)
-
-            logging.info(
-                f"Shadow refinement: LHS={mean_left:.1f}°±{self._shadow_left_std:.1f}°, "
-                f"RHS={mean_right:.1f}°±{self._shadow_right_std:.1f}°, "
-                f"offset={offset:.2f}°"
-            )
-        else:
+        if len(left_edges) < min_frames or len(right_edges) < min_frames:
             logging.warning(
                 f"Insufficient shadow detections (LHS={len(left_edges)}, RHS={len(right_edges)}) "
                 f"for refinement (need {min_frames})"
             )
+            return
+
+        mean_left = self._shadow_left_mean
+        mean_right = self._shadow_right_mean
+
+        # Calculate center from mean edges
+        if mean_right < mean_left:
+            width = mean_right + 360 - mean_left
+        else:
+            width = mean_right - mean_left
+        detected_center = (mean_left + width / 2) % 360
+
+        # Calculate offset from expected
+        offset = detected_center - expected_center
+        if offset > 180:
+            offset -= 360
+        elif offset < -180:
+            offset += 360
+
+        self._shadow_offset = offset
+        self._shadow_quality = (self._shadow_left_std + self._shadow_right_std) / 2
+
+        # Apply correction to all bearings and rewrap to [0, 360)
+        for i in range(len(self._bearing_per_frame)):
+            self._bearing_per_frame[i] = (self._bearing_per_frame[i] - offset) % 360
+
+        self._bearing = np.concatenate(self._bearing_per_frame)
+
+        logging.info(
+            f"Shadow refinement: LHS={mean_left:.1f}°±{self._shadow_left_std:.1f}°, "
+            f"RHS={mean_right:.1f}°±{self._shadow_right_std:.1f}°, "
+            f"offset={offset:.2f}°"
+        )
 
     @staticmethod
     def _circular_stats(angles: list[float]) -> Tuple[float, float]:

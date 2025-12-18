@@ -411,29 +411,50 @@ def save_frame(
     import matplotlib.pyplot as plt
     import pandas as pd
 
-    # Get ship track
+    # Get ship track - use float32 to save memory
     ship_x, ship_y = combine.ship_track_xy()
     ship_lat, ship_lon = combine.ship_track()
+    ship_lat = ship_lat.astype(np.float32)
+    ship_lon = ship_lon.astype(np.float32)
     n_radials = len(ship_x)
     n_frames = len(combine.frames)
+    del ship_x, ship_y  # No longer needed
 
-    # Grid all frames in parallel with rotation
+    # Grid all frames with rotation
+    # Use sequential gridding (workers=1) to minimize memory footprint
+    # The outer ProcessPoolExecutor already parallelizes across groups
     x_edges, y_edges, gridded, angle = combine.grid_parallel_rotated(
-        n_along=n_along, n_cross=n_cross, workers=workers
+        n_along=n_along, n_cross=n_cross, workers=1
     )
 
-    # Rotate grid back to earth coordinates and convert to lat/lon
-    cos_a = np.cos(-angle)
-    sin_a = np.sin(-angle)
-    xx_rot, yy_rot = np.meshgrid(x_edges, y_edges)
-    xx_earth = xx_rot * cos_a - yy_rot * sin_a
-    yy_earth = xx_rot * sin_a + yy_rot * cos_a
+    # Convert gridded to float32 to save memory
+    gridded = gridded.astype(np.float32)
 
+    # Rotate grid back to earth coordinates and convert to lat/lon
+    # Memory optimization: compute in-place, use float32
+    cos_a = np.float32(np.cos(-angle))
+    sin_a = np.float32(np.sin(-angle))
+    xx_rot, yy_rot = np.meshgrid(x_edges.astype(np.float32), y_edges.astype(np.float32))
+    del x_edges, y_edges  # No longer needed
+
+    # Compute lon_grid in-place from xx_rot
     ref_lat, ref_lon = combine.reference_position
-    meters_per_deg_lat = np.pi * _EARTH_RADIUS / 180.0
-    meters_per_deg_lon = meters_per_deg_lat * np.cos(np.deg2rad(ref_lat))
-    lon_grid = ref_lon + xx_earth / meters_per_deg_lon
-    lat_grid = ref_lat + yy_earth / meters_per_deg_lat
+    meters_per_deg_lat = np.float32(np.pi * _EARTH_RADIUS / 180.0)
+    meters_per_deg_lon = np.float32(meters_per_deg_lat * np.cos(np.deg2rad(ref_lat)))
+
+    # lon_grid = ref_lon + (xx_rot * cos_a - yy_rot * sin_a) / meters_per_deg_lon
+    lon_grid = xx_rot * cos_a
+    lon_grid -= yy_rot * sin_a
+    lon_grid /= meters_per_deg_lon
+    lon_grid += np.float32(ref_lon)
+
+    # lat_grid = ref_lat + (xx_rot * sin_a + yy_rot * cos_a) / meters_per_deg_lat
+    lat_grid = xx_rot * sin_a
+    del xx_rot  # Free memory
+    lat_grid += yy_rot * cos_a
+    del yy_rot  # Free memory
+    lat_grid /= meters_per_deg_lat
+    lat_grid += np.float32(ref_lat)
 
     # Calculate intensity limits
     valid_data = gridded[~np.isnan(gridded)]

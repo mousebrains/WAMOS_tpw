@@ -48,6 +48,8 @@ class Combine:
         frames: list[Frame],
         config: WamosConfig | None = None,
         radar_height: float | None = None,
+        theta: Theta | None = None,
+        cache_coordinates: bool = True,
     ):
         """
         Initialize Combine for a set of contiguous frames.
@@ -56,6 +58,10 @@ class Combine:
             frames: List of contiguous Frame objects (sorted by time)
             config: WamosConfig object (uses defaults if None)
             radar_height: Radar height above water (m). If None, uses config or metadata.
+            theta: Existing Theta object to reuse (avoids duplicate computation).
+                   If None, creates a new one.
+            cache_coordinates: If True, cache xy coordinates in Bearing (uses more memory).
+                              Set to False for memory-constrained scenarios.
         """
         if not frames:
             raise ValueError("At least one frame is required")
@@ -63,9 +69,12 @@ class Combine:
         self._frames = frames
         self._config = config or WamosConfig()
 
-        # Create Theta/Bearing for coordinate calculation
-        self._theta = Theta(frames, config, refine=True)
-        self._bearing = Bearing(self._theta, radar_height=radar_height)
+        # Create or reuse Theta/Bearing for coordinate calculation
+        if theta is not None:
+            self._theta = theta
+        else:
+            self._theta = Theta(frames, config, refine=True)
+        self._bearing = Bearing(self._theta, radar_height=radar_height, cache_coordinates=cache_coordinates)
 
         # Create Timestamp for ship position calculation
         self._timestamp = Timestamp(frames, config)
@@ -688,6 +697,8 @@ class Combine:
         """
         Grid a single frame onto the rotated non-uniform grid.
 
+        Memory-optimized: deletes intermediate arrays as soon as possible.
+
         Args:
             frame_idx: Frame index
             x_edges: X bin edges (in rotated coordinates)
@@ -700,8 +711,12 @@ class Combine:
         # Compute frame coordinates
         x_earth, y_earth = self._compute_frame_xy_earth(frame_idx)
 
-        # Rotate to grid coordinates
-        x_rot, y_rot = self._rotate_coords(x_earth, y_earth, angle)
+        # Rotate to grid coordinates (in-place to save memory)
+        cos_a = np.cos(angle)
+        sin_a = np.sin(angle)
+        x_rot = x_earth * cos_a - y_earth * sin_a
+        y_rot = x_earth * sin_a + y_earth * cos_a
+        del x_earth, y_earth  # Free memory immediately
 
         # Get intensity (use processed if available)
         frame = self._frames[frame_idx]
@@ -713,36 +728,45 @@ class Combine:
             else frame.intensity
         )
 
-        # Get shadow mask (1D per bearing) and expand to 2D
+        # Get shadow mask (1D per bearing)
         shadow_mask_1d = self._bearing._theta.in_shadow(frame_idx)
-        n_distances = intensity.shape[1]
-        shadow_mask_2d = np.repeat(shadow_mask_1d[:, np.newaxis], n_distances, axis=1)
-
-        # Flatten
-        x_flat = x_rot.ravel()
-        y_flat = y_rot.ravel()
-        values_flat = intensity.ravel().astype(np.float64)
-        shadow_flat = shadow_mask_2d.ravel()
 
         # Bin indices using searchsorted (works with non-uniform edges)
         n_x = len(x_edges) - 1
         n_y = len(y_edges) - 1
 
+        # Process in flattened form to reduce memory copies
+        x_flat = x_rot.ravel()
+        del x_rot
+        y_flat = y_rot.ravel()
+        del y_rot
+
         x_idx = np.searchsorted(x_edges, x_flat) - 1
+        del x_flat
         y_idx = np.searchsorted(y_edges, y_flat) - 1
+        del y_flat
+
+        # Expand shadow mask efficiently (broadcast instead of repeat)
+        n_bearings, n_distances = intensity.shape
+        shadow_flat = np.broadcast_to(shadow_mask_1d[:, np.newaxis], (n_bearings, n_distances)).ravel()
 
         # Clip to valid range and exclude shadow region
         valid = (x_idx >= 0) & (x_idx < n_x) & (y_idx >= 0) & (y_idx < n_y) & ~shadow_flat
-        x_idx = x_idx[valid]
-        y_idx = y_idx[valid]
-        values_valid = values_flat[valid]
+        del shadow_flat
+
+        x_idx_valid = x_idx[valid]
+        del x_idx
+        y_idx_valid = y_idx[valid]
+        del y_idx
+        values_valid = intensity.ravel()[valid].astype(np.float64)
+        del valid
 
         # Accumulate sum and count
         sum_grid = np.zeros((n_y, n_x), dtype=np.float64)
         count_grid = np.zeros((n_y, n_x), dtype=np.int32)
 
-        np.add.at(sum_grid, (y_idx, x_idx), values_valid)
-        np.add.at(count_grid, (y_idx, x_idx), 1)
+        np.add.at(sum_grid, (y_idx_valid, x_idx_valid), values_valid)
+        np.add.at(count_grid, (y_idx_valid, x_idx_valid), 1)
 
         return sum_grid, count_grid
 
@@ -829,10 +853,16 @@ class Combine:
                     sum_total += sum_grid
                     count_total += count_grid
         else:
+            import gc
+
             for i in range(n_frames):
                 sum_grid, count_grid = self._grid_frame_rotated(i, x_edges, y_edges, angle)
                 sum_total += sum_grid
                 count_total += count_grid
+                del sum_grid, count_grid
+                # Periodically collect garbage to keep memory usage down
+                if i % 50 == 0:
+                    gc.collect()
 
         # Compute mean
         with np.errstate(invalid="ignore"):
@@ -959,6 +989,22 @@ class Combine:
             dpi=dpi,
         )
 
+    def clear_cache(self) -> None:
+        """
+        Clear all cached data to free memory.
+
+        Call this after you're done with the Combine object to release memory
+        used by coordinate caches and nested objects.
+        """
+        self._xy_earth_cache = None
+        self._latlon_cache = None
+        self._bearing.clear_cache()
+        self._bearing._theta.clear_shadow_data()
+        for frame in self._frames:
+            frame.clear_cache()
+            frame.deramped_intensity = None
+            frame.corrected_intensity = None
+
     def __len__(self) -> int:
         """Return number of frames."""
         return len(self._frames)
@@ -1031,6 +1077,16 @@ def _add_arguments(parser) -> None:
         "--netcdf", type=str, default=None, help="Output NetCDF file (e.g., output.nc)"
     )
     parser.add_argument("--show-track", action="store_true", help="Show separate ship track plot")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be processed without actually processing",
+    )
+    parser.add_argument(
+        "--profile-memory",
+        action="store_true",
+        help="Enable memory profiling (shows peak memory usage)",
+    )
 
 
 def add_subparser(subparsers) -> None:
@@ -1054,6 +1110,42 @@ def run(args) -> None:
 
     # Load config
     config = WamosConfig(args.config) if args.config else WamosConfig()
+
+    # Handle --dry-run: show what would be processed without doing it
+    if hasattr(args, "dry_run") and args.dry_run:
+        with ProcessedFrames(
+            stime=args.stime,
+            etime=args.etime,
+            polar_path=args.polar_path,
+            groupby=args.groupby,
+            config=config,
+            radar_height=args.radar_height,
+        ) as pframes:
+            logging.info("=== DRY RUN MODE ===")
+            logging.info(f"Discovered {len(pframes)} files")
+
+            groups = pframes.groups()
+            logging.info(f"Would process {len(groups)} groups")
+
+            total_files = 0
+            for period, file_list in groups.items():
+                file_count = len(file_list)
+                total_files += file_count
+                logging.info(f"  {period}: {file_count} files")
+
+            logging.info(f"Total: {total_files} files in {len(groups)} groups")
+
+            if args.movie:
+                logging.info(f"Would generate movie: {args.movie}")
+            if args.frames_dir:
+                logging.info(f"Would save frames to: {args.frames_dir}")
+            if args.netcdf:
+                logging.info(f"Would save NetCDF to: {args.netcdf}")
+            if args.plot:
+                logging.info("Would show interactive viewer")
+
+            logging.info("=== END DRY RUN ===")
+        return
 
     # For --plot: grid each group immediately to minimize memory usage
     if args.plot:
@@ -1100,10 +1192,7 @@ def run(args) -> None:
                 viewer.add_group_data(group_data)
 
                 # Clear caches and free memory
-                combine.bearing._theta.clear_shadow_data()
-                combine.bearing.clear_cache()
-                for frame in combine.frames:
-                    frame.clear_cache()
+                combine.clear_cache()
                 del combine, frames, group_data
                 gc.collect()
 
@@ -1165,10 +1254,7 @@ def run(args) -> None:
                     nc_writer.append_group(group_data)
 
                     # Clear caches and free memory
-                    combine.bearing._theta.clear_shadow_data()
-                    combine.bearing.clear_cache()
-                    for frame in combine.frames:
-                        frame.clear_cache()
+                    combine.clear_cache()
                     del combine, frames, group_data
                     gc.collect()
 
@@ -1178,8 +1264,8 @@ def run(args) -> None:
             logging.info(f"Saved {n_groups} groups to: {args.netcdf}")
         return
 
-    # Movie generation mode
-    if args.movie:
+    # Movie/frames generation mode
+    if args.movie or args.frames_dir:
         from wamos_tpw.combine_movie import generate_movie
 
         generate_movie(args, config)

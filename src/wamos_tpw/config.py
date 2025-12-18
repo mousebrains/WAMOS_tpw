@@ -425,6 +425,9 @@ def _add_arguments(parser) -> None:
     parser.add_argument(
         "--create-sample", action="store_true", help="Create a sample configuration file"
     )
+    parser.add_argument(
+        "--validate", action="store_true", help="Validate configuration and report issues"
+    )
 
 
 def add_subparser(subparsers) -> None:
@@ -444,8 +447,69 @@ def run(args) -> None:
         logging.info(f"Created sample configuration: {output_file}")
         return
 
-    # Load and display configuration
-    config = WamosConfig(args.config)
+    # Load configuration
+    try:
+        config = WamosConfig(args.config)
+    except ConfigError as e:
+        logging.error(f"Configuration error: {e}")
+        return
+    except Exception as e:
+        logging.error(f"Failed to load configuration: {e}")
+        return
+
+    # Validate mode - detailed validation with warnings
+    if hasattr(args, "validate") and args.validate:
+        warnings = []
+        errors = []
+
+        # Check for potential issues
+        if config.radar.height is None:
+            warnings.append("radar.height is not set - will use metadata or default")
+
+        if config.tower == "UNKNOWN":
+            warnings.append("tower is not set - using default 'UNKNOWN'")
+
+        # Shadow region checks
+        if config.shadow.width > 120:
+            warnings.append(f"shadow.width ({config.shadow.width}deg) is unusually large")
+
+        if config.shadow.width < 30:
+            warnings.append(f"shadow.width ({config.shadow.width}deg) is unusually small")
+
+        # Offset sanity checks
+        total_offset = abs(config.offsets.compass) + abs(config.offsets.bow_to_radar) + abs(config.offsets.heading_delay)
+        if total_offset > 45:
+            warnings.append(f"Total offset ({total_offset}deg) is unusually large")
+
+        # Destreak checks
+        if config.destreak.threshold_sigma < 3:
+            warnings.append(f"destreak.threshold_sigma ({config.destreak.threshold_sigma}) is low - may remove valid data")
+
+        if config.destreak.threshold_sigma > 10:
+            warnings.append(f"destreak.threshold_sigma ({config.destreak.threshold_sigma}) is high - may miss streaks")
+
+        # Report results
+        logging.info("=== Configuration Validation ===")
+        logging.info(f"Config file: {args.config or '(defaults)'}")
+
+        if errors:
+            for error in errors:
+                logging.error(f"ERROR: {error}")
+            logging.info("Validation FAILED")
+            return
+
+        if warnings:
+            logging.info(f"Found {len(warnings)} warning(s):")
+            for warning in warnings:
+                logging.warning(f"  {warning}")
+        else:
+            logging.info("No warnings found")
+
+        logging.info("Validation PASSED")
+        logging.info("=== End Validation ===")
+        return
+
+    # Normal display mode
     logging.info(f"Configuration: {config}")
     logging.info(f"Tower: {config.tower}")
     logging.info(f"Radar height: {config.radar.height}")

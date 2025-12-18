@@ -63,15 +63,42 @@ The package provides a CLI for common operations:
    # Process and combine frames
    wamos combine "2022-04-05 14:00" "2022-04-05 15:00" /path/to/POLAR --plot
 
-   # Dry-run mode
-   wamos --dry-run combine "2022-04-05 14:00" "2022-04-05 15:00" /path/to/POLAR
+   # Generate a movie
+   wamos combine "2022-04-05 14:00" "2022-04-05 15:00" /path/to/POLAR \
+       --movie output.mp4 --groupby=20m --process
+
+Building Documentation
+----------------------
+
+To build the API documentation locally:
+
+.. code-block:: bash
+
+   # Install documentation dependencies
+   pip install -e ".[docs]"
+
+   # Build HTML documentation
+   cd docs
+   make html
+
+   # View in browser
+   open _build/html/index.html
 
 Contents
 --------
 
 .. toctree::
    :maxdepth: 2
-   :caption: Contents:
+   :caption: User Guide:
+
+   architecture
+   configuration
+   examples
+   performance
+
+.. toctree::
+   :maxdepth: 2
+   :caption: API Reference:
 
    api
 

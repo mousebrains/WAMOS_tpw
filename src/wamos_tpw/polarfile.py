@@ -54,17 +54,21 @@ class PolarFile:
 
     _LENGTH_FIELD_SIZE = 10  # Bytes for ASCII length field
 
-    def __init__(self, filepath: str | Path) -> None:
+    def __init__(self, filepath: str | Path, metadata_only: bool = False) -> None:
         """
         Initialize and parse a WAMOS polar file.
 
         Args:
             filepath: Path to .pol file (supports .gz, .bz2, .xz, .lzma)
+            metadata_only: If True, only parse header and frame metadata,
+                          skip binary data loading. Useful for computing
+                          grid bounds without loading full frame data.
         """
         self._filepath = Path(filepath)
         self._header: dict[str, Any] = {}
         self._frame_metadata: list[FrameMetadata] = []
         self._frames: list[Frame] = []
+        self._metadata_only = metadata_only
 
         self._parse()
 
@@ -78,8 +82,9 @@ class PolarFile:
             self._header = self._parse_header(header_lines)
             self._frame_metadata = self._parse_frame_section(frame_lines)
 
-            # Parse binary data
-            self._parse_data(fp)
+            # Parse binary data (skip if metadata_only)
+            if not self._metadata_only:
+                self._parse_data(fp)
 
     def _get_opener(self):
         """Get the appropriate file opener based on extension."""
@@ -368,6 +373,11 @@ class PolarFile:
     def header(self) -> dict[str, Any]:
         """Return the parsed header dictionary."""
         return self._header
+
+    @property
+    def frame_metadata(self) -> list[FrameMetadata]:
+        """Return the parsed frame metadata (available even with metadata_only=True)."""
+        return self._frame_metadata
 
     @property
     def frames(self) -> list[Frame]:

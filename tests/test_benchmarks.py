@@ -178,3 +178,179 @@ class TestThetaCalculations:
 
         x, y = benchmark(transform)
         assert x.shape == (360, 752)
+
+
+class TestProcessingBenchmarks:
+    """Benchmark tests for deramp and destreak processing."""
+
+    def test_deramp_processing(self, benchmark, single_polar_file):
+        """Benchmark deramp processing on real data."""
+        from wamos_tpw.config import WamosConfig
+        from wamos_tpw.deramp import Deramp
+        from wamos_tpw.polarfile import PolarFile
+
+        pf = PolarFile(single_polar_file)
+        frame = pf.frames[0]
+        config = WamosConfig()
+        bearing = np.linspace(0, 359, frame.n_bearings)
+
+        def process():
+            deramp = Deramp(frame, config, bearing=bearing)
+            return deramp.corrected_intensity
+
+        result = benchmark(process)
+        assert result.shape == frame.intensity.shape
+
+    def test_destreak_processing(self, benchmark, single_polar_file):
+        """Benchmark destreak processing on real data."""
+        from wamos_tpw.config import WamosConfig
+        from wamos_tpw.destreak import Destreak
+        from wamos_tpw.polarfile import PolarFile
+
+        pf = PolarFile(single_polar_file)
+        frame = pf.frames[0]
+        frame.deramped_intensity = frame.intensity.astype(np.float64)
+        config = WamosConfig()
+
+        def process():
+            ds = Destreak(None, frame, None, config)
+            return ds.corrected_intensity
+
+        result = benchmark(process)
+        assert result.shape == frame.intensity.shape
+
+
+class TestFileBenchmarks:
+    """Benchmark tests for file I/O operations."""
+
+    def test_polar_file_loading(self, benchmark, single_polar_file):
+        """Benchmark polar file loading."""
+        from wamos_tpw.polarfile import PolarFile
+
+        result = benchmark(PolarFile, single_polar_file)
+        assert len(result.frames) > 0
+
+    def test_polar_file_metadata_only(self, benchmark, single_polar_file):
+        """Benchmark metadata-only loading."""
+        from wamos_tpw.polarfile import PolarFile
+
+        result = benchmark(PolarFile, single_polar_file, metadata_only=True)
+        assert result.header is not None
+
+
+class TestGriddingBenchmarks:
+    """Benchmark tests for gridding operations."""
+
+    @pytest.fixture
+    def grid_data(self):
+        """Create sample data for gridding."""
+        n_points = 100000
+        x = np.random.uniform(-5000, 5000, n_points)
+        y = np.random.uniform(-5000, 5000, n_points)
+        values = np.random.rand(n_points)
+        return x, y, values
+
+    def test_histogram2d_gridding(self, benchmark, grid_data):
+        """Benchmark histogram2d for gridding."""
+        x, y, values = grid_data
+        x_edges = np.linspace(-5000, 5000, 201)
+        y_edges = np.linspace(-5000, 5000, 201)
+
+        def grid():
+            counts, _, _ = np.histogram2d(x, y, bins=[x_edges, y_edges])
+            sums, _, _ = np.histogram2d(x, y, bins=[x_edges, y_edges], weights=values)
+            with np.errstate(invalid="ignore"):
+                return sums / counts
+
+        result = benchmark(grid)
+        assert result.shape == (200, 200)
+
+    def test_searchsorted_binning(self, benchmark, grid_data):
+        """Benchmark searchsorted for bin assignment."""
+        x, y, _ = grid_data
+        x_edges = np.linspace(-5000, 5000, 201)
+
+        def bin_assign():
+            return np.searchsorted(x_edges, x) - 1
+
+        result = benchmark(bin_assign)
+        assert len(result) == len(x)
+
+
+class TestEndToEndBenchmarks:
+    """Benchmark tests for end-to-end processing pipelines."""
+
+    def test_theta_calculation(self, benchmark, single_polar_file):
+        """Benchmark Theta calculation."""
+        from wamos_tpw.bearing import Theta
+        from wamos_tpw.config import WamosConfig
+        from wamos_tpw.polarfile import PolarFile
+
+        pf = PolarFile(single_polar_file)
+        frames = pf.frames[:1]  # Single frame for speed
+        config = WamosConfig()
+
+        def compute():
+            return Theta(frames, config, refine=False)
+
+        result = benchmark(compute)
+        assert result is not None
+
+    def test_bearing_calculation(self, benchmark, single_polar_file):
+        """Benchmark Bearing coordinate calculation."""
+        from wamos_tpw.bearing import Theta, Bearing
+        from wamos_tpw.config import WamosConfig
+        from wamos_tpw.polarfile import PolarFile
+
+        pf = PolarFile(single_polar_file)
+        frames = pf.frames[:1]
+        config = WamosConfig()
+        theta = Theta(frames, config, refine=False)
+
+        def compute():
+            bearing = Bearing(theta, radar_height=25.0, cache_coordinates=False)
+            return bearing.xy_earth(0)
+
+        x, y = benchmark(compute)
+        assert x.shape == frames[0].intensity.shape
+
+    def test_combine_single_frame(self, benchmark, single_polar_file):
+        """Benchmark Combine for single frame."""
+        from wamos_tpw.combine import Combine
+        from wamos_tpw.config import WamosConfig
+        from wamos_tpw.polarfile import PolarFile
+
+        pf = PolarFile(single_polar_file)
+        frames = pf.frames[:1]
+        frames[0].corrected_intensity = frames[0].intensity.astype(np.float64)
+        config = WamosConfig()
+
+        def compute():
+            return Combine(frames, config, radar_height=25.0, cache_coordinates=False)
+
+        result = benchmark(compute)
+        assert result is not None
+
+
+class TestNormalizationBenchmarks:
+    """Benchmark tests for normalization operations."""
+
+    def test_normalize_frames(self, benchmark):
+        """Benchmark frame normalization."""
+        from wamos_tpw.combine_streaming import normalize_frames
+
+        # Create sample frames
+        frames = [np.random.rand(360, 752).astype(np.float64) for _ in range(10)]
+
+        result = benchmark(normalize_frames, frames)
+        assert len(result) == 10
+
+    def test_percentile_calculation(self, benchmark):
+        """Benchmark percentile calculation on large array."""
+        data = np.random.rand(360 * 752 * 10)
+
+        def compute():
+            return np.percentile(data, [1, 99])
+
+        result = benchmark(compute)
+        assert len(result) == 2

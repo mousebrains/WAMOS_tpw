@@ -116,27 +116,15 @@ class Destreak:
 
     def _compute_destreak(self) -> None:
         """
-        Compute destreaking using angular gradient analysis.
+        Compute destreaking using angular gradient analysis with circular theta.
 
         Streaks show up as bright returns with a constant angle (radial lines).
         The algorithm detects them by looking for a derivative signature where
         there's a large positive value followed by a large negative value
         (i.e., intensity spikes along the bearing direction).
 
-        Edge handling:
-        - If prev_frame exists: prepend its last theta row to enable streak
-          detection in center_frame's first theta bin
-        - If next_frame exists: append its first theta row to enable streak
-          detection in center_frame's last theta bin
-        - If prev_frame is None: assume no streaks in first theta bin
-        - If next_frame is None: assume no streaks in last theta bin
-
-        The second difference operation (detecting spikes) at index i is centered
-        on the original data at index i+1. So:
-        - With prev_frame: we can detect streaks starting at center[0]
-        - Without prev_frame: detection starts at center[1], pad False at start
-        - With next_frame: we can detect streaks up to center[n-1]
-        - Without next_frame: detection ends at center[n-2], pad False at end
+        Theta is treated as circular - the last bearing wraps to the first.
+        This eliminates the need for prev_frame/next_frame for edge handling.
 
         Based on destreak_frame() from tpw01.m:
         - Matlab frame shape: (range, theta) - operations along theta (dim 2)
@@ -153,80 +141,33 @@ class Destreak:
             center_data = self._center.intensity.astype(np.float32)
         n_bearings, n_distances = center_data.shape
 
-        # Build extended frame with neighbor data for edge detection
-        has_prev = self._prev is not None
-        has_next = self._next is not None
+        # Circular diff: append first row to end to handle wraparound
+        # This gives us n_bearings differences (including last->first)
+        frame_wrapped = np.vstack([center_data, center_data[:1, :]])
+        a = np.diff(frame_wrapped, axis=0)  # Shape: (n_bearings, n_distances)
+        del frame_wrapped
 
-        frame = center_data
-
-        if has_prev:
-            # Prepend last theta row from previous frame
-            prev_intensity = getattr(self._prev, "deramped_intensity", None)
-            if prev_intensity is None:
-                prev_intensity = self._prev.intensity
-            if prev_intensity is not None:
-                prev_last = prev_intensity[-1:, :].astype(np.float32)
-                frame = np.vstack([prev_last, frame])
-            else:
-                # No valid intensity data, treat as no prev frame
-                has_prev = False
-
-        if has_next:
-            # Append first theta row from next frame
-            next_intensity = getattr(self._next, "deramped_intensity", None)
-            if next_intensity is None:
-                next_intensity = self._next.intensity
-            if next_intensity is not None:
-                next_first = next_intensity[:1, :].astype(np.float32)
-                frame = np.vstack([frame, next_first])
-            else:
-                # No valid intensity data, treat as no next frame
-                has_next = False
-
-        # Calculate derivative along bearing direction
-        # Matlab: a = diff(frame, 1, 2)  -> diff along theta (dim 2)
-        # Python: axis 0 is bearings (theta equivalent)
-        a = np.diff(frame, axis=0)
-
-        # Enhance adjacent bins across streak: find spike patterns
+        # Circular second diff: find spike patterns
         # Where there's a large positive derivative followed by a large negative one
-        # Matlab: a = a(:,1:end-1) - a(:,2:end)
-        # second_diff[i] is centered on frame[i+1]
-        a = a[:-1, :] - a[1:, :]
+        # a[i] - a[i+1] but with circular indexing
+        a_wrapped = np.vstack([a, a[:1, :]])
+        second_diff = a_wrapped[:-1, :] - a_wrapped[1:, :]  # Shape: (n_bearings, n_distances)
+        del a, a_wrapped
 
         # Keep only positive values (streak signature has this pattern)
-        a = np.maximum(a, 0)
+        second_diff = np.maximum(second_diff, 0)
 
-        # Dynamically determine threshold by finding histogram minimum
-        # The histogram typically has a peak of normal values and a tail of streak values
-        # The minimum between them is a natural threshold point
-        threshold = self._find_histogram_threshold(a)
+        # Dynamically determine threshold
+        threshold = self._find_histogram_threshold(second_diff)
 
         # Create mask for streak locations
-        q = a > threshold
+        q = second_diff > threshold
 
         # Filter out radials that don't have at least min_streak_length contiguous flagged bins
-        # A real streak should have a continuous run of detections, not scattered pixels
-        # Use vectorized filtering for better performance
         q = self._filter_streaks_vectorized(q, self._min_streak_length)
 
         # Store derivative for diagnostics
-        self._derivative = a
-
-        # The mask q now covers:
-        # - With both neighbors: center indices 0 to n-1 (full coverage)
-        # - With prev only: center indices 0 to n-2
-        # - With next only: center indices 1 to n-1
-        # - With neither: center indices 1 to n-2
-
-        # Pad to match center_frame dimensions
-        if not has_prev:
-            # No prev frame - assume no streak in first theta bin
-            q = np.vstack([np.zeros((1, n_distances), dtype=bool), q])
-
-        if not has_next:
-            # No next frame - assume no streak in last theta bin
-            q = np.vstack([q, np.zeros((1, n_distances), dtype=bool)])
+        self._derivative = second_diff
 
         # Ensure q matches center_frame dimensions
         assert q.shape == (
@@ -234,12 +175,10 @@ class Destreak:
             n_distances,
         ), f"Mask shape {q.shape} doesn't match frame shape {(n_bearings, n_distances)}"
 
-        # Mark streak pixels as NaN (modify center_data in-place since it's not needed after)
+        # Mark streak pixels as NaN
         center_data[q] = np.nan
 
         # Fill missing values with moving mean along bearing direction
-        # Matlab: c = fillmissing(b, "movmean", 3, 2) - along theta (dim 2)
-        # Python: along axis 0 (bearings)
         c = self._fill_missing_movmean(center_data, window=self._FILL_WINDOW, axis=0)
 
         self._corrected = c
