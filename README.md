@@ -1,5 +1,10 @@
 # wamos_tpw
 
+[![CI](https://github.com/mousebrains/WAMOS_tpw/actions/workflows/ci.yml/badge.svg)](https://github.com/mousebrains/WAMOS_tpw/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/mousebrains/WAMOS_tpw/branch/main/graph/badge.svg)](https://codecov.io/gh/mousebrains/WAMOS_tpw)
+[![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+
 WAMOS (Wave and Meteorological Observation System) marine radar data processing pipeline.
 
 Loads, parses, processes, and visualizes radar scan data from `.pol` files.
@@ -63,4 +68,4 @@ Derived from code developed at [CORDC at SIO](https://cordc.ucsd.edu).
 
 ## License
 
-MIT
+GPL-3.0-or-later
