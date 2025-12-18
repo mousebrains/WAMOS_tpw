@@ -7,8 +7,8 @@ name = "wamos_tpw"
 version = "0.1.0"
 description = "WAMOS marine radar data processing pipeline"
 readme = "README.md"
-license = "MIT"
-requires-python = ">=3.10"
+license = "GPL-3.0-or-later"
+requires-python = ">=3.13"
 authors = [
     {name = "WAMOS Team"},
 ]
@@ -16,11 +16,10 @@ keywords = ["wamos", "radar", "marine", "oceanography"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Atmospheric Science",
 ]
 dependencies = [
@@ -28,12 +27,32 @@ dependencies = [
     "scipy>=1.10",
     "matplotlib>=3.7",
     "pyyaml>=6.0",
+    "tqdm>=4.65",
+    "pandas>=2.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
     "pytest-cov",
+    "pytest-benchmark",
+    "mypy>=1.0",
+    "types-PyYAML",
+    "ruff>=0.1",
+    "pre-commit>=3.0",
+]
+docs = [
+    "sphinx>=7.0",
+    "sphinx-rtd-theme>=2.0",
+    "sphinx-autodoc-typehints>=1.25",
+]
+export = [
+    "xarray>=2023.0",
+    "netCDF4>=1.6",
+    "zarr>=2.16",
+]
+all = [
+    "wamos_tpw[dev,docs,export]",
 ]
 
 [project.scripts]
@@ -85,7 +104,7 @@ disable_error_code = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "W"]
