@@ -74,7 +74,7 @@ intersphinx_mapping = {
 }
 
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "CLAUDE.md"]
 
 # -- Options for HTML output -------------------------------------------------
 
@@ -92,10 +92,3 @@ html_theme_options = {
 }
 
 # -- Extension configuration -------------------------------------------------
-
-# Add any paths that contain templates here, relative to this directory.
-templates_path = ["_templates"]
-
-# List of patterns, relative to source directory, that match files and
-# directories to ignore when looking for source files.
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]

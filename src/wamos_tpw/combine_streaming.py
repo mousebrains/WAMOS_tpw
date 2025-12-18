@@ -62,7 +62,7 @@ def compute_grid_bounds_from_metadata(
 
     Returns:
         Tuple of (frame_metadata_list, x_min, x_max, y_min, y_max, max_range,
-                  ship_x, ship_y, ship_speeds, ship_headings, wind_speeds, wind_dirs)
+        ship_x, ship_y, ship_speeds, ship_headings, wind_speeds, wind_dirs)
         or None if no valid metadata found.
     """
     # Earth radius for lat/lon to meters conversion
