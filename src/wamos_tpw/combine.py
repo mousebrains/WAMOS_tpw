@@ -769,14 +769,17 @@ class Combine:
         max_range *= 1.1  # padding
 
         # Compute bounds in rotated coordinates
-        # Along track (Y): based on ship track extent
+        # Along track (Y): based on ship track extent + radar range
         y_min = ship_y_rot.min() - max_range
         y_max = ship_y_rot.max() + max_range
 
-        # Cross track (X): based on radar range from track center
+        # Cross track (X): based on ship track extent + radar range
+        # (accounts for lateral ship movement, not just track center)
+        x_min = ship_x_rot.min() - max_range
+        x_max = ship_x_rot.max() + max_range
+
+        # Keep track center for non-uniform grid
         track_x_center = (ship_x_rot.min() + ship_x_rot.max()) / 2
-        x_min = track_x_center - max_range
-        x_max = track_x_center + max_range
 
         # Create grid edges
         # Along track: uniform (ship moves at constant speed)
