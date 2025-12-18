@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.abspath("../src"))
 project = "wamos_tpw"
 copyright = "2025, Pat Welch"
 author = "Pat Welch"
-release = "0.1.0"
+release = "0.2.0"
 
 # -- General configuration ---------------------------------------------------
 

@@ -1,6 +1,6 @@
 """WAMOS marine radar data processing pipeline."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from wamos_tpw.frame import Frame
 from wamos_tpw.polarfile import PolarFile

@@ -7,14 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2025-12
+
 ### Added
 - Decomposed large methods in `bearing.py` for better readability
 - Complete API documentation with Sphinx
 - Performance documentation and benchmarking guidance
 - Integration test for full pipeline
+- TestPyPI publishing workflow with trusted publishers
 
 ### Changed
 - More specific type ignore comments throughout codebase
+- License corrected to MIT in pyproject.toml (matching LICENSE file)
 
 ## [0.1.0] - 2025-12
 
@@ -72,5 +76,6 @@ Initial release of the wamos_tpw package.
 - All bearings normalized to [0, 360)
 - Radar height priority: CLI > config > metadata > wind sensor height
 
-[Unreleased]: https://github.com/mousebrains/WAMOS_tpw/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/mousebrains/WAMOS_tpw/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/mousebrains/WAMOS_tpw/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/mousebrains/WAMOS_tpw/releases/tag/v0.1.0
