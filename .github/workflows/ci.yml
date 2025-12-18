@@ -38,6 +38,9 @@ jobs:
     - name: Lint with ruff
       run: ruff check src/ tests/
 
+    - name: Check formatting with ruff
+      run: ruff format --check src/ tests/
+
     - name: Type check with mypy
       run: |
         pip install numpy scipy matplotlib pyyaml types-PyYAML pandas tqdm
