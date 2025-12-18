@@ -10,9 +10,20 @@ from wamos_tpw.bearing import Theta, Bearing
 from wamos_tpw.timestamp import Timestamp
 from wamos_tpw.config import WamosConfig
 from wamos_tpw.processed import ProcessedFrames
+from wamos_tpw.dataset import WamosDataset
+from wamos_tpw.exceptions import (
+    WamosError,
+    PolarFileError,
+    ConfigError,
+    ProcessingError,
+    ValidationError,
+)
 
 __all__ = [
     "__version__",
+    # High-level API
+    "WamosDataset",
+    # Core classes
     "Frame",
     "PolarFile",
     "Filenames",
@@ -22,4 +33,10 @@ __all__ = [
     "Timestamp",
     "WamosConfig",
     "ProcessedFrames",
+    # Exceptions
+    "WamosError",
+    "PolarFileError",
+    "ConfigError",
+    "ProcessingError",
+    "ValidationError",
 ]

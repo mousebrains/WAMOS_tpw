@@ -16,9 +16,9 @@ class TestFilenames:
             pytest.skip("April test data not available")
 
         fn = Filenames(
-            stime=_parse_timestamp('202204051400'),
-            etime=_parse_timestamp('202204051500'),
-            polar_path=test_data_dir
+            stime=_parse_timestamp("202204051400"),
+            etime=_parse_timestamp("202204051500"),
+            polar_path=test_data_dir,
         )
 
         files = list(fn.files)
@@ -31,9 +31,9 @@ class TestFilenames:
             pytest.skip("March test data not available")
 
         fn = Filenames(
-            stime=_parse_timestamp('202203280300'),
-            etime=_parse_timestamp('202203280400'),
-            polar_path=test_data_dir
+            stime=_parse_timestamp("202203280300"),
+            etime=_parse_timestamp("202203280400"),
+            polar_path=test_data_dir,
         )
 
         files = list(fn.files)
@@ -46,12 +46,12 @@ class TestFilenames:
             pytest.skip("March test data not available")
 
         fn = Filenames(
-            stime=_parse_timestamp('202203280300'),
-            etime=_parse_timestamp('202203280400'),
-            polar_path=test_data_dir
+            stime=_parse_timestamp("202203280300"),
+            etime=_parse_timestamp("202203280400"),
+            polar_path=test_data_dir,
         )
 
-        groups = fn.groupby('h')
+        groups = fn.groupby("h")
         assert len(groups) >= 1
 
         for period, files in groups.items():

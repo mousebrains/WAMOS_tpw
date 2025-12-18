@@ -62,8 +62,8 @@ def _handle_error(error: Exception) -> None:
 def main() -> None:
     """Main entry point for the wamos CLI."""
     parser = argparse.ArgumentParser(
-        prog='wamos',
-        description='WAMOS marine radar data processing tools',
+        prog="wamos",
+        description="WAMOS marine radar data processing tools",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -73,19 +73,20 @@ Examples:
   wamos list "2022-04-05 14:00" "2022-04-05 15:00" /path/to/POLAR
   wamos parse /path/to/file.pol --show-header
   wamos combine --dry-run "2022-04-05 14:00" "2022-04-05 15:00" /path/to/POLAR
-"""
+""",
     )
 
     # Global options
-    parser.add_argument("--dry-run", "-n", action="store_true",
-                        help="Show what would be done without executing")
+    parser.add_argument(
+        "--dry-run", "-n", action="store_true", help="Show what would be done without executing"
+    )
     add_logging_arguments(parser)
 
     subparsers = parser.add_subparsers(
-        dest='command',
-        title='commands',
-        description='Available processing commands',
-        metavar='COMMAND'
+        dest="command",
+        title="commands",
+        description="Available processing commands",
+        metavar="COMMAND",
     )
 
     # Register subcommands from each module
@@ -93,16 +94,16 @@ Examples:
     from wamos_tpw import filenames, polarfile, timestamp, config
     from wamos_tpw import deramp, destreak
 
-    combine.add_subparser(subparsers)      # wamos combine
-    processed.add_subparser(subparsers)    # wamos process
-    files.add_subparser(subparsers)        # wamos view
-    bearing.add_subparser(subparsers)      # wamos bearing
-    filenames.add_subparser(subparsers)    # wamos list
-    polarfile.add_subparser(subparsers)    # wamos parse
-    timestamp.add_subparser(subparsers)    # wamos timestamp
-    config.add_subparser(subparsers)       # wamos config
-    deramp.add_subparser(subparsers)       # wamos deramp
-    destreak.add_subparser(subparsers)     # wamos destreak
+    combine.add_subparser(subparsers)  # wamos combine
+    processed.add_subparser(subparsers)  # wamos process
+    files.add_subparser(subparsers)  # wamos view
+    bearing.add_subparser(subparsers)  # wamos bearing
+    filenames.add_subparser(subparsers)  # wamos list
+    polarfile.add_subparser(subparsers)  # wamos parse
+    timestamp.add_subparser(subparsers)  # wamos timestamp
+    config.add_subparser(subparsers)  # wamos config
+    deramp.add_subparser(subparsers)  # wamos deramp
+    destreak.add_subparser(subparsers)  # wamos destreak
 
     # Parse arguments
     args = parser.parse_args()

@@ -7,10 +7,15 @@
 
 from __future__ import annotations
 
+import logging
 import numpy as np
 from typing import Any
 from dataclasses import dataclass, field
 
+from wamos_tpw.exceptions import ValidationError
+
+
+logger = logging.getLogger(__name__)
 
 # Conversion constant
 KNOTS_TO_MS = 0.514444  # 1 knot = 0.514444 m/s
@@ -22,6 +27,7 @@ class FrameMetadata:
 
     Note: ship_speed is stored in m/s (converted from knots at parse time).
     """
+
     timestamp: np.datetime64
     filename: str
     frame_index: int = 0
@@ -62,11 +68,11 @@ class Frame:
     """
 
     # Bit masks for extraction
-    _MASK_DATA = np.uint16(0x0FFF)      # Bottom 12 bits
-    _MASK_BIT12 = np.uint16(0x1000)     # Bit 12 (PPS)
-    _MASK_BIT13 = np.uint16(0x2000)     # Bit 13 (Bearing pulse)
-    _MASK_BIT14 = np.uint16(0x4000)     # Bit 14
-    _MASK_BIT15 = np.uint16(0x8000)     # Bit 15
+    _MASK_DATA = np.uint16(0x0FFF)  # Bottom 12 bits
+    _MASK_BIT12 = np.uint16(0x1000)  # Bit 12 (PPS)
+    _MASK_BIT13 = np.uint16(0x2000)  # Bit 13 (Bearing pulse)
+    _MASK_BIT14 = np.uint16(0x4000)  # Bit 14
+    _MASK_BIT15 = np.uint16(0x8000)  # Bit 15
 
     # Physical constants for range calculations
     _C_VACUUM = 299_792_458.0  # Speed of light in vacuum (m/s)
@@ -79,10 +85,9 @@ class Frame:
     # Speed of light in air at standard conditions (m/s)
     _C_AIR = _C_VACUUM / _N_AIR_STANDARD  # ~299,710,639 m/s
 
-    def __init__(self,
-                 data: np.ndarray,
-                 metadata: FrameMetadata,
-                 copy: bool = False) -> None:
+    def __init__(
+        self, data: np.ndarray, metadata: FrameMetadata, copy: bool = False, validate: bool = True
+    ) -> None:
         """
         Initialize a Frame with raw uint16 radar data.
 
@@ -90,9 +95,15 @@ class Frame:
             data: Raw uint16 radar data array, shape (n_bearings, n_distances)
             metadata: FrameMetadata object with frame information
             copy: If True, copy the data array; if False, use view (default)
+            validate: If True, validate data integrity (default)
         """
         if data.dtype != np.uint16:
-            raise ValueError(f"Data must be uint16, got {data.dtype}")
+            raise ValidationError(
+                f"Data must be uint16, got {data.dtype}", parameter="data", value=str(data.dtype)
+            )
+
+        if validate:
+            self._validate_data(data, metadata)
 
         self._raw_data = data.copy() if copy else data
         self._metadata = metadata
@@ -107,6 +118,87 @@ class Frame:
         # Processing results (set by external processing pipeline)
         self.deramped_intensity: np.ndarray | None = None
         self.corrected_intensity: np.ndarray | None = None
+
+        logger.debug(f"Frame created: shape={data.shape}, timestamp={metadata.timestamp}")
+
+    @staticmethod
+    def _validate_data(data: np.ndarray, metadata: FrameMetadata) -> None:
+        """
+        Validate frame data integrity.
+
+        Args:
+            data: Raw uint16 radar data array
+            metadata: FrameMetadata object
+
+        Raises:
+            ValidationError: If data validation fails
+        """
+        # Check dimensions
+        if data.ndim != 2:
+            raise ValidationError(
+                f"Data must be 2D, got {data.ndim}D", parameter="data", value=str(data.ndim)
+            )
+
+        n_bearings, n_distances = data.shape
+
+        # Check reasonable array sizes
+        if n_bearings < 1 or n_bearings > 10000:
+            raise ValidationError(
+                f"Unexpected number of bearings: {n_bearings} (expected 1-10000)",
+                parameter="n_bearings",
+                value=str(n_bearings),
+            )
+
+        if n_distances < 1 or n_distances > 10000:
+            raise ValidationError(
+                f"Unexpected number of distances: {n_distances} (expected 1-10000)",
+                parameter="n_distances",
+                value=str(n_distances),
+            )
+
+        # Validate metadata consistency
+        if metadata.samples_in_range > 0 and metadata.samples_in_range != n_distances:
+            logger.warning(
+                f"Metadata samples_in_range ({metadata.samples_in_range}) doesn't "
+                f"match data shape ({n_distances})"
+            )
+
+        # Check for all-zero data (possible corruption)
+        if np.all(data == 0):
+            logger.warning("Data array is all zeros - possible corruption")
+
+        # Check for all-max data (possible saturation)
+        if np.all(data == 65535):
+            logger.warning("Data array is all 65535 - possible saturation")
+
+        # Validate coordinate ranges
+        if metadata.latitude is not None:
+            if not -90 <= metadata.latitude <= 90:
+                raise ValidationError(
+                    f"Latitude out of range: {metadata.latitude}",
+                    parameter="latitude",
+                    value=str(metadata.latitude),
+                )
+
+        if metadata.longitude is not None:
+            if not -180 <= metadata.longitude <= 180:
+                raise ValidationError(
+                    f"Longitude out of range: {metadata.longitude}",
+                    parameter="longitude",
+                    value=str(metadata.longitude),
+                )
+
+        if metadata.heading is not None:
+            if not 0 <= metadata.heading < 360:
+                logger.warning(f"Heading outside [0, 360): {metadata.heading}")
+
+        if metadata.sampling_frequency is not None:
+            if metadata.sampling_frequency < 0:
+                raise ValidationError(
+                    f"Negative sampling frequency: {metadata.sampling_frequency}",
+                    parameter="sampling_frequency",
+                    value=str(metadata.sampling_frequency),
+                )
 
     @property
     def metadata(self) -> FrameMetadata:
@@ -172,9 +264,9 @@ class Frame:
             Boolean array where True indicates PPS signal present
         """
         if self._bit12 is None:
-            self._bit12 = np.not_equal(
-                np.bitwise_and(self._raw_data, self._MASK_BIT12), 0
-            ).astype(np.bool_)
+            self._bit12 = np.not_equal(np.bitwise_and(self._raw_data, self._MASK_BIT12), 0).astype(
+                np.bool_
+            )
         return self._bit12
 
     @property
@@ -191,9 +283,9 @@ class Frame:
             Boolean array where True indicates bearing pulse present
         """
         if self._bit13 is None:
-            self._bit13 = np.not_equal(
-                np.bitwise_and(self._raw_data, self._MASK_BIT13), 0
-            ).astype(np.bool_)
+            self._bit13 = np.not_equal(np.bitwise_and(self._raw_data, self._MASK_BIT13), 0).astype(
+                np.bool_
+            )
         return self._bit13
 
     @property
@@ -210,9 +302,9 @@ class Frame:
             Boolean array
         """
         if self._bit14 is None:
-            self._bit14 = np.not_equal(
-                np.bitwise_and(self._raw_data, self._MASK_BIT14), 0
-            ).astype(np.bool_)
+            self._bit14 = np.not_equal(np.bitwise_and(self._raw_data, self._MASK_BIT14), 0).astype(
+                np.bool_
+            )
         return self._bit14
 
     @property
@@ -224,16 +316,16 @@ class Frame:
             Boolean array
         """
         if self._bit15 is None:
-            self._bit15 = np.not_equal(
-                np.bitwise_and(self._raw_data, self._MASK_BIT15), 0
-            ).astype(np.bool_)
+            self._bit15 = np.not_equal(np.bitwise_and(self._raw_data, self._MASK_BIT15), 0).astype(
+                np.bool_
+            )
         return self._bit15
 
     # -------------------------------------------------------------------------
     # Distance row selection (across all theta bins)
     # -------------------------------------------------------------------------
 
-    def get_distance_row(self, distance_idx: int, extract: str = 'intensity') -> np.ndarray:
+    def get_distance_row(self, distance_idx: int, extract: str = "intensity") -> np.ndarray:
         """
         Extract a single distance row across all theta (bearing) bins.
 
@@ -249,34 +341,30 @@ class Frame:
             >>> frame.get_distance_row(50, 'bit12')       # PPS flags at range bin 50
         """
         if distance_idx < 0 or distance_idx >= self.n_distances:
-            raise IndexError(
-                f"Distance index {distance_idx} out of range [0, {self.n_distances})"
-            )
+            raise IndexError(f"Distance index {distance_idx} out of range [0, {self.n_distances})")
 
         extractors = {
-            'intensity': lambda: self.intensity[:, distance_idx],
-            'data': lambda: self.intensity[:, distance_idx],
-            'raw': lambda: self._raw_data[:, distance_idx],
-            'bit12': lambda: self.bit12[:, distance_idx],
-            'pps': lambda: self.bit12[:, distance_idx],
-            'bit13': lambda: self.bit13[:, distance_idx],
-            'bearing_pulse': lambda: self.bit13[:, distance_idx],
-            'bit14': lambda: self.bit14[:, distance_idx],
-            'bit15': lambda: self.bit15[:, distance_idx],
+            "intensity": lambda: self.intensity[:, distance_idx],
+            "data": lambda: self.intensity[:, distance_idx],
+            "raw": lambda: self._raw_data[:, distance_idx],
+            "bit12": lambda: self.bit12[:, distance_idx],
+            "pps": lambda: self.bit12[:, distance_idx],
+            "bit13": lambda: self.bit13[:, distance_idx],
+            "bearing_pulse": lambda: self.bit13[:, distance_idx],
+            "bit14": lambda: self.bit14[:, distance_idx],
+            "bit15": lambda: self.bit15[:, distance_idx],
         }
 
         if extract not in extractors:
             raise ValueError(
-                f"Unknown extract type '{extract}'. "
-                f"Use: {', '.join(extractors.keys())}"
+                f"Unknown extract type '{extract}'. Use: {', '.join(extractors.keys())}"
             )
 
         return extractors[extract]()
 
-    def get_distance_range(self,
-                           start_idx: int,
-                           end_idx: int,
-                           extract: str = 'intensity') -> np.ndarray:
+    def get_distance_range(
+        self, start_idx: int, end_idx: int, extract: str = "intensity"
+    ) -> np.ndarray:
         """
         Extract a range of distance rows across all theta bins.
 
@@ -294,15 +382,15 @@ class Frame:
             )
 
         extractors = {
-            'intensity': lambda: self.intensity[:, start_idx:end_idx],
-            'data': lambda: self.intensity[:, start_idx:end_idx],
-            'raw': lambda: self._raw_data[:, start_idx:end_idx],
-            'bit12': lambda: self.bit12[:, start_idx:end_idx],
-            'pps': lambda: self.bit12[:, start_idx:end_idx],
-            'bit13': lambda: self.bit13[:, start_idx:end_idx],
-            'bearing_pulse': lambda: self.bit13[:, start_idx:end_idx],
-            'bit14': lambda: self.bit14[:, start_idx:end_idx],
-            'bit15': lambda: self.bit15[:, start_idx:end_idx],
+            "intensity": lambda: self.intensity[:, start_idx:end_idx],
+            "data": lambda: self.intensity[:, start_idx:end_idx],
+            "raw": lambda: self._raw_data[:, start_idx:end_idx],
+            "bit12": lambda: self.bit12[:, start_idx:end_idx],
+            "pps": lambda: self.bit12[:, start_idx:end_idx],
+            "bit13": lambda: self.bit13[:, start_idx:end_idx],
+            "bearing_pulse": lambda: self.bit13[:, start_idx:end_idx],
+            "bit14": lambda: self.bit14[:, start_idx:end_idx],
+            "bit15": lambda: self.bit15[:, start_idx:end_idx],
         }
 
         if extract not in extractors:
@@ -310,7 +398,7 @@ class Frame:
 
         return extractors[extract]()
 
-    def get_bearing_row(self, bearing_idx: int, extract: str = 'intensity') -> np.ndarray:
+    def get_bearing_row(self, bearing_idx: int, extract: str = "intensity") -> np.ndarray:
         """
         Extract a single bearing row across all distance bins.
 
@@ -322,20 +410,18 @@ class Frame:
             1D array of shape (n_distances,) containing the requested data
         """
         if bearing_idx < 0 or bearing_idx >= self.n_bearings:
-            raise IndexError(
-                f"Bearing index {bearing_idx} out of range [0, {self.n_bearings})"
-            )
+            raise IndexError(f"Bearing index {bearing_idx} out of range [0, {self.n_bearings})")
 
         extractors = {
-            'intensity': lambda: self.intensity[bearing_idx, :],
-            'data': lambda: self.intensity[bearing_idx, :],
-            'raw': lambda: self._raw_data[bearing_idx, :],
-            'bit12': lambda: self.bit12[bearing_idx, :],
-            'pps': lambda: self.bit12[bearing_idx, :],
-            'bit13': lambda: self.bit13[bearing_idx, :],
-            'bearing_pulse': lambda: self.bit13[bearing_idx, :],
-            'bit14': lambda: self.bit14[bearing_idx, :],
-            'bit15': lambda: self.bit15[bearing_idx, :],
+            "intensity": lambda: self.intensity[bearing_idx, :],
+            "data": lambda: self.intensity[bearing_idx, :],
+            "raw": lambda: self._raw_data[bearing_idx, :],
+            "bit12": lambda: self.bit12[bearing_idx, :],
+            "pps": lambda: self.bit12[bearing_idx, :],
+            "bit13": lambda: self.bit13[bearing_idx, :],
+            "bearing_pulse": lambda: self.bit13[bearing_idx, :],
+            "bit14": lambda: self.bit14[bearing_idx, :],
+            "bit15": lambda: self.bit15[bearing_idx, :],
         }
 
         if extract not in extractors:
@@ -400,9 +486,9 @@ class Frame:
         # slant_range = sample_delay_range + bin_index * range_resolution
         return sdrng + bin_indices * delta_r
 
-    def ground_range(self,
-                     radar_height: float | None = None,
-                     bin_indices: np.ndarray | None = None) -> np.ndarray:
+    def ground_range(
+        self, radar_height: float | None = None, bin_indices: np.ndarray | None = None
+    ) -> np.ndarray:
         """
         Calculate ground range (horizontal distance) from radar in meters.
 
@@ -437,28 +523,24 @@ class Frame:
         if radar_height is None:
             radar_height = self._metadata.radar_height
         if radar_height is None:
-            raise ValueError(
-                "radar_height must be provided or set in metadata.radar_height"
-            )
+            raise ValueError("radar_height must be provided or set in metadata.radar_height")
 
         # Calculate slant ranges
         slant = self.slant_range(bin_indices)
 
         # Calculate ground range: sqrt(slant² - height²)
         # For slant < height, result would be imaginary, so clamp to 0
-        height_sq = radar_height ** 2
-        slant_sq = slant ** 2
+        height_sq = radar_height**2
+        slant_sq = slant**2
 
         # Where slant > height, compute ground range; otherwise 0
-        ground = np.where(
-            slant_sq > height_sq,
-            np.sqrt(slant_sq - height_sq),
-            0.0
-        )
+        ground = np.where(slant_sq > height_sq, np.sqrt(slant_sq - height_sq), 0.0)
 
         return ground
 
-    def range_at_bin(self, bin_index: int, radar_height: float | None = None) -> tuple[float, float]:
+    def range_at_bin(
+        self, bin_index: int, radar_height: float | None = None
+    ) -> tuple[float, float]:
         """
         Get both slant and ground range for a single distance bin.
 
@@ -500,9 +582,7 @@ class Frame:
 
     def __repr__(self) -> str:
         return (
-            f"Frame(timestamp={self.timestamp}, "
-            f"shape={self.shape}, "
-            f"file={self._metadata.filename})"
+            f"Frame(timestamp={self.timestamp}, shape={self.shape}, file={self._metadata.filename})"
         )
 
     def __str__(self) -> str:
@@ -531,8 +611,8 @@ def main() -> None:
     raw_data[:, 0] |= 0x2000  # Set bit 13 on first distance
 
     metadata = FrameMetadata(
-        timestamp=np.datetime64('2024-12-15T10:30:00'),
-        filename='test_file.pol',
+        timestamp=np.datetime64("2024-12-15T10:30:00"),
+        filename="test_file.pol",
         latitude=18.57,
         longitude=142.96,
         samples_in_range=n_distances,
@@ -550,11 +630,11 @@ def main() -> None:
     print(f"Bit 13 (bearing) - first distance all True: {frame.bit13[:, 0].all()}")
 
     # Test distance row extraction
-    row = frame.get_distance_row(100, 'intensity')
+    row = frame.get_distance_row(100, "intensity")
     print(f"\nDistance row 100 shape: {row.shape}")
 
     # Test bearing row extraction
-    row = frame.get_bearing_row(0, 'bit12')
+    row = frame.get_bearing_row(0, "bit12")
     print(f"Bearing row 0 (bit12) all True: {row.all()}")
 
     # Test range calculations
@@ -565,11 +645,15 @@ def main() -> None:
 
     # Slant ranges
     slant_ranges = frame.slant_range()
-    print(f"\nSlant range: {slant_ranges[0]:.1f}m (bin 0) to {slant_ranges[-1]:.1f}m (bin {n_distances-1})")
+    print(
+        f"\nSlant range: {slant_ranges[0]:.1f}m (bin 0) to {slant_ranges[-1]:.1f}m (bin {n_distances - 1})"
+    )
 
     # Ground ranges
     ground_ranges = frame.ground_range()
-    print(f"Ground range: {ground_ranges[0]:.1f}m (bin 0) to {ground_ranges[-1]:.1f}m (bin {n_distances-1})")
+    print(
+        f"Ground range: {ground_ranges[0]:.1f}m (bin 0) to {ground_ranges[-1]:.1f}m (bin {n_distances - 1})"
+    )
 
     # Single bin example
     slant, ground = frame.range_at_bin(100)

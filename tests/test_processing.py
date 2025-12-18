@@ -82,11 +82,7 @@ class TestDestreak:
         frame = pf.frames[0]
 
         # Create Destreak with no neighboring frames
-        destreak = Destreak(
-            prev_frame=None,
-            center_frame=frame,
-            next_frame=None
-        )
+        destreak = Destreak(prev_frame=None, center_frame=frame, next_frame=None)
 
         result = destreak.corrected_intensity
 
@@ -105,11 +101,7 @@ class TestDestreak:
             pytest.skip("Need at least 3 frames for neighbor test")
 
         # Use frames 0, 1, 2 as prev, center, next
-        destreak = Destreak(
-            prev_frame=frames[0],
-            center_frame=frames[1],
-            next_frame=frames[2]
-        )
+        destreak = Destreak(prev_frame=frames[0], center_frame=frames[1], next_frame=frames[2])
 
         result = destreak.corrected_intensity
         assert result.shape == frames[1].intensity.shape
@@ -123,11 +115,7 @@ class TestDestreak:
         pf = PolarFile(str(single_polar_file))
         frame = pf.frames[0]
 
-        result = destreak_frame(
-            prev_frame=None,
-            center_frame=frame,
-            next_frame=None
-        )
+        result = destreak_frame(prev_frame=None, center_frame=frame, next_frame=None)
 
         assert result.shape == frame.intensity.shape
         assert result.dtype == np.float32
@@ -149,11 +137,7 @@ class TestProcessingPipeline:
         frame.deramped_intensity = deramped
 
         # Step 2: Destreak (will use deramped_intensity if available)
-        destreak = Destreak(
-            prev_frame=None,
-            center_frame=frame,
-            next_frame=None
-        )
+        destreak = Destreak(prev_frame=None, center_frame=frame, next_frame=None)
         final = destreak.corrected_intensity
 
         # Final should be same shape
@@ -176,11 +160,7 @@ class TestProcessingPipeline:
             frame.deramped_intensity = deramp.corrected_intensity
 
         # Destreak middle frame with neighbors
-        destreak = Destreak(
-            prev_frame=frames[0],
-            center_frame=frames[1],
-            next_frame=frames[2]
-        )
+        destreak = Destreak(prev_frame=frames[0], center_frame=frames[1], next_frame=frames[2])
         result = destreak.corrected_intensity
 
         assert result.shape == frames[1].intensity.shape

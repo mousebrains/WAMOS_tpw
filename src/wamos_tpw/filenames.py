@@ -14,6 +14,7 @@ from concurrent.futures import ProcessPoolExecutor
 from typing import Iterator
 from functools import partial
 
+
 def _extract_file_timestamp(filepath: str) -> np.datetime64 | None:
     """
     Extract timestamp from a filename.
@@ -54,7 +55,7 @@ def _scan_hour_directory(dir_path: str, stime_ns: int, etime_ns: int) -> list[st
                     continue
                 name = entry.name
                 # Check for .pol in filename
-                if '.pol' not in name:
+                if ".pol" not in name:
                     continue
                 # Extract timestamp from filename (first 14 chars: YYYYMMDDHHmmss)
                 if len(name) < 14:
@@ -68,7 +69,7 @@ def _scan_hour_directory(dir_path: str, stime_ns: int, etime_ns: int) -> list[st
                         f"{timestamp_str[:4]}-{timestamp_str[4:6]}-{timestamp_str[6:8]}"
                         f"T{timestamp_str[8:10]}:{timestamp_str[10:12]}:{timestamp_str[12:14]}"
                     )
-                    file_ns = file_time.astype('datetime64[ns]').astype(np.int64)
+                    file_ns = file_time.astype("datetime64[ns]").astype(np.int64)
                     if stime_ns <= file_ns <= etime_ns:
                         matching_files.append(entry.path)
                 except (ValueError, OverflowError):
@@ -86,17 +87,19 @@ class Filenames:
 
     Uses multiprocessing for GIL-free parallel directory scanning.
     """
+
     # Minimum number of hour directories before using parallel processing
     _PARALLEL_THRESHOLD = 4
 
-    def __init__(self,
-                 stime: np.datetime64,
-                 etime: np.datetime64,
-                 polar_path: str,
-                 workers: int | None = None
-                 ) -> None:
-        self.stime = np.datetime64(stime, 'ns')  # type: ignore[call-overload]
-        self.etime = np.datetime64(etime, 'ns')  # type: ignore[call-overload]
+    def __init__(
+        self,
+        stime: np.datetime64,
+        etime: np.datetime64,
+        polar_path: str,
+        workers: int | None = None,
+    ) -> None:
+        self.stime = np.datetime64(stime, "ns")  # type: ignore[call-overload]
+        self.etime = np.datetime64(etime, "ns")  # type: ignore[call-overload]
         if self.stime > self.etime:
             raise ValueError(f"Start time ({self.stime}) must be <= end time ({self.etime})")
         self.polar_path = Path(polar_path)
@@ -109,19 +112,19 @@ class Filenames:
         within the time range. This efficiently prunes the search space.
         """
         # Round stime down to the hour, etime up to include the full hour
-        current = np.datetime64(self.stime, 'h')
-        end_hour = np.datetime64(self.etime, 'h')
+        current = np.datetime64(self.stime, "h")
+        end_hour = np.datetime64(self.etime, "h")
 
         while current <= end_hour:
             # Convert to string and parse: format is "YYYY-MM-DDTHH"
             dt_str = str(current)
-            parts = dt_str.replace('T', '-').split('-')
+            parts = dt_str.replace("T", "-").split("-")
             year_s, month_s, day_s, hour_s = parts[0], parts[1], parts[2], parts[3]
 
             dir_path = self.polar_path / year_s / month_s / day_s / hour_s
             yield str(dir_path)
 
-            current = current + np.timedelta64(1, 'h')
+            current = current + np.timedelta64(1, "h")
 
     def _find_files_parallel(self, hour_dirs: list[str]) -> list[str]:
         """Find files using ProcessPoolExecutor for GIL-free parallelism."""
@@ -186,9 +189,9 @@ class Filenames:
         return f"Filenames(stime={self.stime}, etime={self.etime}, path={self.polar_path}, count={len(self)})"
 
     def __str__(self) -> str:
-        return '\n'.join(self.files)
+        return "\n".join(self.files)
 
-    def __enter__(self) -> 'Filenames':
+    def __enter__(self) -> "Filenames":
         """Enter context manager."""
         return self
 
@@ -218,16 +221,33 @@ class Filenames:
 
         # Unit aliases mapping to numpy datetime64 units
         unit_map = {
-            'year': 'Y', 'years': 'Y', 'Y': 'Y',
-            'month': 'M', 'months': 'M', 'M': 'M',
-            'day': 'D', 'days': 'D', 'D': 'D',
-            'hour': 'h', 'hours': 'h', 'h': 'h', 'H': 'h',
-            'minute': 'm', 'minutes': 'm', 'min': 'm', 'm': 'm', 'T': 'm',
-            'second': 's', 'seconds': 's', 'sec': 's', 's': 's', 'S': 's',
+            "year": "Y",
+            "years": "Y",
+            "Y": "Y",
+            "month": "M",
+            "months": "M",
+            "M": "M",
+            "day": "D",
+            "days": "D",
+            "D": "D",
+            "hour": "h",
+            "hours": "h",
+            "h": "h",
+            "H": "h",
+            "minute": "m",
+            "minutes": "m",
+            "min": "m",
+            "m": "m",
+            "T": "m",
+            "second": "s",
+            "seconds": "s",
+            "sec": "s",
+            "s": "s",
+            "S": "s",
         }
 
         # Try to parse as "number + unit" (e.g., "12m", "30s", "2D")
-        match = re.match(r'^(\d+)\s*([a-zA-Z]+)$', freq)
+        match = re.match(r"^(\d+)\s*([a-zA-Z]+)$", freq)
         if match:
             multiplier = int(match.group(1))
             unit_str = match.group(2)
@@ -245,7 +265,7 @@ class Filenames:
 
         return multiplier, unit_map[unit_str]
 
-    def groupby(self, freq: str = 'h') -> dict[np.datetime64, list[str]]:
+    def groupby(self, freq: str = "h") -> dict[np.datetime64, list[str]]:
         """
         Group files by time frequency.
 
@@ -296,7 +316,7 @@ class Filenames:
         # Return sorted by period
         return dict(sorted(groups.items()))
 
-    def itergroups(self, freq: str = 'h') -> Iterator[tuple[np.datetime64, list[str]]]:
+    def itergroups(self, freq: str = "h") -> Iterator[tuple[np.datetime64, list[str]]]:
         """
         Iterate over file groups by time frequency.
 
@@ -392,7 +412,7 @@ class Filenames:
             raise ValueError(f"Time delta must be positive, got {delta}")
 
         groups: dict[np.datetime64, list[str]] = {}
-        delta_ns = delta.astype('timedelta64[ns]').astype(np.int64)
+        delta_ns = delta.astype("timedelta64[ns]").astype(np.int64)
         stime_ns = self.stime.astype(np.int64)
 
         for filepath in self.files:
@@ -401,11 +421,11 @@ class Filenames:
                 continue
 
             # Calculate which window this file belongs to
-            ts_ns = ts.astype('datetime64[ns]').astype(np.int64)
+            ts_ns = ts.astype("datetime64[ns]").astype(np.int64)
             window_idx = (ts_ns - stime_ns) // delta_ns
             window_start_ns = stime_ns + (window_idx * delta_ns)
             # Convert int64 nanoseconds back to datetime64
-            window_start = window_start_ns.astype('datetime64[ns]')
+            window_start = window_start_ns.astype("datetime64[ns]")
 
             if window_start not in groups:
                 groups[window_start] = []
@@ -454,17 +474,17 @@ def _parse_timestamp(ts: str) -> np.datetime64:
     ts = ts.strip()
 
     # Check if it's already in ISO format (contains dashes)
-    if '-' in ts:
+    if "-" in ts:
         # Normalize space separator to T
-        ts = ts.replace(' ', 'T')
+        ts = ts.replace(" ", "T")
         try:
             return np.datetime64(ts)
         except ValueError:
             raise ValueError(f"Invalid ISO timestamp format: {ts}")
 
     # Handle compact format with T separator (e.g., 20220405T1400)
-    if 'T' in ts:
-        parts = ts.split('T')
+    if "T" in ts:
+        parts = ts.split("T")
         if len(parts) == 2:
             date_part, time_part = parts
             if date_part.isdigit() and time_part.isdigit():
@@ -482,21 +502,21 @@ def _parse_timestamp(ts: str) -> np.datetime64:
     n = len(ts)
 
     # Map length to components: (year, month, day, hour, minute, second, fractional)
-    if n == 4:      # YYYY
+    if n == 4:  # YYYY
         iso = f"{ts}-01-01T00:00:00"
-    elif n == 6:    # YYYYMM
+    elif n == 6:  # YYYYMM
         iso = f"{ts[:4]}-{ts[4:6]}-01T00:00:00"
-    elif n == 8:    # YYYYMMDD
+    elif n == 8:  # YYYYMMDD
         iso = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}T00:00:00"
-    elif n == 10:   # YYYYMMDDHH
+    elif n == 10:  # YYYYMMDDHH
         iso = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}T{ts[8:10]}:00:00"
-    elif n == 12:   # YYYYMMDDHHmm
+    elif n == 12:  # YYYYMMDDHHmm
         iso = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}T{ts[8:10]}:{ts[10:12]}:00"
-    elif n == 14:   # YYYYMMDDHHmmss
+    elif n == 14:  # YYYYMMDDHHmmss
         iso = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}T{ts[8:10]}:{ts[10:12]}:{ts[12:14]}"
-    elif n == 17:   # YYYYMMDDHHmmssSSS (milliseconds)
+    elif n == 17:  # YYYYMMDDHHmmssSSS (milliseconds)
         iso = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}T{ts[8:10]}:{ts[10:12]}:{ts[12:14]}.{ts[14:17]}"
-    elif n == 20:   # YYYYMMDDHHmmssSSSSSS (microseconds)
+    elif n == 20:  # YYYYMMDDHHmmssSSSSSS (microseconds)
         iso = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}T{ts[8:10]}:{ts[10:12]}:{ts[12:14]}.{ts[14:20]}"
     else:
         raise ValueError(
@@ -529,6 +549,7 @@ def _timestamp_type(ts: str) -> np.datetime64:
         argparse.ArgumentTypeError: If timestamp format is invalid
     """
     from argparse import ArgumentTypeError
+
     try:
         return _parse_timestamp(ts)
     except ValueError as e:
@@ -551,6 +572,7 @@ def _directory_type(path: str) -> Path:
         argparse.ArgumentTypeError: If path doesn't exist or isn't a directory
     """
     from argparse import ArgumentTypeError
+
     p = Path(path)
     if not p.exists():
         raise ArgumentTypeError(f"Directory does not exist: {path}")
@@ -577,38 +599,37 @@ def add_common_arguments(parser) -> None:
         parser: argparse.ArgumentParser or subparser to add arguments to
     """
     parser.add_argument(
-        "stime",
-        type=_timestamp_type,
-        help="Start time (YYYYMMDD, YYYYMMDDTHHmm, or ISO format)"
+        "stime", type=_timestamp_type, help="Start time (YYYYMMDD, YYYYMMDDTHHmm, or ISO format)"
     )
     parser.add_argument(
-        "etime",
-        type=_timestamp_type,
-        help="End time (YYYYMMDD, YYYYMMDDTHHmm, or ISO format)"
+        "etime", type=_timestamp_type, help="End time (YYYYMMDD, YYYYMMDDTHHmm, or ISO format)"
     )
     parser.add_argument(
-        "polar_path",
-        type=_directory_type,
-        help="Path to directory containing polar files"
+        "polar_path", type=_directory_type, help="Path to directory containing polar files"
     )
 
 
 def _add_arguments(parser) -> None:
     """Add command arguments to parser."""
     add_common_arguments(parser)
-    parser.add_argument("--workers", "-w", type=int, default=None,
-                        help="Number of worker processes (default: CPU count)")
+    parser.add_argument(
+        "--workers",
+        "-w",
+        type=int,
+        default=None,
+        help="Number of worker processes (default: CPU count)",
+    )
 
 
 def add_subparser(subparsers) -> None:
     """Register the 'list' subcommand."""
     p = subparsers.add_parser(
-        'list',
-        help='List/discover POLAR files in time range',
+        "list",
+        help="List/discover POLAR files in time range",
         description="Extract WAMOS polar data files between two timestamps.",
         epilog="Timestamp formats: YYYY, YYYYMM, YYYYMMDD, YYYYMMDDHH, YYYYMMDDHHmm, "
-               "YYYYMMDDHHmmss, YYYYMMDDHHmmssSSS (ms), YYYYMMDDHHmmssSSSSSS (us), "
-               "or ISO format (YYYY-MM-DD, YYYY-MM-DDTHH:mm:ss, etc.)"
+        "YYYYMMDDHHmmss, YYYYMMDDHHmmssSSS (ms), YYYYMMDDHHmmssSSSSSS (us), "
+        "or ISO format (YYYY-MM-DD, YYYY-MM-DDTHH:mm:ss, etc.)",
     )
     _add_arguments(p)
     p.set_defaults(func=run)
@@ -619,17 +640,12 @@ def run(args) -> None:
     import time
 
     t0 = time.time()
-    filenames = Filenames(
-        args.stime,
-        args.etime,
-        args.polar_path,
-        workers=args.workers
-    )
+    filenames = Filenames(args.stime, args.etime, args.polar_path, workers=args.workers)
     # Access .files to trigger the search
     _ = filenames.files
     t1 = time.time()
 
-    logging.info(f"Found {len(filenames)} files in {t1-t0:.3f}s")
+    logging.info(f"Found {len(filenames)} files in {t1 - t0:.3f}s")
 
 
 def main() -> None:
@@ -640,8 +656,8 @@ def main() -> None:
     parser = ArgumentParser(
         description="Extract WAMOS polar data files between two timestamps.",
         epilog="Timestamp formats: YYYY, YYYYMM, YYYYMMDD, YYYYMMDDHH, YYYYMMDDHHmm, "
-               "YYYYMMDDHHmmss, YYYYMMDDHHmmssSSS (ms), YYYYMMDDHHmmssSSSSSS (us), "
-               "or ISO format (YYYY-MM-DD, YYYY-MM-DDTHH:mm:ss, etc.)"
+        "YYYYMMDDHHmmss, YYYYMMDDHHmmssSSS (ms), YYYYMMDDHHmmssSSSSSS (us), "
+        "or ISO format (YYYY-MM-DD, YYYY-MM-DDTHH:mm:ss, etc.)",
     )
     add_logging_arguments(parser)
     _add_arguments(parser)

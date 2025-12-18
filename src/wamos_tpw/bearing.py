@@ -16,8 +16,12 @@ import numpy as np
 from wamos_tpw.config import WamosConfig
 from wamos_tpw.frame import Frame
 from wamos_tpw.plotting import (
-    calc_bin_edges, format_nav_title, add_crosshairs, add_range_rings,
-    sort_polar_data, get_radar_height
+    calc_bin_edges,
+    format_nav_title,
+    add_crosshairs,
+    add_range_rings,
+    sort_polar_data,
+    get_radar_height,
 )
 
 
@@ -80,10 +84,7 @@ class Theta:
     _SHADOW_INTENSITY_BINS = 25  # Number of distance bins for shadow analysis
     _GAUSSIAN_SIGMA = 3  # Sigma for intensity smoothing in edge detection
 
-    def __init__(self,
-                 frames: list[Frame],
-                 config: WamosConfig | None = None,
-                 refine: bool = True):
+    def __init__(self, frames: list[Frame], config: WamosConfig | None = None, refine: bool = True):
         """
         Initialize Theta calculator for a set of contiguous frames.
 
@@ -164,7 +165,9 @@ class Theta:
             median_size = np.median(segment_sizes)
 
             # Find segments that are likely missing a transition
-            suspicious = np.where(segment_sizes > median_size * self._SEGMENT_SUSPICIOUS_MULTIPLIER)[0]
+            suspicious = np.where(
+                segment_sizes > median_size * self._SEGMENT_SUSPICIOUS_MULTIPLIER
+            )[0]
 
             new_transitions = []
             for seg_idx in suspicious:
@@ -207,8 +210,8 @@ class Theta:
 
             # Apply smoothing for interior segments
             if i > 0 and i < len(transitions) - 2:
-                prev_size = transitions[i] - transitions[i-1]
-                next_size = transitions[i+2] - transitions[i+1]
+                prev_size = transitions[i] - transitions[i - 1]
+                next_size = transitions[i + 2] - transitions[i + 1]
                 w = self._SMOOTHING_WEIGHTS
                 smoothed_size = w[0] * n_radials_in_segment + w[1] * prev_size + w[2] * next_size
                 degree_width = smoothed_size / avg_radials_per_degree
@@ -216,8 +219,10 @@ class Theta:
                 degree_width = n_radials_in_segment / avg_radials_per_degree
 
             # Distribute bearing within segment
-            sub_bearings = current_degree + \
-                (np.arange(n_radials_in_segment) + 0.5) / n_radials_in_segment * degree_width
+            sub_bearings = (
+                current_degree
+                + (np.arange(n_radials_in_segment) + 0.5) / n_radials_in_segment * degree_width
+            )
             bearing[start_idx:end_idx] = sub_bearings
 
             current_degree += degree_width
@@ -247,7 +252,7 @@ class Theta:
             bearing = self._bearing_per_frame[frame_idx]
 
             # Get intensity at first few distance bins (shadow is most visible there)
-            intensity = frame.intensity[:, :self._SHADOW_INTENSITY_BINS].mean(axis=1).astype(float)
+            intensity = frame.intensity[:, : self._SHADOW_INTENSITY_BINS].mean(axis=1).astype(float)
 
             # Sort by bearing for gradient calculation
             sort_idx = np.argsort(bearing)
@@ -255,7 +260,11 @@ class Theta:
             intensity_sorted = intensity[sort_idx]
 
             # Normalize intensity
-            intensity_norm = intensity_sorted / intensity_sorted.max() if intensity_sorted.max() > 0 else intensity_sorted
+            intensity_norm = (
+                intensity_sorted / intensity_sorted.max()
+                if intensity_sorted.max() > 0
+                else intensity_sorted
+            )
 
             # Smooth intensity for edge detection
             intensity_smooth = gaussian_filter1d(intensity_norm, sigma=self._GAUSSIAN_SIGMA)
@@ -309,20 +318,22 @@ class Theta:
                 detected_center = ((left_edge + right_edge_unwrap) / 2) % 360
                 detected_width = (right_edge_unwrap - left_edge) % 360
 
-            self._shadow_data.append({
-                'frame_idx': frame_idx,
-                'bearing_sorted': bearing_sorted,
-                'intensity_norm': intensity_norm,
-                'intensity_smooth': intensity_smooth,
-                'gradient': gradient,
-                'left_edge': left_edge,
-                'right_edge': right_edge,
-                'left_edge_idx': left_edge_idx,
-                'right_edge_idx': right_edge_idx,
-                'detected_center': detected_center,
-                'detected_width': detected_width,
-                'timestamp': frame.timestamp,
-            })
+            self._shadow_data.append(
+                {
+                    "frame_idx": frame_idx,
+                    "bearing_sorted": bearing_sorted,
+                    "intensity_norm": intensity_norm,
+                    "intensity_smooth": intensity_smooth,
+                    "gradient": gradient,
+                    "left_edge": left_edge,
+                    "right_edge": right_edge,
+                    "left_edge_idx": left_edge_idx,
+                    "right_edge_idx": right_edge_idx,
+                    "detected_center": detected_center,
+                    "detected_width": detected_width,
+                    "timestamp": frame.timestamp,
+                }
+            )
 
         # Store edge statistics
         self._shadow_left_edges = left_edges
@@ -496,9 +507,11 @@ class Theta:
     def shadow_stats(self) -> str | None:
         """Get formatted shadow statistics string, or None if not available."""
         if self._shadow_left_mean is not None and self._shadow_right_mean is not None:
-            return (f"LHS: {self._shadow_left_mean:.2f}°±{self._shadow_left_std:.2f}°  "
-                    f"RHS: {self._shadow_right_mean:.2f}°±{self._shadow_right_std:.2f}°  "
-                    f"(n={len(self._shadow_left_edges)})")
+            return (
+                f"LHS: {self._shadow_left_mean:.2f}°±{self._shadow_left_std:.2f}°  "
+                f"RHS: {self._shadow_right_mean:.2f}°±{self._shadow_right_std:.2f}°  "
+                f"(n={len(self._shadow_left_edges)})"
+            )
         return None
 
     def plot_shadow_diagnostics(self) -> None:
@@ -524,77 +537,133 @@ class Theta:
         n_rows = (n_frames + n_cols - 1) // n_cols + 2  # Extra rows for summary
 
         fig = plt.figure(figsize=(5 * n_cols, 4 * n_rows))
-        fig.suptitle('Shadow Edge Detection Diagnostics', fontsize=14, fontweight='bold')
+        fig.suptitle("Shadow Edge Detection Diagnostics", fontsize=14, fontweight="bold")
 
         # Plot each frame's intensity vs bearing with edge detection
         for i, data in enumerate(self._shadow_data):
             ax = fig.add_subplot(n_rows, n_cols, i + 1)
 
-            bearing = data['bearing_sorted']
-            intensity_norm = data['intensity_norm']
-            intensity_smooth = data['intensity_smooth']
+            bearing = data["bearing_sorted"]
+            intensity_norm = data["intensity_norm"]
+            intensity_smooth = data["intensity_smooth"]
 
             # Plot raw and smoothed intensity
-            ax.plot(bearing, intensity_norm, 'b-', linewidth=0.5, alpha=0.5, label='Raw')
-            ax.plot(bearing, intensity_smooth, 'b-', linewidth=1.5, label='Smoothed')
+            ax.plot(bearing, intensity_norm, "b-", linewidth=0.5, alpha=0.5, label="Raw")
+            ax.plot(bearing, intensity_smooth, "b-", linewidth=1.5, label="Smoothed")
 
             # Mark expected shadow region (lighter)
-            ax.axvspan(expected_center - expected_width/2, expected_center + expected_width/2,
-                      alpha=0.1, color='gray', label='Expected region')
-            ax.axvline(expected_center, color='gray', linestyle=':', linewidth=1)
+            ax.axvspan(
+                expected_center - expected_width / 2,
+                expected_center + expected_width / 2,
+                alpha=0.1,
+                color="gray",
+                label="Expected region",
+            )
+            ax.axvline(expected_center, color="gray", linestyle=":", linewidth=1)
 
             # Mark detected edges
-            if data['left_edge'] is not None:
-                ax.axvline(data['left_edge'], color='red', linestyle='-', linewidth=2,
-                          label=f'Left edge ({data["left_edge"]:.1f}°)')
-                ax.scatter([data['left_edge']], [intensity_smooth[data['left_edge_idx']]],
-                          color='red', s=80, zorder=5, marker='<')
+            if data["left_edge"] is not None:
+                ax.axvline(
+                    data["left_edge"],
+                    color="red",
+                    linestyle="-",
+                    linewidth=2,
+                    label=f"Left edge ({data['left_edge']:.1f}°)",
+                )
+                ax.scatter(
+                    [data["left_edge"]],
+                    [intensity_smooth[data["left_edge_idx"]]],
+                    color="red",
+                    s=80,
+                    zorder=5,
+                    marker="<",
+                )
 
-            if data['right_edge'] is not None:
-                ax.axvline(data['right_edge'], color='blue', linestyle='-', linewidth=2,
-                          label=f'Right edge ({data["right_edge"]:.1f}°)')
-                ax.scatter([data['right_edge']], [intensity_smooth[data['right_edge_idx']]],
-                          color='blue', s=80, zorder=5, marker='>')
+            if data["right_edge"] is not None:
+                ax.axvline(
+                    data["right_edge"],
+                    color="blue",
+                    linestyle="-",
+                    linewidth=2,
+                    label=f"Right edge ({data['right_edge']:.1f}°)",
+                )
+                ax.scatter(
+                    [data["right_edge"]],
+                    [intensity_smooth[data["right_edge_idx"]]],
+                    color="blue",
+                    s=80,
+                    zorder=5,
+                    marker=">",
+                )
 
             # Mark detected center
-            if data['detected_center'] is not None:
-                ax.axvline(data['detected_center'], color='green', linestyle='--', linewidth=2,
-                          label=f'Center ({data["detected_center"]:.1f}°)')
+            if data["detected_center"] is not None:
+                ax.axvline(
+                    data["detected_center"],
+                    color="green",
+                    linestyle="--",
+                    linewidth=2,
+                    label=f"Center ({data['detected_center']:.1f}°)",
+                )
 
-            ax.set_xlabel('Bearing (°)')
-            ax.set_ylabel('Normalized Intensity')
+            ax.set_xlabel("Bearing (°)")
+            ax.set_ylabel("Normalized Intensity")
             ax.set_xlim(expected_center - search_range - 10, expected_center + search_range + 10)
             ax.set_ylim(0, 1.1)
-            ax.legend(fontsize=6, loc='upper right')
+            ax.legend(fontsize=6, loc="upper right")
             ax.grid(True, alpha=0.3)
 
         # Summary plot 1: Edge positions across frames
         ax_edges = fig.add_subplot(n_rows, 1, n_rows - 1)
 
-        left_edges = [(d['frame_idx'], d['left_edge']) for d in self._shadow_data if d['left_edge'] is not None]
-        right_edges = [(d['frame_idx'], d['right_edge']) for d in self._shadow_data if d['right_edge'] is not None]
-        centers = [(d['frame_idx'], d['detected_center']) for d in self._shadow_data if d['detected_center'] is not None]
+        left_edges = [
+            (d["frame_idx"], d["left_edge"])
+            for d in self._shadow_data
+            if d["left_edge"] is not None
+        ]
+        right_edges = [
+            (d["frame_idx"], d["right_edge"])
+            for d in self._shadow_data
+            if d["right_edge"] is not None
+        ]
+        centers = [
+            (d["frame_idx"], d["detected_center"])
+            for d in self._shadow_data
+            if d["detected_center"] is not None
+        ]
 
         if left_edges:
-            ax_edges.scatter(*zip(*left_edges), s=60, c='red', marker='<', label='Left edges')
+            ax_edges.scatter(*zip(*left_edges), s=60, c="red", marker="<", label="Left edges")
             if self._shadow_left_mean is not None:
-                ax_edges.axhline(self._shadow_left_mean, color='red', linestyle='-', linewidth=1, alpha=0.7)
+                ax_edges.axhline(
+                    self._shadow_left_mean, color="red", linestyle="-", linewidth=1, alpha=0.7
+                )
 
         if right_edges:
-            ax_edges.scatter(*zip(*right_edges), s=60, c='blue', marker='>', label='Right edges')
+            ax_edges.scatter(*zip(*right_edges), s=60, c="blue", marker=">", label="Right edges")
             if self._shadow_right_mean is not None:
-                ax_edges.axhline(self._shadow_right_mean, color='blue', linestyle='-', linewidth=1, alpha=0.7)
+                ax_edges.axhline(
+                    self._shadow_right_mean, color="blue", linestyle="-", linewidth=1, alpha=0.7
+                )
 
         if centers:
-            ax_edges.scatter(*zip(*centers), s=60, c='green', marker='o', label='Centers (from edges)')
+            ax_edges.scatter(
+                *zip(*centers), s=60, c="green", marker="o", label="Centers (from edges)"
+            )
             mean_center = self._circular_mean([c[1] for c in centers])
-            ax_edges.axhline(mean_center, color='green', linestyle='--', linewidth=2)
+            ax_edges.axhline(mean_center, color="green", linestyle="--", linewidth=2)
 
-        ax_edges.axhline(expected_center, color='gray', linestyle=':', linewidth=2, label=f'Expected ({expected_center}°)')
+        ax_edges.axhline(
+            expected_center,
+            color="gray",
+            linestyle=":",
+            linewidth=2,
+            label=f"Expected ({expected_center}°)",
+        )
 
-        ax_edges.set_xlabel('Frame Index')
-        ax_edges.set_ylabel('Bearing (°)')
-        ax_edges.legend(loc='upper right')
+        ax_edges.set_xlabel("Frame Index")
+        ax_edges.set_ylabel("Bearing (°)")
+        ax_edges.legend(loc="upper right")
         ax_edges.grid(True, alpha=0.3)
 
         # Summary plot 2: Statistics
@@ -602,15 +671,21 @@ class Theta:
 
         stats_text = []
         if self._shadow_left_mean is not None:
-            stats_text.append(f'Left Edge:  mean={self._shadow_left_mean:.2f}°, std={self._shadow_left_std:.2f}°, n={len(self._shadow_left_edges)}')
+            stats_text.append(
+                f"Left Edge:  mean={self._shadow_left_mean:.2f}°, std={self._shadow_left_std:.2f}°, n={len(self._shadow_left_edges)}"
+            )
 
         if self._shadow_right_mean is not None:
-            stats_text.append(f'Right Edge: mean={self._shadow_right_mean:.2f}°, std={self._shadow_right_std:.2f}°, n={len(self._shadow_right_edges)}')
+            stats_text.append(
+                f"Right Edge: mean={self._shadow_right_mean:.2f}°, std={self._shadow_right_std:.2f}°, n={len(self._shadow_right_edges)}"
+            )
 
         if centers:
             center_vals = [c[1] for c in centers]
             mean_center, std_center = self._circular_stats(center_vals)
-            stats_text.append(f'Center:     mean={mean_center:.2f}°, std={std_center:.2f}°, n={len(centers)}')
+            stats_text.append(
+                f"Center:     mean={mean_center:.2f}°, std={std_center:.2f}°, n={len(centers)}"
+            )
 
         if self._shadow_left_mean is not None and self._shadow_right_mean is not None:
             mean_left = self._shadow_left_mean
@@ -625,17 +700,24 @@ class Theta:
                 offset -= 360
             elif offset < -180:
                 offset += 360
-            stats_text.append('\nComputed from edges:')
-            stats_text.append(f'  Shadow width: {width:.2f}°')
-            stats_text.append(f'  Shadow center: {computed_center:.2f}°')
-            stats_text.append(f'  Offset from expected ({expected_center}°): {offset:.2f}°')
+            stats_text.append("\nComputed from edges:")
+            stats_text.append(f"  Shadow width: {width:.2f}°")
+            stats_text.append(f"  Shadow center: {computed_center:.2f}°")
+            stats_text.append(f"  Offset from expected ({expected_center}°): {offset:.2f}°")
 
-        ax_stats.text(0.05, 0.95, '\n'.join(stats_text), transform=ax_stats.transAxes,
-                     fontsize=10, verticalalignment='top', fontfamily='monospace',
-                     bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        ax_stats.text(
+            0.05,
+            0.95,
+            "\n".join(stats_text),
+            transform=ax_stats.transAxes,
+            fontsize=10,
+            verticalalignment="top",
+            fontfamily="monospace",
+            bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
+        )
         ax_stats.set_xlim(0, 1)
         ax_stats.set_ylim(0, 1)
-        ax_stats.axis('off')
+        ax_stats.axis("off")
 
         plt.tight_layout()
         plt.show()
@@ -690,7 +772,7 @@ class Theta:
         self._shadow_data = []
         logging.debug("Shadow diagnostic data cleared")
 
-    def __enter__(self) -> 'Theta':
+    def __enter__(self) -> "Theta":
         """Enter context manager."""
         return self
 
@@ -721,10 +803,9 @@ class Bearing:
         >>> x_earth, y_earth = bearing.xy_earth(frame_idx=0)
     """
 
-    def __init__(self,
-                 theta: Theta,
-                 radar_height: float | None = None,
-                 cache_coordinates: bool = True):
+    def __init__(
+        self, theta: Theta, radar_height: float | None = None, cache_coordinates: bool = True
+    ):
         """
         Initialize Bearing calculator.
 
@@ -755,8 +836,10 @@ class Bearing:
             # Fall back to wind sensor height
             self._radar_height = self._frames[0].metadata.wind_sensor_height
 
-        logging.debug(f"Bearing initialized: {len(self._frames)} frames, "
-                     f"radar_height={self._radar_height}, cache={cache_coordinates}")
+        logging.debug(
+            f"Bearing initialized: {len(self._frames)} frames, "
+            f"radar_height={self._radar_height}, cache={cache_coordinates}"
+        )
 
     @property
     def theta(self) -> Theta:
@@ -853,9 +936,7 @@ class Bearing:
             self._heading_earth_cache[frame_idx] = result
         return result
 
-    def _heading_to_xy(self,
-                       frame_idx: int,
-                       heading: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def _heading_to_xy(self, frame_idx: int, heading: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
         Convert heading angles to x/y cartesian coordinates.
 
@@ -936,14 +1017,16 @@ class Bearing:
             self._xy_earth_cache[frame_idx] = result
         return result
 
-    def plot_polar(self,
-                   frame_idx: int,
-                   ax=None,
-                   vmin: float = 0,
-                   vmax: float = 4095,
-                   cmap: str = 'viridis',
-                   colorbar: bool = True,
-                   title: bool = True):
+    def plot_polar(
+        self,
+        frame_idx: int,
+        ax=None,
+        vmin: float = 0,
+        vmax: float = 4095,
+        cmap: str = "viridis",
+        colorbar: bool = True,
+        title: bool = True,
+    ):
         """
         Plot frame in polar coordinates (bearing vs distance).
 
@@ -965,10 +1048,10 @@ class Bearing:
         height = self._get_radar_height(frame_idx)
         if height is not None:
             range_vals = frame.ground_range(height)
-            x_label = 'Ground Distance (m)'
+            x_label = "Ground Distance (m)"
         else:
             range_vals = frame.slant_range()
-            x_label = 'Slant Range (m)'
+            x_label = "Slant Range (m)"
         intensity = frame.intensity.astype(np.float64)
 
         if ax is None:
@@ -983,26 +1066,35 @@ class Bearing:
         bearing_edges = calc_bin_edges(sorted_bearing)
         range_edges = calc_bin_edges(range_vals)
 
-        im = ax.pcolormesh(range_edges, bearing_edges, sorted_intensity,
-                           vmin=vmin, vmax=vmax, cmap=cmap, shading='flat')
+        im = ax.pcolormesh(
+            range_edges,
+            bearing_edges,
+            sorted_intensity,
+            vmin=vmin,
+            vmax=vmax,
+            cmap=cmap,
+            shading="flat",
+        )
 
         if colorbar:
-            fig.colorbar(im, ax=ax, label='Intensity')
+            fig.colorbar(im, ax=ax, label="Intensity")
         ax.set_xlabel(x_label)
-        ax.set_ylabel('Bearing (°)')
+        ax.set_ylabel("Bearing (°)")
         if title:
-            ax.set_title(self._format_title(frame_idx, 'Polar'))
+            ax.set_title(self._format_title(frame_idx, "Polar"))
 
         return fig, ax, im
 
-    def plot_ship(self,
-                  frame_idx: int,
-                  ax=None,
-                  vmin: float = 0,
-                  vmax: float = 4095,
-                  cmap: str = 'viridis',
-                  colorbar: bool = True,
-                  title: bool = True):
+    def plot_ship(
+        self,
+        frame_idx: int,
+        ax=None,
+        vmin: float = 0,
+        vmax: float = 4095,
+        cmap: str = "viridis",
+        colorbar: bool = True,
+        title: bool = True,
+    ):
         """
         Plot frame in ship-relative x/y coordinates.
 
@@ -1033,17 +1125,17 @@ class Bearing:
         # Use shading='nearest' for radial coordinates - they're not monotonic
         # Suppress the matplotlib warning about non-monotonic coordinates
         import warnings
+
         with warnings.catch_warnings():
-            warnings.filterwarnings('ignore', message='.*input coordinates.*pcolormesh.*')
-            im = ax.pcolormesh(x, y, intensity,
-                               vmin=vmin, vmax=vmax, cmap=cmap, shading='nearest')
+            warnings.filterwarnings("ignore", message=".*input coordinates.*pcolormesh.*")
+            im = ax.pcolormesh(x, y, intensity, vmin=vmin, vmax=vmax, cmap=cmap, shading="nearest")
 
         if colorbar:
-            fig.colorbar(im, ax=ax, label='Intensity')
+            fig.colorbar(im, ax=ax, label="Intensity")
 
-        ax.set_xlabel('X - Starboard (m)')
-        ax.set_ylabel('Y - Bow (m)')
-        ax.set_aspect('equal')
+        ax.set_xlabel("X - Starboard (m)")
+        ax.set_ylabel("Y - Bow (m)")
+        ax.set_aspect("equal")
         add_crosshairs(ax)
 
         # Add range rings every 1km
@@ -1051,18 +1143,20 @@ class Bearing:
         add_range_rings(ax, max_range, interval=1000.0)
 
         if title:
-            ax.set_title(self._format_title(frame_idx, 'Ship Coordinates'))
+            ax.set_title(self._format_title(frame_idx, "Ship Coordinates"))
 
         return fig, ax, im
 
-    def plot_earth(self,
-                   frame_idx: int,
-                   ax=None,
-                   vmin: float = 0,
-                   vmax: float = 4095,
-                   cmap: str = 'viridis',
-                   colorbar: bool = True,
-                   title: bool = True):
+    def plot_earth(
+        self,
+        frame_idx: int,
+        ax=None,
+        vmin: float = 0,
+        vmax: float = 4095,
+        cmap: str = "viridis",
+        colorbar: bool = True,
+        title: bool = True,
+    ):
         """
         Plot frame in earth x/y coordinates.
 
@@ -1093,17 +1187,17 @@ class Bearing:
         # Use shading='nearest' for radial coordinates - they're not monotonic
         # Suppress the matplotlib warning about non-monotonic coordinates
         import warnings
+
         with warnings.catch_warnings():
-            warnings.filterwarnings('ignore', message='.*input coordinates.*pcolormesh.*')
-            im = ax.pcolormesh(x, y, intensity,
-                               vmin=vmin, vmax=vmax, cmap=cmap, shading='nearest')
+            warnings.filterwarnings("ignore", message=".*input coordinates.*pcolormesh.*")
+            im = ax.pcolormesh(x, y, intensity, vmin=vmin, vmax=vmax, cmap=cmap, shading="nearest")
 
         if colorbar:
-            fig.colorbar(im, ax=ax, label='Intensity')
+            fig.colorbar(im, ax=ax, label="Intensity")
 
-        ax.set_xlabel('X - East (m)')
-        ax.set_ylabel('Y - North (m)')
-        ax.set_aspect('equal')
+        ax.set_xlabel("X - East (m)")
+        ax.set_ylabel("Y - North (m)")
+        ax.set_aspect("equal")
         add_crosshairs(ax)
 
         # Add range rings every 1km
@@ -1111,7 +1205,7 @@ class Bearing:
         add_range_rings(ax, max_range, interval=1000.0)
 
         if title:
-            ax.set_title(self._format_title(frame_idx, 'Earth Coordinates'))
+            ax.set_title(self._format_title(frame_idx, "Earth Coordinates"))
 
         return fig, ax, im
 
@@ -1119,22 +1213,19 @@ class Bearing:
         """Format plot title with frame info."""
         frame = self._frames[frame_idx]
 
-        parts = [f'Frame {frame_idx + 1}/{len(self._frames)}: {frame.timestamp}']
-        parts.append(f'[{coord_type}]')
+        parts = [f"Frame {frame_idx + 1}/{len(self._frames)}: {frame.timestamp}"]
+        parts.append(f"[{coord_type}]")
 
         nav_info = format_nav_title(frame)
         if nav_info:
             parts.append(nav_info)
 
-        return '\n'.join(parts)
+        return "\n".join(parts)
 
     def __repr__(self) -> str:
-        return (
-            f"Bearing(frames={len(self._frames)}, "
-            f"radar_height={self._radar_height})"
-        )
+        return f"Bearing(frames={len(self._frames)}, radar_height={self._radar_height})"
 
-    def __enter__(self) -> 'Bearing':
+    def __enter__(self) -> "Bearing":
         """Enter context manager."""
         return self
 
@@ -1146,27 +1237,28 @@ class Bearing:
 def _add_arguments(parser) -> None:
     """Add command arguments to parser."""
     from wamos_tpw.filenames import add_common_arguments
+
     add_common_arguments(parser)
-    parser.add_argument("--config", "-c", type=str, default=None,
-                        help="YAML configuration file")
-    parser.add_argument("--radar-height", type=float, default=None,
-                        help="Radar height above water (m)")
-    parser.add_argument("--max-frames", type=int, default=10,
-                        help="Maximum frames to process (default: 10)")
-    parser.add_argument("--no-refine", action="store_true",
-                        help="Disable shadow refinement")
-    parser.add_argument("--plot", choices=['polar', 'ship', 'earth', 'all'],
-                        default=None, help="Plot type")
-    parser.add_argument("--frame", type=int, default=0,
-                        help="Frame index to plot (default: 0)")
+    parser.add_argument("--config", "-c", type=str, default=None, help="YAML configuration file")
+    parser.add_argument(
+        "--radar-height", type=float, default=None, help="Radar height above water (m)"
+    )
+    parser.add_argument(
+        "--max-frames", type=int, default=10, help="Maximum frames to process (default: 10)"
+    )
+    parser.add_argument("--no-refine", action="store_true", help="Disable shadow refinement")
+    parser.add_argument(
+        "--plot", choices=["polar", "ship", "earth", "all"], default=None, help="Plot type"
+    )
+    parser.add_argument("--frame", type=int, default=0, help="Frame index to plot (default: 0)")
 
 
 def add_subparser(subparsers) -> None:
     """Register the 'bearing' subcommand."""
     p = subparsers.add_parser(
-        'bearing',
-        help='Bearing analysis and plotting',
-        description="Calculate radar bearing from polar files"
+        "bearing",
+        help="Bearing analysis and plotting",
+        description="Calculate radar bearing from polar files",
     )
     _add_arguments(p)
     p.set_defaults(func=run)
@@ -1188,7 +1280,7 @@ def run(args) -> None:
     # Load frames
     logging.info(f"Loading up to {args.max_frames} frames...")
     frames = []
-    for filepath in filenames.files[:args.max_frames]:
+    for filepath in filenames.files[: args.max_frames]:
         frame = load_polar_file(filepath)
         if frame is not None:
             frames.append(frame)
@@ -1238,21 +1330,21 @@ def run(args) -> None:
 
         frame_idx = min(args.frame, len(frames) - 1)
 
-        if args.plot == 'all':
+        if args.plot == "all":
             fig, axes = plt.subplots(1, 3, figsize=(20, 6))
             _, _, im1 = bearing_obj.plot_polar(frame_idx, ax=axes[0], title=False, colorbar=False)
             bearing_obj.plot_ship(frame_idx, ax=axes[1], title=False, colorbar=False)
             bearing_obj.plot_earth(frame_idx, ax=axes[2], title=False, colorbar=False)
             # Add single figure title and shared colorbar
             frame = frames[frame_idx]
-            fig.suptitle(f'Frame {frame_idx + 1}/{len(frames)}: {frame.timestamp}')
+            fig.suptitle(f"Frame {frame_idx + 1}/{len(frames)}: {frame.timestamp}")
             fig.subplots_adjust(right=0.92)
-            fig.colorbar(im1, ax=axes, label='Intensity', shrink=0.8)
-        elif args.plot == 'polar':
+            fig.colorbar(im1, ax=axes, label="Intensity", shrink=0.8)
+        elif args.plot == "polar":
             bearing_obj.plot_polar(frame_idx)
-        elif args.plot == 'ship':
+        elif args.plot == "ship":
             bearing_obj.plot_ship(frame_idx)
-        elif args.plot == 'earth':
+        elif args.plot == "earth":
             bearing_obj.plot_earth(frame_idx)
 
         plt.show()

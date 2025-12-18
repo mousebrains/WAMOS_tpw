@@ -77,14 +77,16 @@ class Deramp:
     # Default smoothing window as fraction of range bins
     _SMOOTH_WINDOW_FRACTION = 0.02  # 2% of range bins
 
-    def __init__(self,
-                 frame: Frame,
-                 config: WamosConfig | None = None,
-                 bearing: np.ndarray | None = None,
-                 quantile: float = 0.10,
-                 smooth_window: int | None = None,
-                 shadow_start: float | None = None,
-                 shadow_end: float | None = None) -> None:
+    def __init__(
+        self,
+        frame: Frame,
+        config: WamosConfig | None = None,
+        bearing: np.ndarray | None = None,
+        quantile: float = 0.10,
+        smooth_window: int | None = None,
+        shadow_start: float | None = None,
+        shadow_end: float | None = None,
+    ) -> None:
         """
         Initialize Deramp for a single frame.
 
@@ -169,7 +171,7 @@ class Deramp:
         else:
             # Fall back to config-based shadow region
             shadow_center = self._config.shadow.center  # degrees from bow
-            shadow_width = self._config.shadow.width    # total width in degrees
+            shadow_width = self._config.shadow.width  # total width in degrees
 
             if shadow_center is None or shadow_width is None or shadow_width <= 0:
                 # No shadow defined - no masking
@@ -216,9 +218,7 @@ class Deramp:
         self._raw_profile = self._fast_quantile(non_shadow_data, self._quantile)
 
         # Smooth the profile
-        self._smooth_profile = self._smooth_moving_average(
-            self._raw_profile, self._smooth_window
-        )
+        self._smooth_profile = self._smooth_moving_average(self._raw_profile, self._smooth_window)
 
         # Subtract the smoothed profile from intensity data
         self._corrected = intensity - self._smooth_profile[np.newaxis, :]
@@ -279,14 +279,14 @@ class Deramp:
         kernel = np.ones(window) / window
         # Pad edges to avoid boundary effects
         pad_width = window // 2
-        padded = np.pad(data, pad_width, mode='edge')
-        smoothed = np.convolve(padded, kernel, mode='valid')
+        padded = np.pad(data, pad_width, mode="edge")
+        smoothed = np.convolve(padded, kernel, mode="valid")
 
         # Ensure output length matches input
         if len(smoothed) > len(data):
-            smoothed = smoothed[:len(data)]
+            smoothed = smoothed[: len(data)]
         elif len(smoothed) < len(data):
-            smoothed = np.pad(smoothed, (0, len(data) - len(smoothed)), mode='edge')
+            smoothed = np.pad(smoothed, (0, len(data) - len(smoothed)), mode="edge")
 
         return smoothed
 
@@ -311,65 +311,81 @@ class Deramp:
         distances = self.slant_range
 
         fig, axes = plt.subplots(2, 3, figsize=figsize)
-        fig.suptitle(f'Deramp Diagnostics: {self._frame.metadata.filename}', fontsize=12)
+        fig.suptitle(f"Deramp Diagnostics: {self._frame.metadata.filename}", fontsize=12)
 
         # Top left: Original intensity
         ax_orig = axes[0, 0]
         vmin, vmax = np.percentile(original, [1, 99])
-        im1 = ax_orig.imshow(original, aspect='auto', cmap='viridis',
-                             vmin=vmin, vmax=vmax,
-                             extent=[distances[0], distances[-1], original.shape[0], 0])
-        ax_orig.set_title('Original Intensity')
-        ax_orig.set_xlabel('Range (m)')
-        ax_orig.set_ylabel('Bearing bin')
+        im1 = ax_orig.imshow(
+            original,
+            aspect="auto",
+            cmap="viridis",
+            vmin=vmin,
+            vmax=vmax,
+            extent=[distances[0], distances[-1], original.shape[0], 0],
+        )
+        ax_orig.set_title("Original Intensity")
+        ax_orig.set_xlabel("Range (m)")
+        ax_orig.set_ylabel("Bearing bin")
         plt.colorbar(im1, ax=ax_orig)
 
         # Top middle: Corrected intensity
         ax_corr = axes[0, 1]
         vmin_c, vmax_c = np.percentile(corrected, [1, 99])
-        im2 = ax_corr.imshow(corrected, aspect='auto', cmap='viridis',
-                             vmin=vmin_c, vmax=vmax_c,
-                             extent=[distances[0], distances[-1], corrected.shape[0], 0])
-        ax_corr.set_title('Corrected Intensity')
-        ax_corr.set_xlabel('Range (m)')
-        ax_corr.set_ylabel('Bearing bin')
+        im2 = ax_corr.imshow(
+            corrected,
+            aspect="auto",
+            cmap="viridis",
+            vmin=vmin_c,
+            vmax=vmax_c,
+            extent=[distances[0], distances[-1], corrected.shape[0], 0],
+        )
+        ax_corr.set_title("Corrected Intensity")
+        ax_corr.set_xlabel("Range (m)")
+        ax_corr.set_ylabel("Bearing bin")
         plt.colorbar(im2, ax=ax_corr)
 
         # Top right: Range profiles
         ax_prof = axes[0, 2]
-        ax_prof.plot(distances, self._raw_profile, 'b-', alpha=0.5,
-                     label=f'Raw {self._quantile*100:.0f}%')
-        ax_prof.plot(distances, self._smooth_profile, 'r-', linewidth=2,
-                     label=f'Smoothed ({self._smooth_window} bins)')
-        ax_prof.set_xlabel('Range (m)')
-        ax_prof.set_ylabel('Intensity')
-        ax_prof.set_title('Range Profile (excl. shadow)')
+        ax_prof.plot(
+            distances, self._raw_profile, "b-", alpha=0.5, label=f"Raw {self._quantile * 100:.0f}%"
+        )
+        ax_prof.plot(
+            distances,
+            self._smooth_profile,
+            "r-",
+            linewidth=2,
+            label=f"Smoothed ({self._smooth_window} bins)",
+        )
+        ax_prof.set_xlabel("Range (m)")
+        ax_prof.set_ylabel("Intensity")
+        ax_prof.set_title("Range Profile (excl. shadow)")
         ax_prof.legend()
         ax_prof.grid(True, alpha=0.3)
 
         # Bottom left: Smoothing residuals
         ax_resid = axes[1, 0]
         residuals = self._raw_profile - self._smooth_profile
-        ax_resid.plot(distances, residuals, 'g-', linewidth=1)
-        ax_resid.axhline(0, color='gray', linestyle='--', alpha=0.5)
-        ax_resid.set_xlabel('Range (m)')
-        ax_resid.set_ylabel('Residual (raw - smooth)')
-        ax_resid.set_title('Smoothing Residuals')
+        ax_resid.plot(distances, residuals, "g-", linewidth=1)
+        ax_resid.axhline(0, color="gray", linestyle="--", alpha=0.5)
+        ax_resid.set_xlabel("Range (m)")
+        ax_resid.set_ylabel("Residual (raw - smooth)")
+        ax_resid.set_title("Smoothing Residuals")
         ax_resid.grid(True, alpha=0.3)
 
         # Bottom middle: Histogram comparison
         ax_hist = axes[1, 1]
-        ax_hist.hist(original.ravel(), bins=100, alpha=0.5, label='Original', density=True)
-        ax_hist.hist(corrected.ravel(), bins=100, alpha=0.5, label='Corrected', density=True)
-        ax_hist.set_xlabel('Intensity')
-        ax_hist.set_ylabel('Density')
-        ax_hist.set_title('Intensity Distribution')
+        ax_hist.hist(original.ravel(), bins=100, alpha=0.5, label="Original", density=True)
+        ax_hist.hist(corrected.ravel(), bins=100, alpha=0.5, label="Corrected", density=True)
+        ax_hist.set_xlabel("Intensity")
+        ax_hist.set_ylabel("Density")
+        ax_hist.set_title("Intensity Distribution")
         ax_hist.legend()
-        ax_hist.set_yscale('log')
+        ax_hist.set_yscale("log")
 
         # Bottom right: Info text
         ax_info = axes[1, 2]
-        ax_info.axis('off')
+        ax_info.axis("off")
 
         # Calculate statistics
         n_shadow = self.shadow_mask.sum()
@@ -377,29 +393,33 @@ class Deramp:
         rms_residual = np.sqrt(np.mean(residuals**2))
 
         info_lines = [
-            f'Frame: {self._frame.metadata.filename}',
-            f'Shape: {original.shape}',
-            f'Range: {distances[0]:.0f} - {distances[-1]:.0f} m',
-            '',
-            'Shadow region:',
-            f'  Center: {self._config.shadow.center}°',
-            f'  Width: {self._config.shadow.width}°',
-            f'  Masked bearings: {n_shadow}/{n_total}',
-            '',
-            'Profile parameters:',
-            f'  Quantile: {self._quantile*100:.0f}%',
-            f'  Smooth window: {self._smooth_window} bins',
-            f'  RMS residual: {rms_residual:.2f}',
-            '',
-            'Profile range:',
-            f'  Raw: [{self._raw_profile.min():.1f}, {self._raw_profile.max():.1f}]',
-            f'  Smooth: [{self._smooth_profile.min():.1f}, {self._smooth_profile.max():.1f}]',
+            f"Frame: {self._frame.metadata.filename}",
+            f"Shape: {original.shape}",
+            f"Range: {distances[0]:.0f} - {distances[-1]:.0f} m",
+            "",
+            "Shadow region:",
+            f"  Center: {self._config.shadow.center}°",
+            f"  Width: {self._config.shadow.width}°",
+            f"  Masked bearings: {n_shadow}/{n_total}",
+            "",
+            "Profile parameters:",
+            f"  Quantile: {self._quantile * 100:.0f}%",
+            f"  Smooth window: {self._smooth_window} bins",
+            f"  RMS residual: {rms_residual:.2f}",
+            "",
+            "Profile range:",
+            f"  Raw: [{self._raw_profile.min():.1f}, {self._raw_profile.max():.1f}]",
+            f"  Smooth: [{self._smooth_profile.min():.1f}, {self._smooth_profile.max():.1f}]",
         ]
-        ax_info.text(0.05, 0.95, '\n'.join(info_lines),
-                    transform=ax_info.transAxes,
-                    verticalalignment='top',
-                    fontfamily='monospace',
-                    fontsize=9)
+        ax_info.text(
+            0.05,
+            0.95,
+            "\n".join(info_lines),
+            transform=ax_info.transAxes,
+            verticalalignment="top",
+            fontfamily="monospace",
+            fontsize=9,
+        )
 
         plt.tight_layout()
         plt.show()
@@ -408,22 +428,28 @@ class Deramp:
 def _add_arguments(parser) -> None:
     """Add command arguments to parser."""
     parser.add_argument("filename", help="Polar file to process")
-    parser.add_argument("--config", "-c", type=str, default=None,
-                        help="YAML configuration file")
-    parser.add_argument("--quantile", "-q", type=float, default=0.10,
-                        help="Quantile for profile (0.0-1.0, default: 0.10)")
-    parser.add_argument("--smooth-window", "-s", type=int, default=None,
-                        help="Smoothing window size in bins (default: 2%% of range bins)")
-    parser.add_argument("--plot", action="store_true",
-                        help="Show diagnostic plots")
+    parser.add_argument("--config", "-c", type=str, default=None, help="YAML configuration file")
+    parser.add_argument(
+        "--quantile",
+        "-q",
+        type=float,
+        default=0.10,
+        help="Quantile for profile (0.0-1.0, default: 0.10)",
+    )
+    parser.add_argument(
+        "--smooth-window",
+        "-s",
+        type=int,
+        default=None,
+        help="Smoothing window size in bins (default: 2%% of range bins)",
+    )
+    parser.add_argument("--plot", action="store_true", help="Show diagnostic plots")
 
 
 def add_subparser(subparsers) -> None:
     """Register the 'deramp' subcommand."""
     p = subparsers.add_parser(
-        'deramp',
-        help='Standalone deramp tool',
-        description="Test deramp on a polar file"
+        "deramp", help="Standalone deramp tool", description="Test deramp on a polar file"
     )
     _add_arguments(p)
     p.set_defaults(func=run)
@@ -449,11 +475,13 @@ def run(args) -> None:
     deramp = Deramp(frame, config, quantile=args.quantile, smooth_window=args.smooth_window)
     corrected = deramp.corrected_intensity
 
-    logging.info(f"Quantile: {args.quantile*100:.0f}%")
+    logging.info(f"Quantile: {args.quantile * 100:.0f}%")
     logging.info(f"Smooth window: {args.smooth_window} bins")
     logging.info(f"Original intensity range: [{frame.intensity.min()}, {frame.intensity.max()}]")
     logging.info(f"Corrected intensity range: [{corrected.min():.1f}, {corrected.max():.1f}]")
-    logging.info(f"Smooth profile range: [{deramp.smooth_profile.min():.1f}, {deramp.smooth_profile.max():.1f}]")
+    logging.info(
+        f"Smooth profile range: [{deramp.smooth_profile.min():.1f}, {deramp.smooth_profile.max():.1f}]"
+    )
 
     if args.plot:
         deramp.plot_diagnostics()

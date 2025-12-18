@@ -50,11 +50,13 @@ class Destreak:
     _HISTOGRAM_BINS = 100  # Number of bins for threshold histogram
     _THRESHOLD_SIGMA = 7.5  # Number of one-sided standard deviations for threshold
 
-    def __init__(self,
-                 prev_frame: Frame | None,
-                 center_frame: Frame,
-                 next_frame: Frame | None,
-                 config: WamosConfig | None = None):
+    def __init__(
+        self,
+        prev_frame: Frame | None,
+        center_frame: Frame,
+        next_frame: Frame | None,
+        config: WamosConfig | None = None,
+    ):
         """
         Initialize destreaking with temporal frame triplet.
 
@@ -144,7 +146,7 @@ class Destreak:
         # Use deramped_intensity if available, otherwise use intensity
         # Frame shape: (n_bearings, n_distances)
         # Use float32 - sufficient for 12-bit intensity data, saves 50% memory
-        deramped = getattr(self._center, 'deramped_intensity', None)
+        deramped = getattr(self._center, "deramped_intensity", None)
         if deramped is not None:
             center_data = deramped.astype(np.float32)
         else:
@@ -159,7 +161,7 @@ class Destreak:
 
         if has_prev:
             # Prepend last theta row from previous frame
-            prev_intensity = getattr(self._prev, 'deramped_intensity', None)
+            prev_intensity = getattr(self._prev, "deramped_intensity", None)
             if prev_intensity is None:
                 prev_intensity = self._prev.intensity
             if prev_intensity is not None:
@@ -171,7 +173,7 @@ class Destreak:
 
         if has_next:
             # Append first theta row from next frame
-            next_intensity = getattr(self._next, 'deramped_intensity', None)
+            next_intensity = getattr(self._next, "deramped_intensity", None)
             if next_intensity is None:
                 next_intensity = self._next.intensity
             if next_intensity is not None:
@@ -227,8 +229,9 @@ class Destreak:
             q = np.vstack([q, np.zeros((1, n_distances), dtype=bool)])
 
         # Ensure q matches center_frame dimensions
-        assert q.shape == (n_bearings, n_distances), \
+        assert q.shape == (n_bearings, n_distances), (
             f"Mask shape {q.shape} doesn't match frame shape {(n_bearings, n_distances)}"
+        )
 
         # Mark streak pixels as NaN (modify center_data in-place since it's not needed after)
         center_data[q] = np.nan
@@ -277,7 +280,7 @@ class Destreak:
 
         # Get lower half using the already partitioned array
         # Elements before mid are all <= median (approximately)
-        lower_half = partitioned[:mid + 1]
+        lower_half = partitioned[: mid + 1]
         lower_half = lower_half[lower_half <= median]
 
         if len(lower_half) > 1:
@@ -362,9 +365,7 @@ class Destreak:
         return result
 
     @staticmethod
-    def _fill_missing_movmean(data: np.ndarray,
-                               window: int = 3,
-                               axis: int = 0) -> np.ndarray:
+    def _fill_missing_movmean(data: np.ndarray, window: int = 3, axis: int = 0) -> np.ndarray:
         """
         Fill NaN values using moving mean along specified axis.
 
@@ -399,12 +400,12 @@ class Destreak:
 
         # uniform_filter1d computes sum/window, so multiply by window to get sum
         # Using mode='nearest' to handle boundaries
-        window_sum = uniform_filter1d(data_zero, size=window, axis=axis, mode='nearest') * window
-        window_count = uniform_filter1d(valid_mask, size=window, axis=axis, mode='nearest') * window
+        window_sum = uniform_filter1d(data_zero, size=window, axis=axis, mode="nearest") * window
+        window_count = uniform_filter1d(valid_mask, size=window, axis=axis, mode="nearest") * window
 
         # Compute mean where we have valid neighbors
         # Avoid division by zero
-        with np.errstate(divide='ignore', invalid='ignore'):
+        with np.errstate(divide="ignore", invalid="ignore"):
             fill_values = window_sum / window_count
 
         # Only fill NaN positions
@@ -419,11 +420,25 @@ class Destreak:
             for larger_window in [window * 2, window * 4, data.shape[axis]]:
                 if not remaining_nans.any():
                     break
-                window_sum = uniform_filter1d(data_zero, size=min(larger_window, data.shape[axis]),
-                                              axis=axis, mode='nearest') * larger_window
-                window_count = uniform_filter1d(valid_mask, size=min(larger_window, data.shape[axis]),
-                                                axis=axis, mode='nearest') * larger_window
-                with np.errstate(divide='ignore', invalid='ignore'):
+                window_sum = (
+                    uniform_filter1d(
+                        data_zero,
+                        size=min(larger_window, data.shape[axis]),
+                        axis=axis,
+                        mode="nearest",
+                    )
+                    * larger_window
+                )
+                window_count = (
+                    uniform_filter1d(
+                        valid_mask,
+                        size=min(larger_window, data.shape[axis]),
+                        axis=axis,
+                        mode="nearest",
+                    )
+                    * larger_window
+                )
+                with np.errstate(divide="ignore", invalid="ignore"):
                     fill_values = window_sum / window_count
                 result[remaining_nans] = fill_values[remaining_nans]
                 remaining_nans = np.isnan(result)
@@ -435,9 +450,9 @@ class Destreak:
 
         return result
 
-    def plot_diagnostics(self,
-                         figsize: tuple[float, float] = (16, 10),
-                         cmap: str = 'viridis') -> None:
+    def plot_diagnostics(
+        self, figsize: tuple[float, float] = (16, 10), cmap: str = "viridis"
+    ) -> None:
         """
         Plot diagnostic comparison of before and after destreaking.
 
@@ -458,7 +473,7 @@ class Destreak:
 
         # Ensure computation is done
         # Use deramped_intensity if available, otherwise use intensity
-        deramped = getattr(self._center, 'deramped_intensity', None)
+        deramped = getattr(self._center, "deramped_intensity", None)
         if deramped is not None:
             original = deramped.astype(np.float32)
         else:
@@ -472,7 +487,7 @@ class Destreak:
 
         # Create figure with linked axes for image panels only
         fig = plt.figure(figsize=figsize)
-        fig.suptitle(f'Destreak Diagnostics: {self._center.timestamp}', fontsize=14)
+        fig.suptitle(f"Destreak Diagnostics: {self._center.timestamp}", fontsize=14)
 
         # Create axes - images share x/y, histogram is separate
         ax_orig = fig.add_subplot(2, 3, 1)
@@ -483,95 +498,126 @@ class Destreak:
         ax_info = fig.add_subplot(2, 3, 6)
 
         # Top left: Original
-        im = ax_orig.imshow(original, aspect='auto', cmap=cmap, vmin=vmin, vmax=vmax)
-        ax_orig.set_title('Original Intensity')
-        ax_orig.set_xlabel('Distance bin')
-        ax_orig.set_ylabel('Bearing bin')
-        plt.colorbar(im, ax=ax_orig, label='Intensity')
+        im = ax_orig.imshow(original, aspect="auto", cmap=cmap, vmin=vmin, vmax=vmax)
+        ax_orig.set_title("Original Intensity")
+        ax_orig.set_xlabel("Distance bin")
+        ax_orig.set_ylabel("Bearing bin")
+        plt.colorbar(im, ax=ax_orig, label="Intensity")
 
         # Top center: Destreaked
-        im = ax_destreaked.imshow(corrected, aspect='auto', cmap=cmap, vmin=vmin, vmax=vmax)
-        ax_destreaked.set_title('Destreaked Intensity')
-        ax_destreaked.set_xlabel('Distance bin')
-        ax_destreaked.set_ylabel('Bearing bin')
-        plt.colorbar(im, ax=ax_destreaked, label='Intensity')
+        im = ax_destreaked.imshow(corrected, aspect="auto", cmap=cmap, vmin=vmin, vmax=vmax)
+        ax_destreaked.set_title("Destreaked Intensity")
+        ax_destreaked.set_xlabel("Distance bin")
+        ax_destreaked.set_ylabel("Bearing bin")
+        plt.colorbar(im, ax=ax_destreaked, label="Intensity")
 
         # Top right: Histogram of derivative
         if derivative is not None:
             deriv_flat = derivative.ravel()
             deriv_flat = deriv_flat[deriv_flat > 0]  # Only positive values (after max(a, 0))
             if len(deriv_flat) > 0:
-                ax_hist.hist(deriv_flat, bins=self._HISTOGRAM_BINS, color='steelblue',
-                            alpha=0.7, edgecolor='none')
+                ax_hist.hist(
+                    deriv_flat,
+                    bins=self._HISTOGRAM_BINS,
+                    color="steelblue",
+                    alpha=0.7,
+                    edgecolor="none",
+                )
                 # Show threshold (N × one-sided std)
                 if self._threshold is not None:
-                    ax_hist.axvline(self._threshold, color='red', linestyle='--', linewidth=2,
-                                   label=f'Threshold ({self._threshold_sigma:.1f}σ): {self._threshold:.1f}')
-                ax_hist.set_xlabel('Derivative value')
-                ax_hist.set_ylabel('Count')
-                ax_hist.set_title('Derivative Histogram')
-                ax_hist.legend(loc='upper right', fontsize=8)
-                ax_hist.set_yscale('log')
+                    ax_hist.axvline(
+                        self._threshold,
+                        color="red",
+                        linestyle="--",
+                        linewidth=2,
+                        label=f"Threshold ({self._threshold_sigma:.1f}σ): {self._threshold:.1f}",
+                    )
+                ax_hist.set_xlabel("Derivative value")
+                ax_hist.set_ylabel("Count")
+                ax_hist.set_title("Derivative Histogram")
+                ax_hist.legend(loc="upper right", fontsize=8)
+                ax_hist.set_yscale("log")
             else:
-                ax_hist.text(0.5, 0.5, 'No positive\nderivative values',
-                            ha='center', va='center', transform=ax_hist.transAxes)
-                ax_hist.set_title('Derivative Histogram')
+                ax_hist.text(
+                    0.5,
+                    0.5,
+                    "No positive\nderivative values",
+                    ha="center",
+                    va="center",
+                    transform=ax_hist.transAxes,
+                )
+                ax_hist.set_title("Derivative Histogram")
         else:
-            ax_hist.text(0.5, 0.5, 'No derivative data',
-                        ha='center', va='center', transform=ax_hist.transAxes)
-            ax_hist.set_title('Derivative Histogram')
+            ax_hist.text(
+                0.5,
+                0.5,
+                "No derivative data",
+                ha="center",
+                va="center",
+                transform=ax_hist.transAxes,
+            )
+            ax_hist.set_title("Derivative Histogram")
 
         # Bottom left: Streak mask
-        im = ax_mask.imshow(mask, aspect='auto', cmap='Reds')
-        ax_mask.set_title(f'Streak Mask ({mask.sum()} pixels, {100*mask.sum()/mask.size:.2f}%)')
-        ax_mask.set_xlabel('Distance bin')
-        ax_mask.set_ylabel('Bearing bin')
-        plt.colorbar(im, ax=ax_mask, label='Streak detected')
+        im = ax_mask.imshow(mask, aspect="auto", cmap="Reds")
+        ax_mask.set_title(f"Streak Mask ({mask.sum()} pixels, {100 * mask.sum() / mask.size:.2f}%)")
+        ax_mask.set_xlabel("Distance bin")
+        ax_mask.set_ylabel("Bearing bin")
+        plt.colorbar(im, ax=ax_mask, label="Streak detected")
 
         # Bottom center: Difference
         diff = original - corrected
         diff_max = max(abs(diff.min()), abs(diff.max()))
         if diff_max > 0:
-            im = ax_diff.imshow(diff, aspect='auto', cmap='RdBu_r',
-                               vmin=-diff_max, vmax=diff_max)
+            im = ax_diff.imshow(diff, aspect="auto", cmap="RdBu_r", vmin=-diff_max, vmax=diff_max)
         else:
-            im = ax_diff.imshow(diff, aspect='auto', cmap='RdBu_r')
-        ax_diff.set_title('Difference (Original - Destreaked)')
-        ax_diff.set_xlabel('Distance bin')
-        ax_diff.set_ylabel('Bearing bin')
-        plt.colorbar(im, ax=ax_diff, label='Difference')
+            im = ax_diff.imshow(diff, aspect="auto", cmap="RdBu_r")
+        ax_diff.set_title("Difference (Original - Destreaked)")
+        ax_diff.set_xlabel("Distance bin")
+        ax_diff.set_ylabel("Bearing bin")
+        plt.colorbar(im, ax=ax_diff, label="Difference")
 
         # Bottom right: Info text
-        ax_info.axis('off')
+        ax_info.axis("off")
         info_lines = [
-            f'Frame: {self._center.metadata.filename}',
-            f'Shape: {original.shape}',
-            f'Prev frame: {"Yes" if self._prev else "No"}',
-            f'Next frame: {"Yes" if self._next else "No"}',
-            f'Min contiguous streak: {self._min_streak_length} bins',
-            '',
-            f'Threshold ({self._threshold_sigma:.1f}σ):',
-            f'  One-sided std: {self._one_sided_std:.1f}' if self._one_sided_std else '  One-sided std: N/A',
-            f'  Threshold: {self._threshold:.1f}' if self._threshold else '  Threshold: N/A',
-            '',
-            f'Streaks detected: {mask.sum()} pixels',
-            f'Percentage: {100*mask.sum()/mask.size:.3f}%',
+            f"Frame: {self._center.metadata.filename}",
+            f"Shape: {original.shape}",
+            f"Prev frame: {'Yes' if self._prev else 'No'}",
+            f"Next frame: {'Yes' if self._next else 'No'}",
+            f"Min contiguous streak: {self._min_streak_length} bins",
+            "",
+            f"Threshold ({self._threshold_sigma:.1f}σ):",
+            f"  One-sided std: {self._one_sided_std:.1f}"
+            if self._one_sided_std
+            else "  One-sided std: N/A",
+            f"  Threshold: {self._threshold:.1f}" if self._threshold else "  Threshold: N/A",
+            "",
+            f"Streaks detected: {mask.sum()} pixels",
+            f"Percentage: {100 * mask.sum() / mask.size:.3f}%",
         ]
         if derivative is not None:
             deriv_flat = derivative.ravel()
             deriv_pos = deriv_flat[deriv_flat > 0]
             if len(deriv_pos) > 0:
-                info_lines.extend([
-                    '',
-                    'Derivative stats (positive):',
-                    f'  Min: {deriv_pos.min():.1f}',
-                    f'  Max: {deriv_pos.max():.1f}',
-                    f'  Mean: {deriv_pos.mean():.1f}',
-                ])
-        ax_info.text(0.1, 0.95, '\n'.join(info_lines), fontsize=10,
-                    verticalalignment='top', family='monospace',
-                    transform=ax_info.transAxes,
-                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+                info_lines.extend(
+                    [
+                        "",
+                        "Derivative stats (positive):",
+                        f"  Min: {deriv_pos.min():.1f}",
+                        f"  Max: {deriv_pos.max():.1f}",
+                        f"  Mean: {deriv_pos.mean():.1f}",
+                    ]
+                )
+        ax_info.text(
+            0.1,
+            0.95,
+            "\n".join(info_lines),
+            fontsize=10,
+            verticalalignment="top",
+            family="monospace",
+            transform=ax_info.transAxes,
+            bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
+        )
 
         plt.tight_layout()
         plt.show()
@@ -582,10 +628,12 @@ class Destreak:
         return f"Destreak(prev={has_prev}, center={self._center.timestamp}, next={has_next})"
 
 
-def destreak_frame(prev_frame: Frame | None,
-                   center_frame: Frame,
-                   next_frame: Frame | None,
-                   config: WamosConfig | None = None) -> np.ndarray:
+def destreak_frame(
+    prev_frame: Frame | None,
+    center_frame: Frame,
+    next_frame: Frame | None,
+    config: WamosConfig | None = None,
+) -> np.ndarray:
     """
     Convenience function to destreak a single frame.
 
@@ -605,26 +653,36 @@ def destreak_frame(prev_frame: Frame | None,
 def _add_arguments(parser) -> None:
     """Add command arguments to parser."""
     parser.add_argument("polar_files", nargs="+", help="Polar files to process")
-    parser.add_argument("--config", "-c", type=str, default=None,
-                        help="YAML configuration file")
-    parser.add_argument("--plot", "-p", action="store_true",
-                        help="Show diagnostic plots for each frame")
-    parser.add_argument("--cmap", type=str, default="viridis",
-                        help="Colormap for plots (default: viridis)")
-    parser.add_argument("--deramp", "-d", action="store_true",
-                        help="Apply deramping before destreaking")
-    parser.add_argument("--quantile", "-q", type=float, default=0.10,
-                        help="Deramp quantile (0.0-1.0, default: 0.10)")
-    parser.add_argument("--smooth-window", "-s", type=int, default=None,
-                        help="Deramp smoothing window in bins (default: 2%% of range bins)")
+    parser.add_argument("--config", "-c", type=str, default=None, help="YAML configuration file")
+    parser.add_argument(
+        "--plot", "-p", action="store_true", help="Show diagnostic plots for each frame"
+    )
+    parser.add_argument(
+        "--cmap", type=str, default="viridis", help="Colormap for plots (default: viridis)"
+    )
+    parser.add_argument(
+        "--deramp", "-d", action="store_true", help="Apply deramping before destreaking"
+    )
+    parser.add_argument(
+        "--quantile",
+        "-q",
+        type=float,
+        default=0.10,
+        help="Deramp quantile (0.0-1.0, default: 0.10)",
+    )
+    parser.add_argument(
+        "--smooth-window",
+        "-s",
+        type=int,
+        default=None,
+        help="Deramp smoothing window in bins (default: 2%% of range bins)",
+    )
 
 
 def add_subparser(subparsers) -> None:
     """Register the 'destreak' subcommand."""
     p = subparsers.add_parser(
-        'destreak',
-        help='Standalone destreak tool',
-        description="Test destreak algorithm"
+        "destreak", help="Standalone destreak tool", description="Test destreak algorithm"
     )
     _add_arguments(p)
     p.set_defaults(func=run)
@@ -636,7 +694,7 @@ def run(args) -> None:
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s"
+        format="%(asctime)s %(levelname)s %(message)s",
     )
 
     # Load config
@@ -659,7 +717,10 @@ def run(args) -> None:
     # Apply deramping if requested
     if args.deramp:
         from wamos_tpw.deramp import Deramp
-        logging.info(f"Applying deramp (quantile={args.quantile*100:.0f}%, smooth_window={args.smooth_window or 'auto'})")
+
+        logging.info(
+            f"Applying deramp (quantile={args.quantile * 100:.0f}%, smooth_window={args.smooth_window or 'auto'})"
+        )
         for frame in frames:
             deramp = Deramp(frame, config, quantile=args.quantile, smooth_window=args.smooth_window)
             frame.deramped_intensity = deramp.corrected_intensity
@@ -671,14 +732,18 @@ def run(args) -> None:
 
         ds = Destreak(prev_frame, center, next_frame, config)
         logging.info(f"Frame {i}: {ds}")
-        logging.info(f"  Original intensity range: [{center.intensity.min():.1f}, {center.intensity.max():.1f}]")
+        logging.info(
+            f"  Original intensity range: [{center.intensity.min():.1f}, {center.intensity.max():.1f}]"
+        )
 
         corrected = ds.corrected_intensity
         logging.info(f"  Corrected intensity range: [{corrected.min():.1f}, {corrected.max():.1f}]")
 
         n_streaks = ds.streak_mask.sum()
         total_pixels = ds.streak_mask.size
-        logging.info(f"  Streaks detected: {n_streaks} / {total_pixels} ({100*n_streaks/total_pixels:.2f}%)")
+        logging.info(
+            f"  Streaks detected: {n_streaks} / {total_pixels} ({100 * n_streaks / total_pixels:.2f}%)"
+        )
 
         if args.plot:
             ds.plot_diagnostics(cmap=args.cmap)

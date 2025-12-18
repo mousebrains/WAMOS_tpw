@@ -31,6 +31,7 @@ class WamosError(Exception):
         ... except WamosError as e:
         ...     print(f"WAMOS error: {e}")
     """
+
     pass
 
 

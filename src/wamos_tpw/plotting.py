@@ -24,7 +24,8 @@ if TYPE_CHECKING:
 # Radar Height Utility
 # -----------------------------------------------------------------------------
 
-def get_radar_height(radar_height: float | None, frame: 'Frame') -> float | None:
+
+def get_radar_height(radar_height: float | None, frame: "Frame") -> float | None:
     """
     Get radar height with fallback priority.
 
@@ -53,9 +54,10 @@ def get_radar_height(radar_height: float | None, frame: 'Frame') -> float | None
 # Utility Functions
 # -----------------------------------------------------------------------------
 
-def quantile_limits(data: np.ndarray,
-                    low_pct: float = 1.0,
-                    high_pct: float = 99.0) -> Tuple[float, float]:
+
+def quantile_limits(
+    data: np.ndarray, low_pct: float = 1.0, high_pct: float = 99.0
+) -> Tuple[float, float]:
     """
     Calculate quantile-based colorbar limits.
 
@@ -92,8 +94,7 @@ def calc_bin_edges(centers: np.ndarray) -> np.ndarray:
     return edges
 
 
-def sort_polar_data(bearing: np.ndarray,
-                    data: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def sort_polar_data(bearing: np.ndarray, data: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
     Sort bearing values and reorder data to match.
 
@@ -149,13 +150,10 @@ def format_nav_title(frame: Frame) -> str:
     if wind_parts:
         parts.append(f"Wind: {', '.join(wind_parts)}")
 
-    return ' | '.join(parts) if parts else ''
+    return " | ".join(parts) if parts else ""
 
 
-def add_crosshairs(ax,
-                   color: str = 'gray',
-                   linewidth: float = 0.5,
-                   linestyle: str = '--') -> None:
+def add_crosshairs(ax, color: str = "gray", linewidth: float = 0.5, linestyle: str = "--") -> None:
     """
     Add crosshairs at origin for ship/earth coordinate plots.
 
@@ -169,13 +167,15 @@ def add_crosshairs(ax,
     ax.axvline(0, color=color, linewidth=linewidth, linestyle=linestyle)
 
 
-def add_range_rings(ax,
-                    max_range: float,
-                    interval: float = 1000.0,
-                    color: str = 'gray',
-                    linewidth: float = 0.5,
-                    linestyle: str = ':',
-                    label: bool = True) -> None:
+def add_range_rings(
+    ax,
+    max_range: float,
+    interval: float = 1000.0,
+    color: str = "gray",
+    linewidth: float = 0.5,
+    linestyle: str = ":",
+    label: bool = True,
+) -> None:
     """
     Add concentric range rings at regular intervals for ship/earth plots.
 
@@ -195,31 +195,34 @@ def add_range_rings(ax,
 
     for i in range(1, n_rings + 1):
         radius = i * interval
-        circle = Circle((0, 0), radius, fill=False,
-                        color=color, linewidth=linewidth, linestyle=linestyle)
+        circle = Circle(
+            (0, 0), radius, fill=False, color=color, linewidth=linewidth, linestyle=linestyle
+        )
         ax.add_patch(circle)
 
         if label:
             # Add label at top of ring
-            label_text = f'{radius/1000:.0f}km' if radius >= 1000 else f'{radius:.0f}m'
-            ax.text(0, radius, label_text, ha='center', va='bottom',
-                   fontsize=8, color=color)
+            label_text = f"{radius / 1000:.0f}km" if radius >= 1000 else f"{radius:.0f}m"
+            ax.text(0, radius, label_text, ha="center", va="bottom", fontsize=8, color=color)
 
 
 # -----------------------------------------------------------------------------
 # Plotting Helpers
 # -----------------------------------------------------------------------------
 
-def plot_polar(ax,
-               data: np.ndarray,
-               bearing: np.ndarray,
-               range_vals: np.ndarray,
-               vmin: float,
-               vmax: float,
-               cmap: str = 'viridis',
-               x_label: str = 'Distance (m)',
-               y_label: str = 'Bearing (°)',
-               shading: str = 'auto'):
+
+def plot_polar(
+    ax,
+    data: np.ndarray,
+    bearing: np.ndarray,
+    range_vals: np.ndarray,
+    vmin: float,
+    vmax: float,
+    cmap: str = "viridis",
+    x_label: str = "Distance (m)",
+    y_label: str = "Bearing (°)",
+    shading: str = "auto",
+):
     """
     Plot data in polar coordinates (bearing vs range).
 
@@ -238,26 +241,26 @@ def plot_polar(ax,
     Returns:
         QuadMesh object from pcolormesh
     """
-    im = ax.pcolormesh(range_vals, bearing, data,
-                       vmin=vmin, vmax=vmax,
-                       cmap=cmap, shading=shading)
+    im = ax.pcolormesh(range_vals, bearing, data, vmin=vmin, vmax=vmax, cmap=cmap, shading=shading)
     ax.set_xlabel(x_label)
     ax.set_ylabel(y_label)
     return im
 
 
-def plot_cartesian(ax,
-                   data: np.ndarray,
-                   x: np.ndarray,
-                   y: np.ndarray,
-                   vmin: float,
-                   vmax: float,
-                   cmap: str = 'viridis',
-                   x_label: str = 'X (m)',
-                   y_label: str = 'Y (m)',
-                   equal_aspect: bool = True,
-                   crosshairs: bool = True,
-                   shading: str = 'auto'):
+def plot_cartesian(
+    ax,
+    data: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    vmin: float,
+    vmax: float,
+    cmap: str = "viridis",
+    x_label: str = "X (m)",
+    y_label: str = "Y (m)",
+    equal_aspect: bool = True,
+    crosshairs: bool = True,
+    shading: str = "auto",
+):
     """
     Plot data in cartesian coordinates.
 
@@ -278,14 +281,12 @@ def plot_cartesian(ax,
     Returns:
         QuadMesh object from pcolormesh
     """
-    im = ax.pcolormesh(x, y, data,
-                       vmin=vmin, vmax=vmax,
-                       cmap=cmap, shading=shading)
+    im = ax.pcolormesh(x, y, data, vmin=vmin, vmax=vmax, cmap=cmap, shading=shading)
     ax.set_xlabel(x_label)
     ax.set_ylabel(y_label)
 
     if equal_aspect:
-        ax.set_aspect('equal')
+        ax.set_aspect("equal")
 
     if crosshairs:
         add_crosshairs(ax)
@@ -296,6 +297,7 @@ def plot_cartesian(ax,
 # -----------------------------------------------------------------------------
 # Base Viewer Class
 # -----------------------------------------------------------------------------
+
 
 class BaseViewer(ABC):
     """
@@ -330,10 +332,9 @@ class BaseViewer(ABC):
                 # ... create figure, call _draw_plot(), etc.
     """
 
-    def __init__(self,
-                 n_frames: int,
-                 cmap: str = 'viridis',
-                 figsize: Tuple[float, float] = (10, 8)):
+    def __init__(
+        self, n_frames: int, cmap: str = "viridis", figsize: Tuple[float, float] = (10, 8)
+    ):
         """
         Initialize base viewer.
 
@@ -416,7 +417,7 @@ class BaseViewer(ABC):
             return self._radar_height
         return get_radar_height(self._radar_height, self._frames[frame_idx])
 
-    def _draw_polar(self, frame: 'Frame', data: np.ndarray) -> None:
+    def _draw_polar(self, frame: "Frame", data: np.ndarray) -> None:
         """
         Draw polar view (bearing vs ground distance).
 
@@ -430,10 +431,10 @@ class BaseViewer(ABC):
 
         if height is not None:
             distances = frame.ground_range(height)
-            x_label = 'Ground Distance (m)'
+            x_label = "Ground Distance (m)"
         else:
             distances = frame.slant_range()
-            x_label = 'Slant Range (m)'
+            x_label = "Slant Range (m)"
 
         bearing_centers = self._theta.bearing_for_frame(self._current_idx)
 
@@ -443,13 +444,19 @@ class BaseViewer(ABC):
         dist_edges = calc_bin_edges(distances)
         bearing_edges = calc_bin_edges(sorted_bearing)
 
-        self._im = self._ax.pcolormesh(dist_edges, bearing_edges, sorted_data,
-                                        vmin=self._vmin, vmax=self._vmax,
-                                        cmap=self._cmap, shading='flat')
+        self._im = self._ax.pcolormesh(
+            dist_edges,
+            bearing_edges,
+            sorted_data,
+            vmin=self._vmin,
+            vmax=self._vmax,
+            cmap=self._cmap,
+            shading="flat",
+        )
         self._ax.set_xlabel(x_label)
-        self._ax.set_ylabel('Bearing (°)')
+        self._ax.set_ylabel("Bearing (°)")
 
-    def _draw_ship(self, frame: 'Frame', data: np.ndarray) -> None:
+    def _draw_ship(self, frame: "Frame", data: np.ndarray) -> None:
         """
         Draw ship-relative x/y view (+X=starboard, +Y=bow).
 
@@ -464,19 +471,19 @@ class BaseViewer(ABC):
         x, y = self._bearing.xy_ship(self._current_idx)
 
         with warnings.catch_warnings():
-            warnings.filterwarnings('ignore', message='.*input coordinates.*pcolormesh.*')
-            self._im = self._ax.pcolormesh(x, y, data,
-                                            vmin=self._vmin, vmax=self._vmax,
-                                            cmap=self._cmap, shading='nearest')
-        self._ax.set_xlabel('X - Starboard (m)')
-        self._ax.set_ylabel('Y - Bow (m)')
-        self._ax.set_aspect('equal')
+            warnings.filterwarnings("ignore", message=".*input coordinates.*pcolormesh.*")
+            self._im = self._ax.pcolormesh(
+                x, y, data, vmin=self._vmin, vmax=self._vmax, cmap=self._cmap, shading="nearest"
+            )
+        self._ax.set_xlabel("X - Starboard (m)")
+        self._ax.set_ylabel("Y - Bow (m)")
+        self._ax.set_aspect("equal")
         add_crosshairs(self._ax)
 
         max_range = np.sqrt(x**2 + y**2).max()
         add_range_rings(self._ax, max_range, interval=1000.0)
 
-    def _draw_earth(self, frame: 'Frame', data: np.ndarray) -> None:
+    def _draw_earth(self, frame: "Frame", data: np.ndarray) -> None:
         """
         Draw earth-relative x/y view (+X=East, +Y=North).
 
@@ -491,13 +498,13 @@ class BaseViewer(ABC):
         x, y = self._bearing.xy_earth(self._current_idx)
 
         with warnings.catch_warnings():
-            warnings.filterwarnings('ignore', message='.*input coordinates.*pcolormesh.*')
-            self._im = self._ax.pcolormesh(x, y, data,
-                                            vmin=self._vmin, vmax=self._vmax,
-                                            cmap=self._cmap, shading='nearest')
-        self._ax.set_xlabel('X - East (m)')
-        self._ax.set_ylabel('Y - North (m)')
-        self._ax.set_aspect('equal')
+            warnings.filterwarnings("ignore", message=".*input coordinates.*pcolormesh.*")
+            self._im = self._ax.pcolormesh(
+                x, y, data, vmin=self._vmin, vmax=self._vmax, cmap=self._cmap, shading="nearest"
+            )
+        self._ax.set_xlabel("X - East (m)")
+        self._ax.set_ylabel("Y - North (m)")
+        self._ax.set_aspect("equal")
         add_crosshairs(self._ax)
 
         max_range = np.sqrt(x**2 + y**2).max()
@@ -521,11 +528,11 @@ class BaseViewer(ABC):
         # Clear previous plot
         self._ax.clear()
 
-        if self._view == 'polar':
+        if self._view == "polar":
             self._draw_polar(frame, data)
-        elif self._view == 'ship':
+        elif self._view == "ship":
             self._draw_ship(frame, data)
-        elif self._view == 'earth':
+        elif self._view == "earth":
             self._draw_earth(frame, data)
 
         # Update title
@@ -533,8 +540,7 @@ class BaseViewer(ABC):
 
         # Add colorbar only once, but update mappable each time
         if self._cbar is None:
-            self._cbar = self._fig.colorbar(self._im, ax=self._ax,
-                                             label='Intensity (0-4095)')
+            self._cbar = self._fig.colorbar(self._im, ax=self._ax, label="Intensity (0-4095)")
         else:
             # Update colorbar to reference new image while keeping same limits
             self._cbar.mappable = self._im
@@ -572,7 +578,7 @@ class BaseViewer(ABC):
     def _start_animation(self) -> None:
         """Start auto-advancing through frames."""
         self._playing = True
-        self._btn_play.label.set_text('■ Stop')
+        self._btn_play.label.set_text("■ Stop")
         self._fig.canvas.draw_idle()
 
         # Create timer for animation
@@ -583,7 +589,7 @@ class BaseViewer(ABC):
     def _stop_animation(self) -> None:
         """Stop auto-advancing through frames."""
         self._playing = False
-        self._btn_play.label.set_text('▶ Play')
+        self._btn_play.label.set_text("▶ Play")
         self._fig.canvas.draw_idle()
 
         if self._timer is not None:
@@ -606,11 +612,11 @@ class BaseViewer(ABC):
         - space: Toggle play/stop
         - 1, 2, 3, ...: View modes (if _view_keys is set)
         """
-        if event.key in ('left', 'p', 'b'):
+        if event.key in ("left", "p", "b"):
             self._on_prev(event)
-        elif event.key in ('right', 'n', 'f'):
+        elif event.key in ("right", "n", "f"):
             self._on_next(event)
-        elif event.key == ' ':
+        elif event.key == " ":
             self._on_play(event)
         elif event.key in self._view_keys:
             self._set_view(self._view_keys[event.key])
@@ -630,10 +636,9 @@ class BaseViewer(ABC):
     # Button and keyboard setup
     # -------------------------------------------------------------------------
 
-    def _add_nav_buttons(self,
-                         prev_pos: list = None,
-                         next_pos: list = None,
-                         play_pos: list = None) -> None:
+    def _add_nav_buttons(
+        self, prev_pos: list = None, next_pos: list = None, play_pos: list = None
+    ) -> None:
         """
         Add previous/next/play navigation buttons.
 
@@ -656,9 +661,9 @@ class BaseViewer(ABC):
         ax_next = plt.axes(next_pos)
         ax_play = plt.axes(play_pos)
 
-        self._btn_prev = Button(ax_prev, '← Prev')
-        self._btn_next = Button(ax_next, 'Next →')
-        self._btn_play = Button(ax_play, '▶ Play')
+        self._btn_prev = Button(ax_prev, "← Prev")
+        self._btn_next = Button(ax_next, "Next →")
+        self._btn_play = Button(ax_play, "▶ Play")
 
         self._btn_prev.on_clicked(self._on_prev)
         self._btn_next.on_clicked(self._on_next)
@@ -669,8 +674,7 @@ class BaseViewer(ABC):
         self._timer = None
         self._play_interval = 500  # milliseconds between frames
 
-    def _add_view_buttons(self,
-                          views: list[Tuple[str, str, list]]) -> None:
+    def _add_view_buttons(self, views: list[Tuple[str, str, list]]) -> None:
         """
         Add view mode buttons.
 
@@ -691,7 +695,7 @@ class BaseViewer(ABC):
     def _connect_keyboard(self) -> None:
         """Connect keyboard event handler to figure."""
         if self._fig is not None:
-            self._fig.canvas.mpl_connect('key_press_event', self._on_key)
+            self._fig.canvas.mpl_connect("key_press_event", self._on_key)
 
     # -------------------------------------------------------------------------
     # Display
@@ -700,12 +704,14 @@ class BaseViewer(ABC):
     def show(self) -> None:
         """Display the interactive viewer."""
         import matplotlib.pyplot as plt
+
         plt.show()
 
 
 # -----------------------------------------------------------------------------
 # Main (testing)
 # -----------------------------------------------------------------------------
+
 
 def main() -> None:
     """Test plotting utilities."""
@@ -732,9 +738,8 @@ def main() -> None:
     vmin, vmax = quantile_limits(data)
 
     # Polar plot
-    plot_polar(ax1, data, bearing, range_vals, vmin, vmax,
-               x_label='Slant Range (m)')
-    ax1.set_title('Polar Plot Test')
+    plot_polar(ax1, data, bearing, range_vals, vmin, vmax, x_label="Slant Range (m)")
+    ax1.set_title("Polar Plot Test")
 
     # Cartesian plot
     theta = np.deg2rad(bearing)
@@ -744,9 +749,8 @@ def main() -> None:
     x = r_2d * np.sin(theta_2d)
     y = r_2d * np.cos(theta_2d)
 
-    plot_cartesian(ax2, data, x, y, vmin, vmax,
-                   x_label='X - East (m)', y_label='Y - North (m)')
-    ax2.set_title('Cartesian Plot Test')
+    plot_cartesian(ax2, data, x, y, vmin, vmax, x_label="X - East (m)", y_label="Y - North (m)")
+    ax2.set_title("Cartesian Plot Test")
 
     plt.tight_layout()
     plt.show()

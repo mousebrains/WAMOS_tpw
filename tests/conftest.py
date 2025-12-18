@@ -6,8 +6,8 @@ from pathlib import Path
 
 @pytest.fixture(scope="session")
 def test_data_dir() -> Path:
-    """Return path to test data directory."""
-    return Path(__file__).parent / "data"
+    """Return path to test data directory (POLAR at repo root)."""
+    return Path(__file__).parent.parent / "POLAR"
 
 
 @pytest.fixture(scope="session")

@@ -50,14 +50,16 @@ class WamosDataset:
         >>> ds.animate('output.mp4')
     """
 
-    def __init__(self,
-                 polar_path: str | Path,
-                 stime: str,
-                 etime: str,
-                 config: WamosConfig | str | Path | None = None,
-                 radar_height: float | None = None,
-                 groupby: str = 'h',
-                 workers: int | None = None) -> None:
+    def __init__(
+        self,
+        polar_path: str | Path,
+        stime: str,
+        etime: str,
+        config: WamosConfig | str | Path | None = None,
+        radar_height: float | None = None,
+        groupby: str = "h",
+        workers: int | None = None,
+    ) -> None:
         """
         Initialize WamosDataset.
 
@@ -104,7 +106,7 @@ class WamosDataset:
             groupby=groupby,
             workers=workers,
             config=self._config,
-            radar_height=radar_height
+            radar_height=radar_height,
         )
 
         logger.info(f"WamosDataset initialized: {len(self._pframes)} files found")
@@ -141,7 +143,7 @@ class WamosDataset:
         """Return True if data is processed."""
         return self._processed_flag
 
-    def load(self, max_frames: int | None = None, show_progress: bool = True) -> 'WamosDataset':
+    def load(self, max_frames: int | None = None, show_progress: bool = True) -> "WamosDataset":
         """
         Load frames from polar files.
 
@@ -172,11 +174,13 @@ class WamosDataset:
         logger.info(f"Loaded {len(self._frames)} frames")
         return self
 
-    def process(self,
-                show_progress: bool = True,
-                shadow_diagnostics: bool = False,
-                deramp_diagnostics: bool = False,
-                destreak_diagnostics: bool = False) -> 'WamosDataset':
+    def process(
+        self,
+        show_progress: bool = True,
+        shadow_diagnostics: bool = False,
+        deramp_diagnostics: bool = False,
+        destreak_diagnostics: bool = False,
+    ) -> "WamosDataset":
         """
         Process loaded frames (deramp, destreak, normalize).
 
@@ -210,18 +214,20 @@ class WamosDataset:
 
         # Deramp using detected shadow edges and bearing arrays
         logger.info("Deramping frames...")
-        self._pframes.deramp_frames(self._frames,
-                                    diagnostics=deramp_diagnostics,
-                                    show_progress=show_progress,
-                                    shadow_start=shadow_start,
-                                    shadow_end=shadow_end,
-                                    theta=theta)
+        self._pframes.deramp_frames(
+            self._frames,
+            diagnostics=deramp_diagnostics,
+            show_progress=show_progress,
+            shadow_start=shadow_start,
+            shadow_end=shadow_end,
+            theta=theta,
+        )
 
         # Destreak
         logger.info("Destreaking frames...")
-        corrected = self._pframes.destreak_frames(self._frames,
-                                                  diagnostics=destreak_diagnostics,
-                                                  show_progress=show_progress)
+        corrected = self._pframes.destreak_frames(
+            self._frames, diagnostics=destreak_diagnostics, show_progress=show_progress
+        )
 
         # Normalize and store on frames
         logger.info("Normalizing frames...")
@@ -232,15 +238,15 @@ class WamosDataset:
         # Store theta and build coordinate calculators (reuse the already-computed theta)
         self._theta = theta
         self._bearing = Bearing(self._theta, radar_height=self._radar_height)
-        self._combine = Combine(self._frames, config=self._config,
-                               radar_height=self._radar_height)
+        self._combine = Combine(self._frames, config=self._config, radar_height=self._radar_height)
 
         self._processed_flag = True
         logger.info("Processing complete")
         return self
 
-    def to_netcdf(self, path: str | Path, include_raw: bool = False,
-                  compression_level: int = 4) -> Path:
+    def to_netcdf(
+        self, path: str | Path, include_raw: bool = False, compression_level: int = 4
+    ) -> Path:
         """
         Export dataset to CF-1.11 compliant NetCDF format with compression.
 
@@ -262,7 +268,9 @@ class WamosDataset:
         try:
             import xarray as xr
         except ImportError:
-            raise ImportError("xarray required for NetCDF export. Install with: pip install xarray netCDF4")
+            raise ImportError(
+                "xarray required for NetCDF export. Install with: pip install xarray netCDF4"
+            )
 
         if not self._processed_flag:
             raise RuntimeError("Data not processed. Call process() first.")
@@ -289,255 +297,300 @@ class WamosDataset:
             bearing_angles = np.linspace(0, 360, n_bearings, endpoint=False)
 
         # Build data arrays
-        corrected = np.stack([
-            (f.corrected_intensity if f.corrected_intensity is not None
-             else f.intensity.astype(np.float32))
-            for f in self._frames
-        ]).astype(np.float32)
+        corrected = np.stack(
+            [
+                (
+                    f.corrected_intensity
+                    if f.corrected_intensity is not None
+                    else f.intensity.astype(np.float32)
+                )
+                for f in self._frames
+            ]
+        ).astype(np.float32)
 
         # Create time coordinate with CF attributes
         time_coord = xr.DataArray(
             times,
-            dims=['time'],
+            dims=["time"],
             attrs={
-                'standard_name': 'time',
-                'long_name': 'time of radar sweep',
-                'axis': 'T',
-            }
+                "standard_name": "time",
+                "long_name": "time of radar sweep",
+                "axis": "T",
+            },
         )
 
         # Create range coordinate with CF attributes
         range_coord = xr.DataArray(
             slant_range.astype(np.float32),
-            dims=['range'],
+            dims=["range"],
             attrs={
-                'standard_name': 'range',
-                'long_name': 'slant range from radar',
-                'units': 'm',
-                'axis': 'X',
-                'positive': 'up',
-            }
+                "standard_name": "range",
+                "long_name": "slant range from radar",
+                "units": "m",
+                "axis": "X",
+                "positive": "up",
+            },
         )
 
         # Create bearing coordinate with CF attributes
         bearing_coord = xr.DataArray(
             bearing_angles.astype(np.float32),
-            dims=['bearing'],
+            dims=["bearing"],
             attrs={
-                'standard_name': 'sensor_azimuth_angle',
-                'long_name': 'radar beam azimuth angle',
-                'units': 'degree',
-                'axis': 'Y',
-                'comment': 'Azimuth angle measured clockwise from north (0=north, 90=east)',
-            }
+                "standard_name": "sensor_azimuth_angle",
+                "long_name": "radar beam azimuth angle",
+                "units": "degree",
+                "axis": "Y",
+                "comment": "Azimuth angle measured clockwise from north (0=north, 90=east)",
+            },
         )
 
         # Create dataset with CF-compliant structure
         ds = xr.Dataset(
             coords={
-                'time': time_coord,
-                'bearing': bearing_coord,
-                'range': range_coord,
+                "time": time_coord,
+                "bearing": bearing_coord,
+                "range": range_coord,
             }
         )
 
         # Add intensity variable with CF attributes
-        ds['radar_intensity'] = xr.DataArray(
+        ds["radar_intensity"] = xr.DataArray(
             corrected,
-            dims=['time', 'bearing', 'range'],
+            dims=["time", "bearing", "range"],
             attrs={
-                'long_name': 'normalized radar backscatter intensity',
-                'units': '1',
-                'standard_name': 'surface_backwards_scattering_coefficient_of_radar_wave',
-                'comment': 'Processed intensity with deramp and destreak corrections applied, normalized to [0,1]',
-                'valid_min': 0.0,
-                'valid_max': 1.0,
-                'coverage_content_type': 'physicalMeasurement',
-            }
+                "long_name": "normalized radar backscatter intensity",
+                "units": "1",
+                "standard_name": "surface_backwards_scattering_coefficient_of_radar_wave",
+                "comment": "Processed intensity with deramp and destreak corrections applied, normalized to [0,1]",
+                "valid_min": 0.0,
+                "valid_max": 1.0,
+                "coverage_content_type": "physicalMeasurement",
+            },
         )
 
         # Add raw intensity if requested
         if include_raw:
             raw = np.stack([f.intensity for f in self._frames]).astype(np.uint16)
-            ds['raw_intensity'] = xr.DataArray(
+            ds["raw_intensity"] = xr.DataArray(
                 raw,
-                dims=['time', 'bearing', 'range'],
+                dims=["time", "bearing", "range"],
                 attrs={
-                    'long_name': 'raw radar backscatter intensity',
-                    'units': '1',
-                    'comment': 'Original 12-bit intensity values (0-4095)',
-                    'valid_min': 0,
-                    'valid_max': 4095,
-                    'coverage_content_type': 'physicalMeasurement',
-                }
+                    "long_name": "raw radar backscatter intensity",
+                    "units": "1",
+                    "comment": "Original 12-bit intensity values (0-4095)",
+                    "valid_min": 0,
+                    "valid_max": 4095,
+                    "coverage_content_type": "physicalMeasurement",
+                },
             )
 
         # Add platform position variables (CF trajectory/platform conventions)
         meta = self._frames[0].metadata
         if meta.latitude is not None:
-            lats = np.array([f.metadata.latitude if f.metadata.latitude is not None
-                           else np.nan for f in self._frames], dtype=np.float64)
-            ds['latitude'] = xr.DataArray(
+            lats = np.array(
+                [
+                    f.metadata.latitude if f.metadata.latitude is not None else np.nan
+                    for f in self._frames
+                ],
+                dtype=np.float64,
+            )
+            ds["latitude"] = xr.DataArray(
                 lats,
-                dims=['time'],
+                dims=["time"],
                 attrs={
-                    'standard_name': 'latitude',
-                    'long_name': 'latitude of radar platform',
-                    'units': 'degrees_north',
-                    'valid_min': -90.0,
-                    'valid_max': 90.0,
-                    'axis': 'Y',
-                }
+                    "standard_name": "latitude",
+                    "long_name": "latitude of radar platform",
+                    "units": "degrees_north",
+                    "valid_min": -90.0,
+                    "valid_max": 90.0,
+                    "axis": "Y",
+                },
             )
 
         if meta.longitude is not None:
-            lons = np.array([f.metadata.longitude if f.metadata.longitude is not None
-                           else np.nan for f in self._frames], dtype=np.float64)
-            ds['longitude'] = xr.DataArray(
+            lons = np.array(
+                [
+                    f.metadata.longitude if f.metadata.longitude is not None else np.nan
+                    for f in self._frames
+                ],
+                dtype=np.float64,
+            )
+            ds["longitude"] = xr.DataArray(
                 lons,
-                dims=['time'],
+                dims=["time"],
                 attrs={
-                    'standard_name': 'longitude',
-                    'long_name': 'longitude of radar platform',
-                    'units': 'degrees_east',
-                    'valid_min': -180.0,
-                    'valid_max': 180.0,
-                    'axis': 'X',
-                }
+                    "standard_name": "longitude",
+                    "long_name": "longitude of radar platform",
+                    "units": "degrees_east",
+                    "valid_min": -180.0,
+                    "valid_max": 180.0,
+                    "axis": "X",
+                },
             )
 
         if meta.heading is not None:
-            headings = np.array([f.metadata.heading if f.metadata.heading is not None
-                               else np.nan for f in self._frames], dtype=np.float32)
-            ds['platform_heading'] = xr.DataArray(
+            headings = np.array(
+                [
+                    f.metadata.heading if f.metadata.heading is not None else np.nan
+                    for f in self._frames
+                ],
+                dtype=np.float32,
+            )
+            ds["platform_heading"] = xr.DataArray(
                 headings,
-                dims=['time'],
+                dims=["time"],
                 attrs={
-                    'standard_name': 'platform_azimuth_angle',
-                    'long_name': 'ship heading',
-                    'units': 'degree',
-                    'comment': 'Heading measured clockwise from north (0=north, 90=east)',
-                    'valid_min': 0.0,
-                    'valid_max': 360.0,
-                }
+                    "standard_name": "platform_azimuth_angle",
+                    "long_name": "ship heading",
+                    "units": "degree",
+                    "comment": "Heading measured clockwise from north (0=north, 90=east)",
+                    "valid_min": 0.0,
+                    "valid_max": 360.0,
+                },
             )
 
         # Add ship speed if available
         if meta.ship_speed is not None:
-            speeds = np.array([f.metadata.ship_speed if f.metadata.ship_speed is not None
-                             else np.nan for f in self._frames], dtype=np.float32)
-            ds['platform_speed'] = xr.DataArray(
+            speeds = np.array(
+                [
+                    f.metadata.ship_speed if f.metadata.ship_speed is not None else np.nan
+                    for f in self._frames
+                ],
+                dtype=np.float32,
+            )
+            ds["platform_speed"] = xr.DataArray(
                 speeds,
-                dims=['time'],
+                dims=["time"],
                 attrs={
-                    'standard_name': 'platform_speed_wrt_ground',
-                    'long_name': 'ship speed over ground',
-                    'units': 'm s-1',
-                    'valid_min': 0.0,
-                }
+                    "standard_name": "platform_speed_wrt_ground",
+                    "long_name": "ship speed over ground",
+                    "units": "m s-1",
+                    "valid_min": 0.0,
+                },
             )
 
         # Add wind variables if available
         if meta.wind_speed is not None:
-            wind_speeds = np.array([f.metadata.wind_speed if f.metadata.wind_speed is not None
-                                   else np.nan for f in self._frames], dtype=np.float32)
-            ds['wind_speed'] = xr.DataArray(
+            wind_speeds = np.array(
+                [
+                    f.metadata.wind_speed if f.metadata.wind_speed is not None else np.nan
+                    for f in self._frames
+                ],
+                dtype=np.float32,
+            )
+            ds["wind_speed"] = xr.DataArray(
                 wind_speeds,
-                dims=['time'],
+                dims=["time"],
                 attrs={
-                    'standard_name': 'wind_speed',
-                    'long_name': 'wind speed',
-                    'units': 'm s-1',
-                    'valid_min': 0.0,
-                }
+                    "standard_name": "wind_speed",
+                    "long_name": "wind speed",
+                    "units": "m s-1",
+                    "valid_min": 0.0,
+                },
             )
 
         if meta.wind_direction is not None:
-            wind_dirs = np.array([f.metadata.wind_direction if f.metadata.wind_direction is not None
-                                 else np.nan for f in self._frames], dtype=np.float32)
-            ds['wind_from_direction'] = xr.DataArray(
+            wind_dirs = np.array(
+                [
+                    f.metadata.wind_direction if f.metadata.wind_direction is not None else np.nan
+                    for f in self._frames
+                ],
+                dtype=np.float32,
+            )
+            ds["wind_from_direction"] = xr.DataArray(
                 wind_dirs,
-                dims=['time'],
+                dims=["time"],
                 attrs={
-                    'standard_name': 'wind_from_direction',
-                    'long_name': 'wind direction',
-                    'units': 'degree',
-                    'comment': 'Direction from which wind is blowing, measured clockwise from north',
-                    'valid_min': 0.0,
-                    'valid_max': 360.0,
-                }
+                    "standard_name": "wind_from_direction",
+                    "long_name": "wind direction",
+                    "units": "degree",
+                    "comment": "Direction from which wind is blowing, measured clockwise from north",
+                    "valid_min": 0.0,
+                    "valid_max": 360.0,
+                },
             )
 
         # CF-1.11 compliant global attributes
-        now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         ds.attrs = {
             # Required CF attributes
-            'Conventions': 'CF-1.11',
-            'title': 'WAMOS Marine Radar Backscatter Data',
-            'institution': 'Oregon State University',
-            'source': 'WAMOS marine radar system',
-            'history': f'{now}: Created by wamos_tpw v{__version__}',
-            'references': 'https://github.com/wamos/wamos_tpw',
-
+            "Conventions": "CF-1.11",
+            "title": "WAMOS Marine Radar Backscatter Data",
+            "institution": "Oregon State University",
+            "source": "WAMOS marine radar system",
+            "history": f"{now}: Created by wamos_tpw v{__version__}",
+            "references": "https://github.com/wamos/wamos_tpw",
             # Recommended CF attributes
-            'comment': 'Processed radar backscatter data with range correction (deramp) and streak removal (destreak)',
-            'date_created': now,
-            'date_modified': now,
-            'processing_level': 'L2',
-
+            "comment": "Processed radar backscatter data with range correction (deramp) and streak removal (destreak)",
+            "date_created": now,
+            "date_modified": now,
+            "processing_level": "L2",
             # CF feature type for moving platform
-            'featureType': 'trajectory',
-            'platform': 'ship',
-            'platform_vocabulary': 'https://vocab.nerc.ac.uk/collection/L06/current/',
-            'instrument': 'marine_radar',
-            'instrument_vocabulary': 'https://vocab.nerc.ac.uk/collection/L22/current/',
-
+            "featureType": "trajectory",
+            "platform": "ship",
+            "platform_vocabulary": "https://vocab.nerc.ac.uk/collection/L06/current/",
+            "instrument": "marine_radar",
+            "instrument_vocabulary": "https://vocab.nerc.ac.uk/collection/L22/current/",
             # Data provenance
-            'source_files': str(self._polar_path),
-            'time_coverage_start': str(times[0]),
-            'time_coverage_end': str(times[-1]),
-            'geospatial_lat_min': float(np.nanmin(ds['latitude'].values)) if 'latitude' in ds else 'unknown',
-            'geospatial_lat_max': float(np.nanmax(ds['latitude'].values)) if 'latitude' in ds else 'unknown',
-            'geospatial_lon_min': float(np.nanmin(ds['longitude'].values)) if 'longitude' in ds else 'unknown',
-            'geospatial_lon_max': float(np.nanmax(ds['longitude'].values)) if 'longitude' in ds else 'unknown',
-
+            "source_files": str(self._polar_path),
+            "time_coverage_start": str(times[0]),
+            "time_coverage_end": str(times[-1]),
+            "geospatial_lat_min": float(np.nanmin(ds["latitude"].values))
+            if "latitude" in ds
+            else "unknown",
+            "geospatial_lat_max": float(np.nanmax(ds["latitude"].values))
+            if "latitude" in ds
+            else "unknown",
+            "geospatial_lon_min": float(np.nanmin(ds["longitude"].values))
+            if "longitude" in ds
+            else "unknown",
+            "geospatial_lon_max": float(np.nanmax(ds["longitude"].values))
+            if "longitude" in ds
+            else "unknown",
             # Radar-specific attributes
-            'radar_height_above_sea_surface': float(self._radar_height) if self._radar_height else 'unknown',
-            'range_resolution_m': float(slant_range[1] - slant_range[0]) if len(slant_range) > 1 else 'unknown',
-            'number_of_range_bins': n_distances,
-            'number_of_bearing_bins': n_bearings,
+            "radar_height_above_sea_surface": float(self._radar_height)
+            if self._radar_height
+            else "unknown",
+            "range_resolution_m": float(slant_range[1] - slant_range[0])
+            if len(slant_range) > 1
+            else "unknown",
+            "number_of_range_bins": n_distances,
+            "number_of_bearing_bins": n_bearings,
         }
 
         # Define compression encoding for all variables
         encoding: dict[str, Any] = {}
-        comp: dict[str, Any] = {'zlib': True, 'complevel': compression_level}
+        comp: dict[str, Any] = {"zlib": True, "complevel": compression_level}
 
         for var in ds.data_vars:
             encoding[var] = comp.copy()
             # Use appropriate chunking for large arrays
             if ds[var].ndim == 3:
-                encoding[var]['chunksizes'] = (1, n_bearings, n_distances)
+                encoding[var]["chunksizes"] = (1, n_bearings, n_distances)
 
         # Time encoding for CF compliance
-        encoding['time'] = {
-            'units': 'seconds since 1970-01-01T00:00:00Z',
-            'calendar': 'proleptic_gregorian',
-            'dtype': 'float64',
+        encoding["time"] = {
+            "units": "seconds since 1970-01-01T00:00:00Z",
+            "calendar": "proleptic_gregorian",
+            "dtype": "float64",
         }
 
         # Write to NetCDF-4 with compression
-        ds.to_netcdf(path, format='NETCDF4', encoding=encoding)
+        ds.to_netcdf(path, format="NETCDF4", encoding=encoding)
         logger.info(f"Wrote CF-1.11 compliant NetCDF file: {path}")
 
         return path
 
-    def animate(self,
-                path: str | Path,
-                view: str = 'polar',
-                fps: int = 10,
-                dpi: int = 150,
-                cmap: str = 'viridis',
-                show_progress: bool = True) -> Path:
+    def animate(
+        self,
+        path: str | Path,
+        view: str = "polar",
+        fps: int = 10,
+        dpi: int = 150,
+        cmap: str = "viridis",
+        show_progress: bool = True,
+    ) -> Path:
         """
         Create animation from processed frames.
 
@@ -570,48 +623,66 @@ class WamosDataset:
         fig, ax = plt.subplots(figsize=(10, 8))
 
         # Get data range for consistent colormap
-        all_data = np.concatenate([
-            (f.corrected_intensity if f.corrected_intensity is not None else f.intensity).ravel()
-            for f in self._frames
-        ])
+        all_data = np.concatenate(
+            [
+                (
+                    f.corrected_intensity if f.corrected_intensity is not None else f.intensity
+                ).ravel()
+                for f in self._frames
+            ]
+        )
         vmin, vmax = np.percentile(all_data, [1, 99])
 
         # Animation update function
         def update(frame_idx):
             ax.clear()
             frame = self._frames[frame_idx]
-            data = frame.corrected_intensity if frame.corrected_intensity is not None else frame.intensity
+            data = (
+                frame.corrected_intensity
+                if frame.corrected_intensity is not None
+                else frame.intensity
+            )
 
-            if view == 'polar':
+            if view == "polar":
                 im = ax.pcolormesh(data, vmin=vmin, vmax=vmax, cmap=cmap)
-                ax.set_xlabel('Range bin')
-                ax.set_ylabel('Bearing bin')
+                ax.set_xlabel("Range bin")
+                ax.set_ylabel("Bearing bin")
             else:
                 # For ship/earth views, use bearing coordinates
                 if self._bearing is None:
                     raise RuntimeError("Bearing not computed")
-                x, y = self._bearing.xy_ship(frame_idx) if view == 'ship' else self._bearing.xy_earth(frame_idx)
+                x, y = (
+                    self._bearing.xy_ship(frame_idx)
+                    if view == "ship"
+                    else self._bearing.xy_earth(frame_idx)
+                )
                 im = ax.pcolormesh(x, y, data, vmin=vmin, vmax=vmax, cmap=cmap)
-                ax.set_xlabel('X (m)')
-                ax.set_ylabel('Y (m)')
-                ax.set_aspect('equal')
+                ax.set_xlabel("X (m)")
+                ax.set_ylabel("Y (m)")
+                ax.set_aspect("equal")
 
-            ax.set_title(f'Frame {frame_idx + 1}/{len(self._frames)}: {frame.timestamp}')
+            ax.set_title(f"Frame {frame_idx + 1}/{len(self._frames)}: {frame.timestamp}")
             return [im]
 
         # Create animation
-        anim = animation.FuncAnimation(fig, update, frames=len(self._frames),
-                                       interval=1000/fps, blit=False)
+        anim = animation.FuncAnimation(
+            fig, update, frames=len(self._frames), interval=1000 / fps, blit=False
+        )
 
         # Save
-        writer = 'ffmpeg' if str(path).endswith('.mp4') else 'pillow'
+        writer = "ffmpeg" if str(path).endswith(".mp4") else "pillow"
         pbar = tqdm(total=len(self._frames), desc="Rendering", disable=not show_progress)
 
         def progress_callback(current_frame, total_frames):
             pbar.update(1)
 
-        anim.save(path, writer=writer, fps=fps, dpi=dpi,
-                 progress_callback=progress_callback if show_progress else None)
+        anim.save(
+            path,
+            writer=writer,
+            fps=fps,
+            dpi=dpi,
+            progress_callback=progress_callback if show_progress else None,
+        )
 
         pbar.close()
         plt.close(fig)
@@ -627,28 +698,30 @@ class WamosDataset:
             Dictionary with dataset statistics
         """
         summary = {
-            'polar_path': str(self._polar_path),
-            'stime': self._stime,
-            'etime': self._etime,
-            'n_files': self.n_files,
-            'n_frames': self.n_frames if self._loaded else 0,
-            'is_loaded': self._loaded,
-            'is_processed': self._processed_flag,
-            'config': str(self._config),
+            "polar_path": str(self._polar_path),
+            "stime": self._stime,
+            "etime": self._etime,
+            "n_files": self.n_files,
+            "n_frames": self.n_frames if self._loaded else 0,
+            "is_loaded": self._loaded,
+            "is_processed": self._processed_flag,
+            "config": str(self._config),
         }
 
         if self._loaded and self._frames:
             frame = self._frames[0]
-            summary['frame_shape'] = (frame.n_bearings, frame.n_distances)
-            summary['first_timestamp'] = str(self._frames[0].timestamp)
-            summary['last_timestamp'] = str(self._frames[-1].timestamp)
+            summary["frame_shape"] = (frame.n_bearings, frame.n_distances)
+            summary["first_timestamp"] = str(self._frames[0].timestamp)
+            summary["last_timestamp"] = str(self._frames[-1].timestamp)
 
         return summary
 
     def __repr__(self) -> str:
-        return (f"WamosDataset(polar_path={self._polar_path}, "
-                f"n_files={self.n_files}, n_frames={self.n_frames if self._loaded else 0}, "
-                f"loaded={self._loaded}, processed={self._processed_flag})")
+        return (
+            f"WamosDataset(polar_path={self._polar_path}, "
+            f"n_files={self.n_files}, n_frames={self.n_frames if self._loaded else 0}, "
+            f"loaded={self._loaded}, processed={self._processed_flag})"
+        )
 
     def __len__(self) -> int:
         """Return number of frames (0 if not loaded)."""

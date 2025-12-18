@@ -12,7 +12,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 # Generic type variable for numpy arrays
-T = TypeVar('T', bound=np.generic)
+T = TypeVar("T", bound=np.generic)
 
 # Common array type aliases
 IntArray = NDArray[np.int_]
@@ -114,7 +114,7 @@ class BearingCalculator(Protocol):
 
 
 # Type for config-like objects
-ConfigDict = dict[str, Union[str, int, float, bool, None, 'ConfigDict']]
+ConfigDict = dict[str, Union[str, int, float, bool, None, "ConfigDict"]]
 
 # Result types
 ProcessingResult = dict[np.datetime64, list[FloatArray]]

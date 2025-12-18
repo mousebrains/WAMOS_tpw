@@ -22,7 +22,7 @@ def _validate_range(
     param: str,
     min_val: float | None = None,
     max_val: float | None = None,
-    allow_none: bool = True
+    allow_none: bool = True,
 ) -> None:
     """
     Validate a numeric value is within bounds.
@@ -51,8 +51,9 @@ def _validate_range(
 @dataclass
 class ShadowConfig:
     """Configuration for radar shadow region."""
-    center: float = 180.0      # Degrees from bow (aft)
-    width: float = 90.0        # Total width in degrees (±45°)
+
+    center: float = 180.0  # Degrees from bow (aft)
+    width: float = 90.0  # Total width in degrees (±45°)
 
     def __post_init__(self) -> None:
         """Validate shadow configuration."""
@@ -73,37 +74,66 @@ class ShadowConfig:
 @dataclass
 class OffsetsConfig:
     """Configuration for compass and mounting offsets."""
-    compass: float = 0.0           # Compass offset (CMPOFF)
-    bow_to_radar: float = 0.0      # Bow to radar angle (BO2RA)
-    heading_delay: float = 0.0     # Heading delay (HDGDL)
+
+    compass: float = 0.0  # Compass offset (CMPOFF)
+    bow_to_radar: float = 0.0  # Bow to radar angle (BO2RA)
+    heading_delay: float = 0.0  # Heading delay (HDGDL)
 
     def __post_init__(self) -> None:
         """Validate offsets configuration."""
-        _validate_range(self.compass, "offsets.compass", min_val=-360.0, max_val=360.0, allow_none=False)
-        _validate_range(self.bow_to_radar, "offsets.bow_to_radar", min_val=-360.0, max_val=360.0, allow_none=False)
-        _validate_range(self.heading_delay, "offsets.heading_delay", min_val=-360.0, max_val=360.0, allow_none=False)
+        _validate_range(
+            self.compass, "offsets.compass", min_val=-360.0, max_val=360.0, allow_none=False
+        )
+        _validate_range(
+            self.bow_to_radar,
+            "offsets.bow_to_radar",
+            min_val=-360.0,
+            max_val=360.0,
+            allow_none=False,
+        )
+        _validate_range(
+            self.heading_delay,
+            "offsets.heading_delay",
+            min_val=-360.0,
+            max_val=360.0,
+            allow_none=False,
+        )
 
 
 @dataclass
 class ThetaRefinementConfig:
     """Configuration for theta/bearing refinement using shadow region."""
+
     enabled: bool = True
-    search_range: float = 55.0      # Degrees to search around expected shadow
-    min_frames: int = 3             # Minimum frames for refinement
+    search_range: float = 55.0  # Degrees to search around expected shadow
+    min_frames: int = 3  # Minimum frames for refinement
     intensity_threshold: float = 0.2  # Fraction of max for shadow detection
 
     def __post_init__(self) -> None:
         """Validate theta refinement configuration."""
-        _validate_range(self.search_range, "theta_refinement.search_range", min_val=0.0, max_val=180.0, allow_none=False)
+        _validate_range(
+            self.search_range,
+            "theta_refinement.search_range",
+            min_val=0.0,
+            max_val=180.0,
+            allow_none=False,
+        )
         _validate_range(self.min_frames, "theta_refinement.min_frames", min_val=1, allow_none=False)
-        _validate_range(self.intensity_threshold, "theta_refinement.intensity_threshold", min_val=0.0, max_val=1.0, allow_none=False)
+        _validate_range(
+            self.intensity_threshold,
+            "theta_refinement.intensity_threshold",
+            min_val=0.0,
+            max_val=1.0,
+            allow_none=False,
+        )
 
 
 @dataclass
 class RadarConfig:
     """Configuration for radar physical parameters."""
-    height: float | None = None     # Height above water (meters)
-    tower: str = "UNKNOWN"          # Tower identifier
+
+    height: float | None = None  # Height above water (meters)
+    tower: str = "UNKNOWN"  # Tower identifier
 
     def __post_init__(self) -> None:
         """Validate radar configuration."""
@@ -113,6 +143,7 @@ class RadarConfig:
 @dataclass
 class PlottingConfig:
     """Configuration for plotting."""
+
     cmap: str = "viridis"
     intensity_vmin: float = 0.0
     intensity_vmax: float = 4095.0
@@ -120,26 +151,35 @@ class PlottingConfig:
 
     def __post_init__(self) -> None:
         """Validate plotting configuration."""
-        _validate_range(self.intensity_vmin, "plotting.intensity_vmin", min_val=0.0, allow_none=False)
-        _validate_range(self.intensity_vmax, "plotting.intensity_vmax", min_val=0.0, allow_none=False)
+        _validate_range(
+            self.intensity_vmin, "plotting.intensity_vmin", min_val=0.0, allow_none=False
+        )
+        _validate_range(
+            self.intensity_vmax, "plotting.intensity_vmax", min_val=0.0, allow_none=False
+        )
         _validate_range(self.dpi, "plotting.dpi", min_val=1, max_val=1200, allow_none=False)
         if self.intensity_vmin >= self.intensity_vmax:
             raise ConfigError(
                 f"intensity_vmin ({self.intensity_vmin}) must be < intensity_vmax ({self.intensity_vmax})",
-                parameter="plotting.intensity_vmin"
+                parameter="plotting.intensity_vmin",
             )
 
 
 @dataclass
 class DestreakConfig:
     """Configuration for destreaking algorithm."""
-    min_streak_length: int = 10       # Minimum contiguous flagged bins required
-    threshold_sigma: float = 7.5      # Number of one-sided standard deviations for threshold
+
+    min_streak_length: int = 10  # Minimum contiguous flagged bins required
+    threshold_sigma: float = 7.5  # Number of one-sided standard deviations for threshold
 
     def __post_init__(self) -> None:
         """Validate destreak configuration."""
-        _validate_range(self.min_streak_length, "destreak.min_streak_length", min_val=1, allow_none=False)
-        _validate_range(self.threshold_sigma, "destreak.threshold_sigma", min_val=0.0, allow_none=False)
+        _validate_range(
+            self.min_streak_length, "destreak.min_streak_length", min_val=1, allow_none=False
+        )
+        _validate_range(
+            self.threshold_sigma, "destreak.threshold_sigma", min_val=0.0, allow_none=False
+        )
 
 
 class WamosConfig:
@@ -224,58 +264,70 @@ class WamosConfig:
         if not config_path.exists():
             raise FileNotFoundError(f"Config file not found: {config_path}")
 
-        with open(config_path, 'r') as f:
+        with open(config_path, "r") as f:
             config = yaml.safe_load(f)
 
         if config is None:
             return
 
         # Tower identification
-        self.tower = config.get('tower', self.tower)
+        self.tower = config.get("tower", self.tower)
 
         # Radar parameters
-        radar = config.get('radar', {})
-        self.radar.height = radar.get('height', self.radar.height)
-        self.radar.tower = config.get('tower', self.radar.tower)
+        radar = config.get("radar", {})
+        self.radar.height = radar.get("height", self.radar.height)
+        self.radar.tower = config.get("tower", self.radar.tower)
 
         # Shadow region
-        shadow = config.get('shadow', {})
-        self.shadow.center = shadow.get('center', self.shadow.center)
-        self.shadow.width = shadow.get('width', self.shadow.width)
+        shadow = config.get("shadow", {})
+        self.shadow.center = shadow.get("center", self.shadow.center)
+        self.shadow.width = shadow.get("width", self.shadow.width)
 
         # Compass/mounting offsets
-        offsets = config.get('offsets', {})
-        self.offsets.compass = offsets.get('compass', self.offsets.compass)
-        self.offsets.bow_to_radar = offsets.get('bow_to_radar', self.offsets.bow_to_radar)
-        self.offsets.heading_delay = offsets.get('heading_delay', self.offsets.heading_delay)
+        offsets = config.get("offsets", {})
+        self.offsets.compass = offsets.get("compass", self.offsets.compass)
+        self.offsets.bow_to_radar = offsets.get("bow_to_radar", self.offsets.bow_to_radar)
+        self.offsets.heading_delay = offsets.get("heading_delay", self.offsets.heading_delay)
 
         # Theta refinement parameters
-        refine = config.get('theta_refinement', {})
-        self.theta_refinement.enabled = refine.get('enabled', self.theta_refinement.enabled)
-        self.theta_refinement.search_range = refine.get('search_range',
-                                                         self.theta_refinement.search_range)
-        self.theta_refinement.min_frames = refine.get('min_frames',
-                                                       self.theta_refinement.min_frames)
-        self.theta_refinement.intensity_threshold = refine.get('intensity_threshold',
-                                                                self.theta_refinement.intensity_threshold)
+        refine = config.get("theta_refinement", {})
+        self.theta_refinement.enabled = refine.get("enabled", self.theta_refinement.enabled)
+        self.theta_refinement.search_range = refine.get(
+            "search_range", self.theta_refinement.search_range
+        )
+        self.theta_refinement.min_frames = refine.get(
+            "min_frames", self.theta_refinement.min_frames
+        )
+        self.theta_refinement.intensity_threshold = refine.get(
+            "intensity_threshold", self.theta_refinement.intensity_threshold
+        )
 
         # Plotting configuration
-        plotting = config.get('plotting', {})
-        self.plotting.cmap = plotting.get('cmap', self.plotting.cmap)
-        self.plotting.intensity_vmin = plotting.get('intensity_vmin', self.plotting.intensity_vmin)
-        self.plotting.intensity_vmax = plotting.get('intensity_vmax', self.plotting.intensity_vmax)
-        self.plotting.dpi = plotting.get('dpi', self.plotting.dpi)
+        plotting = config.get("plotting", {})
+        self.plotting.cmap = plotting.get("cmap", self.plotting.cmap)
+        self.plotting.intensity_vmin = plotting.get("intensity_vmin", self.plotting.intensity_vmin)
+        self.plotting.intensity_vmax = plotting.get("intensity_vmax", self.plotting.intensity_vmax)
+        self.plotting.dpi = plotting.get("dpi", self.plotting.dpi)
 
         # Destreak configuration
-        destreak = config.get('destreak', {})
-        self.destreak.min_streak_length = destreak.get('min_streak_length',
-                                                        self.destreak.min_streak_length)
-        self.destreak.threshold_sigma = destreak.get('threshold_sigma',
-                                                      self.destreak.threshold_sigma)
+        destreak = config.get("destreak", {})
+        self.destreak.min_streak_length = destreak.get(
+            "min_streak_length", self.destreak.min_streak_length
+        )
+        self.destreak.threshold_sigma = destreak.get(
+            "threshold_sigma", self.destreak.threshold_sigma
+        )
 
         # Store any extra configuration sections
-        known_sections = {'tower', 'radar', 'shadow', 'offsets', 'theta_refinement', 'plotting',
-                          'destreak'}
+        known_sections = {
+            "tower",
+            "radar",
+            "shadow",
+            "offsets",
+            "theta_refinement",
+            "plotting",
+            "destreak",
+        }
         for key, value in config.items():
             if key not in known_sections:
                 self._extra[key] = value
@@ -296,7 +348,7 @@ class WamosConfig:
             return self._extra[key]
 
         # Support dot notation for nested access
-        parts = key.split('.')
+        parts = key.split(".")
         obj: Any = self
 
         for part in parts:
@@ -319,11 +371,11 @@ class WamosConfig:
     def __repr__(self) -> str:
         return (
             f"WamosConfig(tower={self.tower!r}, "
-            f"shadow={self.shadow.center}±{self.shadow.width/2}°, "
+            f"shadow={self.shadow.center}±{self.shadow.width / 2}°, "
             f"radar_height={self.radar.height})"
         )
 
-    def __enter__(self) -> 'WamosConfig':
+    def __enter__(self) -> "WamosConfig":
         """Enter context manager."""
         return self
 
@@ -369,18 +421,16 @@ destreak:
 
 def _add_arguments(parser) -> None:
     """Add command arguments to parser."""
-    parser.add_argument("config", nargs="?", type=str, default=None,
-                        help="YAML configuration file")
-    parser.add_argument("--create-sample", action="store_true",
-                        help="Create a sample configuration file")
+    parser.add_argument("config", nargs="?", type=str, default=None, help="YAML configuration file")
+    parser.add_argument(
+        "--create-sample", action="store_true", help="Create a sample configuration file"
+    )
 
 
 def add_subparser(subparsers) -> None:
     """Register the 'config' subcommand."""
     p = subparsers.add_parser(
-        'config',
-        help='Show/validate configuration',
-        description="Test WAMOS configuration loading"
+        "config", help="Show/validate configuration", description="Test WAMOS configuration loading"
     )
     _add_arguments(p)
     p.set_defaults(func=run)

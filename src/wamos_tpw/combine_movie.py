@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from wamos_tpw.config import WamosConfig
 
 
-def generate_movie(args: Namespace, config: 'WamosConfig') -> None:
+def generate_movie(args: Namespace, config: "WamosConfig") -> None:
     """
     Generate an MP4 movie from radar frame sequences.
 
@@ -97,7 +97,7 @@ def generate_movie(args: Namespace, config: 'WamosConfig') -> None:
                 logging.debug(f"Group {group_idx}: {period} - loading...")
                 frames = list(frames)
                 if args.max_frames:
-                    frames = frames[:args.max_frames]
+                    frames = frames[: args.max_frames]
                 if not frames:
                     logging.debug(f"Group {group_idx}: empty, skipping")
                     continue
@@ -138,19 +138,21 @@ def generate_movie(args: Namespace, config: 'WamosConfig') -> None:
 
         rendered_count = len(frame_paths) - skipped_count
         if skipped_count > 0:
-            logging.info(f"Resumed from checkpoint: {skipped_count} existing, {rendered_count} rendered")
+            logging.info(
+                f"Resumed from checkpoint: {skipped_count} existing, {rendered_count} rendered"
+            )
         else:
             logging.info(f"Rendered {len(frame_paths)} frames")
 
         # Create movie with ffmpeg
         logging.info(f"Creating MP4 with ffmpeg ({args.fps} fps)...")
 
-        ffmpeg_path = shutil.which('ffmpeg')
+        ffmpeg_path = shutil.which("ffmpeg")
         if ffmpeg_path is None:
             logging.error("ffmpeg not found. Install with: brew install ffmpeg")
             if not args.frames_dir:
                 # Copy frames to output directory as fallback
-                fallback_dir = args.movie.replace('.mp4', '_frames')
+                fallback_dir = args.movie.replace(".mp4", "_frames")
                 os.makedirs(fallback_dir, exist_ok=True)
                 for i, path in enumerate(frame_paths):
                     if path:
@@ -159,24 +161,36 @@ def generate_movie(args: Namespace, config: 'WamosConfig') -> None:
             else:
                 logging.info(f"Frames saved to: {frames_dir}/")
             logging.info("To create movie manually:")
-            logging.info(f"  ffmpeg -framerate {args.fps} -pattern_type glob -i '{frames_dir}/frame_*.png' "
-                         f"-vf 'scale=trunc(iw/2)*2:trunc(ih/2)*2' "
-                         f"-c:v libx264 -pix_fmt yuv420p {args.movie}")
+            logging.info(
+                f"  ffmpeg -framerate {args.fps} -pattern_type glob -i '{frames_dir}/frame_*.png' "
+                f"-vf 'scale=trunc(iw/2)*2:trunc(ih/2)*2' "
+                f"-c:v libx264 -pix_fmt yuv420p {args.movie}"
+            )
         else:
             # Use ffmpeg with H.264 codec for web compatibility
             # Use glob pattern since filenames include timestamps
             ffmpeg_cmd = [
-                ffmpeg_path, '-y',  # Overwrite output
-                '-framerate', str(args.fps),
-                '-pattern_type', 'glob',
-                '-i', f'{frames_dir}/frame_*.png',
-                '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',  # H.264 needs even dimensions
-                '-c:v', 'libx264',
-                '-preset', 'medium',
-                '-crf', '23',  # Quality (lower = better, 18-28 typical)
-                '-pix_fmt', 'yuv420p',  # Web compatibility
-                '-movflags', '+faststart',  # Web streaming
-                args.movie
+                ffmpeg_path,
+                "-y",  # Overwrite output
+                "-framerate",
+                str(args.fps),
+                "-pattern_type",
+                "glob",
+                "-i",
+                f"{frames_dir}/frame_*.png",
+                "-vf",
+                "scale=trunc(iw/2)*2:trunc(ih/2)*2",  # H.264 needs even dimensions
+                "-c:v",
+                "libx264",
+                "-preset",
+                "medium",
+                "-crf",
+                "23",  # Quality (lower = better, 18-28 typical)
+                "-pix_fmt",
+                "yuv420p",  # Web compatibility
+                "-movflags",
+                "+faststart",  # Web streaming
+                args.movie,
             ]
 
             result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)

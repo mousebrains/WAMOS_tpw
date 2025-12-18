@@ -43,10 +43,12 @@ class Combine:
     # Earth radius in meters (WGS84 mean radius)
     _EARTH_RADIUS = 6371000.0
 
-    def __init__(self,
-                 frames: list[Frame],
-                 config: WamosConfig | None = None,
-                 radar_height: float | None = None):
+    def __init__(
+        self,
+        frames: list[Frame],
+        config: WamosConfig | None = None,
+        radar_height: float | None = None,
+    ):
         """
         Initialize Combine for a set of contiguous frames.
 
@@ -153,10 +155,9 @@ class Combine:
 
         return x_earth, y_earth
 
-    def _compute_frame_latlon(self,
-                               frame_idx: int,
-                               x_earth: np.ndarray,
-                               y_earth: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def _compute_frame_latlon(
+        self, frame_idx: int, x_earth: np.ndarray, y_earth: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Convert x/y earth coordinates to lat/lon.
 
@@ -247,11 +248,15 @@ class Combine:
         result = np.empty(total, dtype=np.float32)
         offset = 0
         for frame in self._frames:
-            data = (frame.corrected_intensity if frame.corrected_intensity is not None
-                    else frame.deramped_intensity if frame.deramped_intensity is not None
-                    else frame.intensity)
+            data = (
+                frame.corrected_intensity
+                if frame.corrected_intensity is not None
+                else frame.deramped_intensity
+                if frame.deramped_intensity is not None
+                else frame.intensity
+            )
             size = data.size
-            result[offset:offset + size] = data.ravel()
+            result[offset : offset + size] = data.ravel()
             offset += size
         return result
 
@@ -283,8 +288,8 @@ class Combine:
                 heading = frame.metadata.heading or 0.0
             speed = frame.metadata.ship_speed or 0.0
 
-            ship_speeds[idx:idx + n_radials] = speed
-            ship_headings[idx:idx + n_radials] = heading
+            ship_speeds[idx : idx + n_radials] = speed
+            ship_headings[idx : idx + n_radials] = heading
             idx += n_radials
 
         # Calculate time deltas between consecutive radials
@@ -344,11 +349,11 @@ class Combine:
         speed = total / duration if duration > 0 else 0.0
 
         return {
-            'total_m': total,
-            'x_m': dx,
-            'y_m': dy,
-            'duration_s': duration,
-            'speed_m_s': speed,
+            "total_m": total,
+            "x_m": dx,
+            "y_m": dy,
+            "duration_s": duration,
+            "speed_m_s": speed,
         }
 
     def frame_velocities(self) -> dict:
@@ -389,13 +394,13 @@ class Combine:
         heading_std = np.degrees(np.sqrt(-2 * np.log(R))) if R > 0 else 0.0
 
         return {
-            'speeds': speeds,
-            'headings': headings,
-            'speed_mean': np.mean(speeds) if len(speeds) > 0 else 0.0,
-            'speed_std': np.std(speeds) if len(speeds) > 0 else 0.0,
-            'heading_mean': heading_mean,
-            'heading_std': heading_std,
-            'duration_s': times[-1] - times[0] if len(times) > 1 else 0.0,
+            "speeds": speeds,
+            "headings": headings,
+            "speed_mean": np.mean(speeds) if len(speeds) > 0 else 0.0,
+            "speed_std": np.std(speeds) if len(speeds) > 0 else 0.0,
+            "heading_mean": heading_mean,
+            "heading_std": heading_std,
+            "duration_s": times[-1] - times[0] if len(times) > 1 else 0.0,
         }
 
     def compute_grid_bounds(self, padding: float = 1.1) -> Tuple[float, float, float, float]:
@@ -433,10 +438,9 @@ class Combine:
 
         return x_min, x_max, y_min, y_max
 
-    def _grid_frame(self,
-                    frame_idx: int,
-                    x_edges: np.ndarray,
-                    y_edges: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def _grid_frame(
+        self, frame_idx: int, x_edges: np.ndarray, y_edges: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Grid a single frame onto the predefined grid.
 
@@ -453,9 +457,13 @@ class Combine:
 
         # Get intensity (use corrected if available)
         frame = self._frames[frame_idx]
-        intensity = (frame.corrected_intensity if frame.corrected_intensity is not None
-                    else frame.deramped_intensity if frame.deramped_intensity is not None
-                    else frame.intensity)
+        intensity = (
+            frame.corrected_intensity
+            if frame.corrected_intensity is not None
+            else frame.deramped_intensity
+            if frame.deramped_intensity is not None
+            else frame.intensity
+        )
 
         # Flatten for binning
         x_flat = x_earth.ravel()
@@ -485,9 +493,9 @@ class Combine:
 
         return sum_grid, count_grid
 
-    def grid_parallel(self,
-                      grid_size: int = 800,
-                      workers: int | None = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def grid_parallel(
+        self, grid_size: int = 800, workers: int | None = None
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Grid all frames in parallel onto a common grid.
 
@@ -533,7 +541,7 @@ class Combine:
                 count_total += count_grid
 
         # Compute mean (avoid division by zero)
-        with np.errstate(invalid='ignore'):
+        with np.errstate(invalid="ignore"):
             gridded = sum_total / count_total
         gridded[count_total == 0] = np.nan
 
@@ -559,12 +567,14 @@ class Combine:
 
         return -track_angle  # negate to rotate track onto Y-axis
 
-    def _rotate_coords(self,
-                       x: np.ndarray,
-                       y: np.ndarray,
-                       angle: float,
-                       center_x: float = 0.0,
-                       center_y: float = 0.0) -> Tuple[np.ndarray, np.ndarray]:
+    def _rotate_coords(
+        self,
+        x: np.ndarray,
+        y: np.ndarray,
+        angle: float,
+        center_x: float = 0.0,
+        center_y: float = 0.0,
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Rotate coordinates by angle around center point.
 
@@ -587,13 +597,15 @@ class Combine:
 
         return x_rot, y_rot
 
-    def _create_nonuniform_edges(self,
-                                  min_val: float,
-                                  max_val: float,
-                                  n_bins: int,
-                                  center: float = 0.0,
-                                  fine_fraction: float = 0.3,
-                                  coarse_ratio: float = 4.0) -> np.ndarray:
+    def _create_nonuniform_edges(
+        self,
+        min_val: float,
+        max_val: float,
+        n_bins: int,
+        center: float = 0.0,
+        fine_fraction: float = 0.3,
+        coarse_ratio: float = 4.0,
+    ) -> np.ndarray:
         """
         Create non-uniform grid edges - finer near center, coarser at edges.
 
@@ -664,11 +676,9 @@ class Combine:
 
         return np.array(edges)
 
-    def _grid_frame_rotated(self,
-                            frame_idx: int,
-                            x_edges: np.ndarray,
-                            y_edges: np.ndarray,
-                            angle: float) -> Tuple[np.ndarray, np.ndarray]:
+    def _grid_frame_rotated(
+        self, frame_idx: int, x_edges: np.ndarray, y_edges: np.ndarray, angle: float
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Grid a single frame onto the rotated non-uniform grid.
 
@@ -689,9 +699,13 @@ class Combine:
 
         # Get intensity (use processed if available)
         frame = self._frames[frame_idx]
-        intensity = (frame.corrected_intensity if frame.corrected_intensity is not None
-                    else frame.deramped_intensity if frame.deramped_intensity is not None
-                    else frame.intensity)
+        intensity = (
+            frame.corrected_intensity
+            if frame.corrected_intensity is not None
+            else frame.deramped_intensity
+            if frame.deramped_intensity is not None
+            else frame.intensity
+        )
 
         # Flatten
         x_flat = x_rot.ravel()
@@ -720,10 +734,9 @@ class Combine:
 
         return sum_grid, count_grid
 
-    def grid_parallel_rotated(self,
-                               n_along: int = 600,
-                               n_cross: int = 800,
-                               workers: int | None = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    def grid_parallel_rotated(
+        self, n_along: int = 600, n_cross: int = 800, workers: int | None = None
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float]:
         """
         Grid all frames in parallel onto a rotated non-uniform grid.
 
@@ -771,10 +784,12 @@ class Combine:
 
         # Cross track: non-uniform (finer near ship track)
         x_edges = self._create_nonuniform_edges(
-            x_min, x_max, n_cross,
+            x_min,
+            x_max,
+            n_cross,
             center=track_x_center,
             fine_fraction=0.2,  # 20% of width at fine resolution
-            coarse_ratio=3.0    # edges 3x coarser than center
+            coarse_ratio=3.0,  # edges 3x coarser than center
         )
 
         n_x = len(x_edges) - 1
@@ -805,17 +820,15 @@ class Combine:
                 count_total += count_grid
 
         # Compute mean
-        with np.errstate(invalid='ignore'):
+        with np.errstate(invalid="ignore"):
             gridded = sum_total / count_total
         gridded[count_total == 0] = np.nan
 
         return x_edges, y_edges, gridded, angle
 
-    def _grid_data(self,
-                   lon: np.ndarray,
-                   lat: np.ndarray,
-                   values: np.ndarray,
-                   grid_size: int = 1000) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def _grid_data(
+        self, lon: np.ndarray, lat: np.ndarray, values: np.ndarray, grid_size: int = 1000
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Grid irregular data onto a regular lat/lon grid using binned statistics.
 
@@ -838,16 +851,14 @@ class Combine:
 
         # Bin the data using mean
         result, _, _, _ = binned_statistic_2d(
-            lon, lat, values,
-            statistic='mean',
-            bins=[lon_edges, lat_edges]
+            lon, lat, values, statistic="mean", bins=[lon_edges, lat_edges]
         )
 
         return lon_edges, lat_edges, result.T  # Transpose to match pcolormesh expectation
 
-    def _xy_to_latlon_edges(self,
-                             x_edges: np.ndarray,
-                             y_edges: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def _xy_to_latlon_edges(
+        self, x_edges: np.ndarray, y_edges: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Convert x/y edges in meters to lat/lon edges.
 
@@ -870,12 +881,14 @@ class Combine:
     # Plotting methods (delegate to combine_plot module)
     # -------------------------------------------------------------------------
 
-    def plot_diagnostics(self,
-                         figsize: tuple[float, float] = (10, 10),
-                         n_along: int = 1200,
-                         n_cross: int = 1600,
-                         workers: int | None = None,
-                         show_track: bool = False) -> None:
+    def plot_diagnostics(
+        self,
+        figsize: tuple[float, float] = (10, 10),
+        n_along: int = 1200,
+        n_cross: int = 1600,
+        workers: int | None = None,
+        show_track: bool = False,
+    ) -> None:
         """
         Show diagnostic plots for the combined frames in earth coordinates.
 
@@ -889,16 +902,25 @@ class Combine:
             show_track: Show separate ship track plot (default False)
         """
         from wamos_tpw.combine_plot import plot_diagnostics as _plot_diagnostics
-        _plot_diagnostics(self, figsize=figsize, n_along=n_along, n_cross=n_cross,
-                          workers=workers, show_track=show_track)
 
-    def save_frame(self,
-                   output_path: str,
-                   figsize: tuple[float, float] = (10, 10),
-                   n_along: int = 1200,
-                   n_cross: int = 1600,
-                   workers: int | None = None,
-                   dpi: int = 100) -> None:
+        _plot_diagnostics(
+            self,
+            figsize=figsize,
+            n_along=n_along,
+            n_cross=n_cross,
+            workers=workers,
+            show_track=show_track,
+        )
+
+    def save_frame(
+        self,
+        output_path: str,
+        figsize: tuple[float, float] = (10, 10),
+        n_along: int = 1200,
+        n_cross: int = 1600,
+        workers: int | None = None,
+        dpi: int = 100,
+    ) -> None:
         """
         Save a single frame image non-interactively.
 
@@ -911,8 +933,16 @@ class Combine:
             dpi: Image resolution
         """
         from wamos_tpw.combine_plot import save_frame as _save_frame
-        _save_frame(self, output_path, figsize=figsize, n_along=n_along, n_cross=n_cross,
-                    workers=workers, dpi=dpi)
+
+        _save_frame(
+            self,
+            output_path,
+            figsize=figsize,
+            n_along=n_along,
+            n_cross=n_cross,
+            workers=workers,
+            dpi=dpi,
+        )
 
     def __len__(self) -> int:
         """Return number of frames."""
@@ -932,43 +962,61 @@ class Combine:
 # CLI
 # -----------------------------------------------------------------------------
 
+
 def _add_arguments(parser) -> None:
     """Add command arguments to parser."""
     from wamos_tpw.filenames import add_common_arguments
+
     add_common_arguments(parser)
-    parser.add_argument("--groupby", "-g", type=str, default='h',
-                        help="Groupby frequency (default: h)")
-    parser.add_argument("--config", "-c", type=str, default=None,
-                        help="YAML configuration file")
-    parser.add_argument("--radar-height", type=float, default=None,
-                        help="Radar height above water (m)")
-    parser.add_argument("--max-frames", type=int, default=None,
-                        help="Maximum frames to process per group")
-    parser.add_argument("--no-process", dest="process", action="store_false",
-                        help="Skip processing (deramp + destreak)")
+    parser.add_argument(
+        "--groupby", "-g", type=str, default="h", help="Groupby frequency (default: h)"
+    )
+    parser.add_argument("--config", "-c", type=str, default=None, help="YAML configuration file")
+    parser.add_argument(
+        "--radar-height", type=float, default=None, help="Radar height above water (m)"
+    )
+    parser.add_argument(
+        "--max-frames", type=int, default=None, help="Maximum frames to process per group"
+    )
+    parser.add_argument(
+        "--no-process",
+        dest="process",
+        action="store_false",
+        help="Skip processing (deramp + destreak)",
+    )
     parser.set_defaults(process=True)
-    parser.add_argument("--plot", action="store_true",
-                        help="Show interactive viewer with prev/next/play buttons")
-    parser.add_argument("--movie", type=str, default=None,
-                        help="Output movie file (e.g., output.mp4)")
-    parser.add_argument("--frames-dir", type=str, default=None,
-                        help="Directory to save frame images (persistent, not deleted)")
-    parser.add_argument("--resume", action="store_true",
-                        help="Resume from checkpoint (skip existing frames in --frames-dir)")
-    parser.add_argument("--fps", type=int, default=10,
-                        help="Frames per second for movie (default: 10)")
-    parser.add_argument("--netcdf", type=str, default=None,
-                        help="Output NetCDF file (e.g., output.nc)")
-    parser.add_argument("--show-track", action="store_true",
-                        help="Show separate ship track plot")
+    parser.add_argument(
+        "--plot", action="store_true", help="Show interactive viewer with prev/next/play buttons"
+    )
+    parser.add_argument(
+        "--movie", type=str, default=None, help="Output movie file (e.g., output.mp4)"
+    )
+    parser.add_argument(
+        "--frames-dir",
+        type=str,
+        default=None,
+        help="Directory to save frame images (persistent, not deleted)",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from checkpoint (skip existing frames in --frames-dir)",
+    )
+    parser.add_argument(
+        "--fps", type=int, default=10, help="Frames per second for movie (default: 10)"
+    )
+    parser.add_argument(
+        "--netcdf", type=str, default=None, help="Output NetCDF file (e.g., output.nc)"
+    )
+    parser.add_argument("--show-track", action="store_true", help="Show separate ship track plot")
 
 
 def add_subparser(subparsers) -> None:
     """Register the 'combine' subcommand."""
     p = subparsers.add_parser(
-        'combine',
-        help='Combine frames into earth coordinates',
-        description="Combine multiple frames with ship motion compensation"
+        "combine",
+        help="Combine frames into earth coordinates",
+        description="Combine multiple frames with ship motion compensation",
     )
     _add_arguments(p)
     p.set_defaults(func=run)
@@ -1004,7 +1052,7 @@ def run(args) -> None:
             for period, frames in pframes.itergroups():
                 frames = list(frames)
                 if args.max_frames:
-                    frames = frames[:args.max_frames]
+                    frames = frames[: args.max_frames]
                 logging.info(f"{period}: {len(frames)} frames")
 
                 if not frames:
@@ -1069,7 +1117,7 @@ def run(args) -> None:
                 for period, frames in pframes.itergroups():
                     frames = list(frames)
                     if args.max_frames:
-                        frames = frames[:args.max_frames]
+                        frames = frames[: args.max_frames]
                     logging.info(f"{period}: {len(frames)} frames")
 
                     if not frames:
@@ -1111,6 +1159,7 @@ def run(args) -> None:
     # Movie generation mode
     if args.movie:
         from wamos_tpw.combine_movie import generate_movie
+
         generate_movie(args, config)
         return
 

@@ -18,9 +18,7 @@ from wamos_tpw.bearing import Theta, Bearing
 from wamos_tpw.config import WamosConfig
 from wamos_tpw.filenames import Filenames, _parse_timestamp
 from wamos_tpw.frame import Frame
-from wamos_tpw.plotting import (
-    BaseViewer, quantile_limits, calc_bin_edges, format_nav_title
-)
+from wamos_tpw.plotting import BaseViewer, quantile_limits, calc_bin_edges, format_nav_title
 from wamos_tpw.polarfile import load_polar_file
 
 
@@ -42,13 +40,15 @@ class Files:
         ...     process_frames(frames)
     """
 
-    def __init__(self,
-                 stime: str | np.datetime64,
-                 etime: str | np.datetime64,
-                 polar_path: str,
-                 groupby: str = 'h',
-                 workers: int | None = None,
-                 loader: Callable[[str], Frame | None] | None = None) -> None:
+    def __init__(
+        self,
+        stime: str | np.datetime64,
+        etime: str | np.datetime64,
+        polar_path: str,
+        groupby: str = "h",
+        workers: int | None = None,
+        loader: Callable[[str], Frame | None] | None = None,
+    ) -> None:
         """
         Initialize Files with a time range and grouping interval.
 
@@ -75,10 +75,7 @@ class Files:
 
         # Initialize Filenames for file discovery
         self._filenames = Filenames(
-            stime=stime,
-            etime=etime,
-            polar_path=polar_path,
-            workers=workers
+            stime=stime, etime=etime, polar_path=polar_path, workers=workers
         )
 
         # Check GIL status for optimal parallelization
@@ -142,9 +139,9 @@ class Files:
             frames = self._load_files(file_list)
             yield period, frames
 
-    def itergroups_parallel(self,
-                           process_fn: Callable[[np.datetime64, list[Frame]], Any],
-                           max_groups: int | None = None) -> Iterator[tuple[np.datetime64, Any]]:
+    def itergroups_parallel(
+        self, process_fn: Callable[[np.datetime64, list[Frame]], Any], max_groups: int | None = None
+    ) -> Iterator[tuple[np.datetime64, Any]]:
         """
         Process groups in parallel, yielding results as they complete.
 
@@ -165,10 +162,7 @@ class Files:
             future_to_period = {}
 
             for period, file_list in groups.items():
-                future = executor.submit(
-                    self._process_group,
-                    period, file_list, process_fn
-                )
+                future = executor.submit(self._process_group, period, file_list, process_fn)
                 future_to_period[future] = period
 
             # Yield results as they complete
@@ -180,10 +174,9 @@ class Files:
                 except Exception as e:
                     logging.error(f"Error processing group {period}: {e}")
 
-    def _process_group(self,
-                      period: np.datetime64,
-                      file_list: list[str],
-                      process_fn: Callable) -> Any:
+    def _process_group(
+        self, period: np.datetime64, file_list: list[str], process_fn: Callable
+    ) -> Any:
         """Process a single group (for parallel execution)."""
         frames = self._load_files(file_list)
         return process_fn(period, frames)
@@ -218,10 +211,7 @@ class Files:
         workers = self._workers or 4
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            future_to_file = {
-                executor.submit(self._loader, fp): fp
-                for fp in file_list
-            }
+            future_to_file = {executor.submit(self._loader, fp): fp for fp in file_list}
 
             for future in as_completed(future_to_file):
                 filepath = future_to_file[future]
@@ -236,9 +226,7 @@ class Files:
         frames.sort(key=lambda f: f.timestamp)
         return frames
 
-    def load_group(self,
-                   period: np.datetime64,
-                   max_frames: int | None = None) -> list[Frame]:
+    def load_group(self, period: np.datetime64, max_frames: int | None = None) -> list[Frame]:
         """
         Load frames for a specific time period.
 
@@ -276,13 +264,13 @@ class Files:
         """Return a summary of the file collection."""
         groups = self.groups()
         return {
-            'stime': self._stime,
-            'etime': self._etime,
-            'polar_path': self._polar_path,
-            'groupby': self._groupby,
-            'total_files': len(self),
-            'n_groups': len(groups),
-            'groups': {str(k): len(v) for k, v in groups.items()},
+            "stime": self._stime,
+            "etime": self._etime,
+            "polar_path": self._polar_path,
+            "groupby": self._groupby,
+            "total_files": len(self),
+            "n_groups": len(groups),
+            "groups": {str(k): len(v) for k, v in groups.items()},
         }
 
     def __repr__(self) -> str:
@@ -302,9 +290,9 @@ class Files:
             lines.append(f"    {period}: {len(files)} files")
         if len(groups) > 5:
             lines.append(f"    ... and {len(groups) - 5} more groups")
-        return '\n'.join(lines)
+        return "\n".join(lines)
 
-    def __enter__(self) -> 'Files':
+    def __enter__(self) -> "Files":
         """Enter context manager."""
         return self
 
@@ -317,15 +305,18 @@ class Files:
 # Plotting functions
 # -----------------------------------------------------------------------------
 
-def plot_frame_intensity(frame: Frame,
-                        ax=None,
-                        vmin: float | None = None,
-                        vmax: float | None = None,
-                        cmap: str = 'viridis',
-                        title: str | None = None,
-                        colorbar: bool = True,
-                        radar_height: float | None = None,
-                        config: WamosConfig | None = None):
+
+def plot_frame_intensity(
+    frame: Frame,
+    ax=None,
+    vmin: float | None = None,
+    vmax: float | None = None,
+    cmap: str = "viridis",
+    title: str | None = None,
+    colorbar: bool = True,
+    radar_height: float | None = None,
+    config: WamosConfig | None = None,
+):
     """
     Plot frame intensity data using pcolormesh with ground distance axis.
 
@@ -371,11 +362,11 @@ def plot_frame_intensity(frame: Frame,
 
     if radar_height is not None:
         distances = frame.ground_range(radar_height)
-        x_label = 'Ground Distance (m)'
+        x_label = "Ground Distance (m)"
     else:
         # Fall back to slant range if no radar height
         distances = frame.slant_range()
-        x_label = 'Slant Range (m)'
+        x_label = "Slant Range (m)"
 
     # Create coordinate arrays for pcolormesh
     # bearings on y-axis (0 to n_bearings)
@@ -386,21 +377,20 @@ def plot_frame_intensity(frame: Frame,
     dist_edges = calc_bin_edges(distances)
 
     # Create pcolormesh plot with distance coordinates
-    im = ax.pcolormesh(dist_edges, bearings, data,
-                       vmin=vmin, vmax=vmax, cmap=cmap, shading='flat')
+    im = ax.pcolormesh(dist_edges, bearings, data, vmin=vmin, vmax=vmax, cmap=cmap, shading="flat")
 
     # Add colorbar
     if colorbar:
-        fig.colorbar(im, ax=ax, label='Intensity (0-4095)')
+        fig.colorbar(im, ax=ax, label="Intensity (0-4095)")
 
     # Set labels and title
     ax.set_xlabel(x_label)
-    ax.set_ylabel('Bearing bin')
+    ax.set_ylabel("Bearing bin")
     if title is None:
         nav_info = format_nav_title(frame)
-        title = f'Frame: {frame.timestamp}'
+        title = f"Frame: {frame.timestamp}"
         if nav_info:
-            title += f'\n{nav_info}'
+            title += f"\n{nav_info}"
     ax.set_title(title)
 
     return fig, ax, im
@@ -424,15 +414,17 @@ class IntensityViewer(BaseViewer):
         >>> viewer.show()
     """
 
-    def __init__(self,
-                 frames: list[Frame],
-                 vmin: float | None = None,
-                 vmax: float | None = None,
-                 cmap: str = 'viridis',
-                 figsize: tuple[float, float] = (10, 9),
-                 radar_height: float | None = None,
-                 config: WamosConfig | None = None,
-                 view: str = 'polar'):
+    def __init__(
+        self,
+        frames: list[Frame],
+        vmin: float | None = None,
+        vmax: float | None = None,
+        cmap: str = "viridis",
+        figsize: tuple[float, float] = (10, 9),
+        radar_height: float | None = None,
+        config: WamosConfig | None = None,
+        view: str = "polar",
+    ):
         """
         Initialize the intensity viewer.
 
@@ -454,7 +446,7 @@ class IntensityViewer(BaseViewer):
 
         self._frames = frames
         self._view = view
-        self._view_keys = {'1': 'polar', '2': 'ship', '3': 'earth'}
+        self._view_keys = {"1": "polar", "2": "ship", "3": "earth"}
 
         # Calculate quantile limits from all frames if not specified
         if vmin is None or vmax is None:
@@ -493,15 +485,17 @@ class IntensityViewer(BaseViewer):
         self._add_nav_buttons(
             prev_pos=[0.10, 0.02, 0.10, 0.05],
             next_pos=[0.21, 0.02, 0.10, 0.05],
-            play_pos=[0.32, 0.02, 0.10, 0.05]
+            play_pos=[0.32, 0.02, 0.10, 0.05],
         )
 
         # Add view buttons
-        self._add_view_buttons([
-            ('polar', 'Polar', [0.50, 0.02, 0.10, 0.05]),
-            ('ship', 'Ship', [0.61, 0.02, 0.10, 0.05]),
-            ('earth', 'Earth', [0.72, 0.02, 0.10, 0.05]),
-        ])
+        self._add_view_buttons(
+            [
+                ("polar", "Polar", [0.50, 0.02, 0.10, 0.05]),
+                ("ship", "Ship", [0.61, 0.02, 0.10, 0.05]),
+                ("earth", "Earth", [0.72, 0.02, 0.10, 0.05]),
+            ]
+        )
 
         # Connect keyboard navigation
         self._connect_keyboard()
@@ -519,25 +513,29 @@ class IntensityViewer(BaseViewer):
         frame = self._frames[self._current_idx]
         nav_info = format_nav_title(frame)
 
-        view_labels = {'polar': 'Polar', 'ship': 'Ship Coords', 'earth': 'Earth Coords'}
+        view_labels = {"polar": "Polar", "ship": "Ship Coords", "earth": "Earth Coords"}
         view_label = view_labels.get(self._view, self._view)
 
         # Check if using ground or slant range for cartesian views
-        if self._view in ('ship', 'earth'):
+        if self._view in ("ship", "earth"):
             height = self._get_radar_height(self._current_idx)
-            range_type = 'ground' if height is not None else 'slant'
-            view_label += f' ({range_type})'
+            range_type = "ground" if height is not None else "slant"
+            view_label += f" ({range_type})"
 
-        title = f'Frame {self._current_idx + 1}/{len(self._frames)}: {frame.timestamp} [{view_label}]'
+        title = (
+            f"Frame {self._current_idx + 1}/{len(self._frames)}: {frame.timestamp} [{view_label}]"
+        )
         if nav_info:
-            title += f'\n{nav_info}'
+            title += f"\n{nav_info}"
         self._ax.set_title(title)
 
 
-def plot_frame_bits(frame: Frame,
-                   distance_bins: list[int] | None = None,
-                   figsize: tuple[float, float] = (14, 10),
-                   title_prefix: str = ''):
+def plot_frame_bits(
+    frame: Frame,
+    distance_bins: list[int] | None = None,
+    figsize: tuple[float, float] = (14, 10),
+    title_prefix: str = "",
+):
     """
     Plot the top 4 bits for specified distance bins.
 
@@ -562,10 +560,10 @@ def plot_frame_bits(frame: Frame,
     axes = axes.flatten()
 
     bit_data = [
-        ('Bit 12 (PPS)', frame.bit12),
-        ('Bit 13 (Bearing)', frame.bit13),
-        ('Bit 14', frame.bit14),
-        ('Bit 15', frame.bit15),
+        ("Bit 12 (PPS)", frame.bit12),
+        ("Bit 13 (Bearing)", frame.bit13),
+        ("Bit 14", frame.bit14),
+        ("Bit 15", frame.bit15),
     ]
 
     for ax, (bit_name, data) in zip(axes, bit_data):
@@ -574,27 +572,34 @@ def plot_frame_bits(frame: Frame,
         selected = data[:, distance_bins]
 
         # Plot as image (no colorbar needed - values are only 0 or 1)
-        ax.imshow(selected.T, aspect='auto', cmap='binary',
-                  interpolation='nearest', origin='lower', vmin=0, vmax=1)
-        ax.set_xlabel('Bearing bin')
-        ax.set_ylabel('Distance bin index')
+        ax.imshow(
+            selected.T,
+            aspect="auto",
+            cmap="binary",
+            interpolation="nearest",
+            origin="lower",
+            vmin=0,
+            vmax=1,
+        )
+        ax.set_xlabel("Bearing bin")
+        ax.set_ylabel("Distance bin index")
         ax.set_yticks(range(n_bins))
         ax.set_yticklabels([str(b) for b in distance_bins])
-        ax.set_title(f'{bit_name}')
+        ax.set_title(f"{bit_name}")
 
     nav_info = format_nav_title(frame)
-    suptitle = f'{title_prefix}Top 4 bits - Frame: {frame.timestamp}'
+    suptitle = f"{title_prefix}Top 4 bits - Frame: {frame.timestamp}"
     if nav_info:
-        suptitle += f'\n{nav_info}'
+        suptitle += f"\n{nav_info}"
     fig.suptitle(suptitle)
     fig.tight_layout()
 
     return fig, axes
 
 
-def plot_distance_bins_detail(frame: Frame,
-                              distance_bins: list[int] | None = None,
-                              figsize: tuple[float, float] = (16, 12)):
+def plot_distance_bins_detail(
+    frame: Frame, distance_bins: list[int] | None = None, figsize: tuple[float, float] = (16, 12)
+):
     """
     Plot detailed view of top 4 bits for each distance bin.
 
@@ -619,10 +624,10 @@ def plot_distance_bins_detail(frame: Frame,
     fig, axes = plt.subplots(n_bins, 4, figsize=figsize, sharex=True)
 
     bit_extractors = [
-        ('Bit12 (PPS)', frame.bit12),
-        ('Bit13 (Bearing)', frame.bit13),
-        ('Bit14', frame.bit14),
-        ('Bit15', frame.bit15),
+        ("Bit12 (PPS)", frame.bit12),
+        ("Bit13 (Bearing)", frame.bit13),
+        ("Bit14", frame.bit14),
+        ("Bit15", frame.bit15),
     ]
 
     for row_idx, dist_bin in enumerate(distance_bins):
@@ -641,14 +646,14 @@ def plot_distance_bins_detail(frame: Frame,
             if row_idx == 0:
                 ax.set_title(bit_name)
             if col_idx == 0:
-                ax.set_ylabel(f'D={dist_bin}', fontsize=8)
+                ax.set_ylabel(f"D={dist_bin}", fontsize=8)
             if row_idx == n_bins - 1:
-                ax.set_xlabel('Bearing')
+                ax.set_xlabel("Bearing")
 
     nav_info = format_nav_title(frame)
-    suptitle = f'Distance bins {distance_bins[0]}-{distance_bins[-1]} - Frame: {frame.timestamp}'
+    suptitle = f"Distance bins {distance_bins[0]}-{distance_bins[-1]} - Frame: {frame.timestamp}"
     if nav_info:
-        suptitle += f'\n{nav_info}'
+        suptitle += f"\n{nav_info}"
     fig.suptitle(suptitle)
     fig.tight_layout()
 
@@ -678,18 +683,18 @@ def parse_distance_bins(spec: str, max_bins: int) -> list[int]:
     """
     spec = spec.strip()
 
-    if ':' not in spec:
+    if ":" not in spec:
         # Single bin
         try:
             idx = int(spec)
             if idx < 0 or idx >= max_bins:
-                raise ValueError(f"Bin index {idx} out of range [0, {max_bins-1}]")
+                raise ValueError(f"Bin index {idx} out of range [0, {max_bins - 1}]")
             return [idx]
         except ValueError:
             raise ValueError(f"Invalid bin specification: {spec}")
 
     # Slice notation
-    parts = spec.split(':')
+    parts = spec.split(":")
     if len(parts) != 2:
         raise ValueError(f"Invalid slice specification: {spec}")
 
@@ -707,10 +712,12 @@ def parse_distance_bins(spec: str, max_bins: int) -> list[int]:
     return list(range(start, end))
 
 
-def plot_bits_across_frames(frames: list[Frame],
-                            distance_bins: list[int] | None = None,
-                            figsize: tuple[float, float] = (16, 10),
-                            show_frame_boundaries: bool = True):
+def plot_bits_across_frames(
+    frames: list[Frame],
+    distance_bins: list[int] | None = None,
+    figsize: tuple[float, float] = (16, 10),
+    show_frame_boundaries: bool = True,
+):
     """
     Plot all 4 top bits across multiple frames with frame transitions marked.
 
@@ -742,7 +749,7 @@ def plot_bits_across_frames(frames: list[Frame],
 
     for frame in frames:
         for bit in (12, 13, 14, 15):
-            data = getattr(frame, f'bit{bit}')
+            data = getattr(frame, f"bit{bit}")
             # Extract specified distance bins: shape (n_bearings, n_selected_bins)
             selected = data[:, distance_bins]
             bit_data_combined[bit].append(selected)
@@ -757,10 +764,10 @@ def plot_bits_across_frames(frames: list[Frame],
     axes = axes.flatten()
 
     bit_info = [
-        (12, 'Bit 12 (PPS)'),
-        (13, 'Bit 13 (Bearing)'),
-        (14, 'Bit 14'),
-        (15, 'Bit 15'),
+        (12, "Bit 12 (PPS)"),
+        (13, "Bit 13 (Bearing)"),
+        (14, "Bit 14"),
+        (15, "Bit 15"),
     ]
 
     for ax, (bit, bit_name) in zip(axes, bit_info):
@@ -768,23 +775,30 @@ def plot_bits_across_frames(frames: list[Frame],
 
         # Add alternating background colors for frame regions
         if show_frame_boundaries:
-            colors = ['#e8e8e8', '#ffffff']
+            colors = ["#e8e8e8", "#ffffff"]
             for i in range(len(frame_boundaries) - 1):
                 start = frame_boundaries[i]
                 end = frame_boundaries[i + 1]
                 ax.axvspan(start, end, color=colors[i % 2], zorder=0)
 
         # Plot as image (no colorbar - values are only 0 or 1)
-        ax.imshow(data.T, aspect='auto', cmap='binary',
-                  interpolation='nearest', origin='lower', vmin=0, vmax=1)
+        ax.imshow(
+            data.T,
+            aspect="auto",
+            cmap="binary",
+            interpolation="nearest",
+            origin="lower",
+            vmin=0,
+            vmax=1,
+        )
 
         # Add frame boundary lines
         if show_frame_boundaries:
             for boundary in frame_boundaries[1:-1]:
-                ax.axvline(boundary, color='red', linestyle='-', linewidth=0.5, alpha=0.7)
+                ax.axvline(boundary, color="red", linestyle="-", linewidth=0.5, alpha=0.7)
 
-        ax.set_xlabel('Radial index (continuous)')
-        ax.set_ylabel('Distance bin')
+        ax.set_xlabel("Radial index (continuous)")
+        ax.set_ylabel("Distance bin")
         ax.set_yticks(range(n_bins))
         ax.set_yticklabels([str(b) for b in distance_bins])
         ax.set_title(bit_name)
@@ -792,8 +806,8 @@ def plot_bits_across_frames(frames: list[Frame],
     # Create figure title with time range
     start_time = frames[0].timestamp
     end_time = frames[-1].timestamp
-    suptitle = f'Top 4 bits across {len(frames)} frames (D={distance_bins[0]}-{distance_bins[-1]})'
-    suptitle += f'\n{start_time} to {end_time}'
+    suptitle = f"Top 4 bits across {len(frames)} frames (D={distance_bins[0]}-{distance_bins[-1]})"
+    suptitle += f"\n{start_time} to {end_time}"
     fig.suptitle(suptitle)
     fig.tight_layout()
 
@@ -803,46 +817,84 @@ def plot_bits_across_frames(frames: list[Frame],
 def _add_arguments(parser) -> None:
     """Add command arguments to parser."""
     from wamos_tpw.filenames import add_common_arguments
+
     add_common_arguments(parser)
-    parser.add_argument("--groupby", "-g", type=str, default='h',
-                        help="Groupby frequency (default: h)")
-    parser.add_argument("--workers", "-w", type=int, default=None,
-                        help="Number of workers")
-    parser.add_argument("--load", action="store_true",
-                        help="Actually load the files (not just discover)")
-    parser.add_argument("--plot-intensity", action="store_true",
-                        help="Plot intensity (bottom 12 bits) for each frame")
-    parser.add_argument("--plot-bits", action="store_true",
-                        help="Plot top 4 bits per frame (uses --distance-bins)")
-    parser.add_argument("--plot-bits-detail", action="store_true",
-                        help="Plot detailed view of top 4 bits per distance bin per frame")
-    parser.add_argument("--plot-bits-across", action="store_true",
-                        help="Plot top 4 bits across all frames with frame boundaries")
-    parser.add_argument("--distance-bins", type=str, default=":21",
-                        help="Distance bins: N, :N, M:N (default: :21 for D=0-20)")
-    parser.add_argument("--output-dir", "-o", type=str, default=None,
-                        help="Output directory for plots (shows interactively if not set)")
-    parser.add_argument("--max-frames", type=int, default=10,
-                        help="Maximum frames to plot (default: 10)")
-    parser.add_argument("--cmap", type=str, default='viridis',
-                        help="Colormap for intensity plots (default: viridis)")
-    parser.add_argument("--dpi", type=int, default=150,
-                        help="DPI for saved plots (default: 150)")
-    parser.add_argument("--radar-height", type=float, default=None,
-                        help="Radar height above water (m) for ground distance calculation")
-    parser.add_argument("--config", "-c", type=str, default=None,
-                        help="YAML configuration file for bearing calculation")
-    parser.add_argument("--view", type=str, default='polar',
-                        choices=['polar', 'ship', 'earth'],
-                        help="Initial view type for intensity viewer (default: polar)")
+    parser.add_argument(
+        "--groupby", "-g", type=str, default="h", help="Groupby frequency (default: h)"
+    )
+    parser.add_argument("--workers", "-w", type=int, default=None, help="Number of workers")
+    parser.add_argument(
+        "--load", action="store_true", help="Actually load the files (not just discover)"
+    )
+    parser.add_argument(
+        "--plot-intensity",
+        action="store_true",
+        help="Plot intensity (bottom 12 bits) for each frame",
+    )
+    parser.add_argument(
+        "--plot-bits", action="store_true", help="Plot top 4 bits per frame (uses --distance-bins)"
+    )
+    parser.add_argument(
+        "--plot-bits-detail",
+        action="store_true",
+        help="Plot detailed view of top 4 bits per distance bin per frame",
+    )
+    parser.add_argument(
+        "--plot-bits-across",
+        action="store_true",
+        help="Plot top 4 bits across all frames with frame boundaries",
+    )
+    parser.add_argument(
+        "--distance-bins",
+        type=str,
+        default=":21",
+        help="Distance bins: N, :N, M:N (default: :21 for D=0-20)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        "-o",
+        type=str,
+        default=None,
+        help="Output directory for plots (shows interactively if not set)",
+    )
+    parser.add_argument(
+        "--max-frames", type=int, default=10, help="Maximum frames to plot (default: 10)"
+    )
+    parser.add_argument(
+        "--cmap",
+        type=str,
+        default="viridis",
+        help="Colormap for intensity plots (default: viridis)",
+    )
+    parser.add_argument("--dpi", type=int, default=150, help="DPI for saved plots (default: 150)")
+    parser.add_argument(
+        "--radar-height",
+        type=float,
+        default=None,
+        help="Radar height above water (m) for ground distance calculation",
+    )
+    parser.add_argument(
+        "--config",
+        "-c",
+        type=str,
+        default=None,
+        help="YAML configuration file for bearing calculation",
+    )
+    parser.add_argument(
+        "--view",
+        type=str,
+        default="polar",
+        choices=["polar", "ship", "earth"],
+        help="Initial view type for intensity viewer (default: polar)",
+    )
 
 
 def add_subparser(subparsers) -> None:
     """Register the 'view' subcommand."""
     p = subparsers.add_parser(
-        'view',
-        help='View raw intensity data',
-        description="Load WAMOS polar files in time-based groups"
+        "view",
+        help="View raw intensity data",
+        description="Load WAMOS polar files in time-based groups",
     )
     _add_arguments(p)
     p.set_defaults(func=run)
@@ -855,16 +907,19 @@ def run(args) -> None:
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s"
+        format="%(asctime)s %(levelname)s %(message)s",
     )
 
     # Check if any plotting requested
-    do_plot = args.plot_intensity or args.plot_bits or args.plot_bits_detail or args.plot_bits_across
+    do_plot = (
+        args.plot_intensity or args.plot_bits or args.plot_bits_detail or args.plot_bits_across
+    )
 
     if do_plot:
         import matplotlib
+
         if args.output_dir:
-            matplotlib.use('Agg')  # Non-interactive backend for saving
+            matplotlib.use("Agg")  # Non-interactive backend for saving
         import matplotlib.pyplot as plt
 
         if args.output_dir:
@@ -879,11 +934,11 @@ def run(args) -> None:
         etime=args.etime,
         polar_path=args.polar_path,
         groupby=args.groupby,
-        workers=args.workers
+        workers=args.workers,
     )
 
     t1 = time.time()
-    logging.info(f"Discovered {len(files)} files in {t1-t0:.3f}s")
+    logging.info(f"Discovered {len(files)} files in {t1 - t0:.3f}s")
     logging.debug(f"{files}")
 
     if args.load or do_plot:
@@ -907,7 +962,7 @@ def run(args) -> None:
                     break
 
         t3 = time.time()
-        logging.info(f"Loaded {total_frames} frames in {t3-t2:.3f}s")
+        logging.info(f"Loaded {total_frames} frames in {t3 - t2:.3f}s")
 
         if do_plot and frames_collected:
             logging.info(f"Plotting {len(frames_collected)} frames...")
@@ -922,7 +977,7 @@ def run(args) -> None:
                     cmap=args.cmap,
                     radar_height=args.radar_height,
                     config=config,
-                    view=args.view
+                    view=args.view,
                 )
                 logging.info("Navigation: <- -> keys or Prev/Next buttons (wraps around)")
                 logging.info("Views: 1=Polar, 2=Ship, 3=Earth (or click buttons)")
@@ -936,16 +991,15 @@ def run(args) -> None:
 
                 frames_plotted = 0
                 for frame in frames_collected:
-                    ts_str = str(frame.timestamp).replace(':', '-').replace(' ', '_')
+                    ts_str = str(frame.timestamp).replace(":", "-").replace(" ", "_")
 
                     # Plot intensity (file output only - interactive handled above)
                     if args.plot_intensity and args.output_dir:
                         fig, ax, im = plot_frame_intensity(
-                            frame, cmap=args.cmap,
-                            radar_height=args.radar_height, config=config
+                            frame, cmap=args.cmap, radar_height=args.radar_height, config=config
                         )
-                        fname = output_path / f'intensity_{ts_str}.png'
-                        fig.savefig(fname, dpi=args.dpi, bbox_inches='tight')
+                        fname = output_path / f"intensity_{ts_str}.png"
+                        fig.savefig(fname, dpi=args.dpi, bbox_inches="tight")
                         logging.debug(f"    Saved: {fname.name}")
                         plt.close(fig)
 
@@ -953,8 +1007,8 @@ def run(args) -> None:
                     if args.plot_bits:
                         fig, axes = plot_frame_bits(frame, distance_bins=distance_bins)
                         if args.output_dir:
-                            fname = output_path / f'bits_{ts_str}.png'
-                            fig.savefig(fname, dpi=args.dpi, bbox_inches='tight')
+                            fname = output_path / f"bits_{ts_str}.png"
+                            fig.savefig(fname, dpi=args.dpi, bbox_inches="tight")
                             logging.debug(f"    Saved: {fname.name}")
                             plt.close(fig)
                         else:
@@ -964,8 +1018,8 @@ def run(args) -> None:
                     if args.plot_bits_detail:
                         fig, axes = plot_distance_bins_detail(frame, distance_bins=distance_bins)
                         if args.output_dir:
-                            fname = output_path / f'bits_detail_{ts_str}.png'
-                            fig.savefig(fname, dpi=args.dpi, bbox_inches='tight')
+                            fname = output_path / f"bits_detail_{ts_str}.png"
+                            fig.savefig(fname, dpi=args.dpi, bbox_inches="tight")
                             logging.debug(f"    Saved: {fname.name}")
                             plt.close(fig)
                         else:
@@ -978,13 +1032,12 @@ def run(args) -> None:
                 # Plot bits across all frames
                 if args.plot_bits_across and frames_collected:
                     fig, axes = plot_bits_across_frames(
-                        frames_collected,
-                        distance_bins=distance_bins
+                        frames_collected, distance_bins=distance_bins
                     )
                     if args.output_dir:
-                        bin_spec = args.distance_bins.replace(':', '-')
-                        fname = output_path / f'bits_across_D{bin_spec}.png'
-                        fig.savefig(fname, dpi=args.dpi, bbox_inches='tight')
+                        bin_spec = args.distance_bins.replace(":", "-")
+                        fname = output_path / f"bits_across_D{bin_spec}.png"
+                        fig.savefig(fname, dpi=args.dpi, bbox_inches="tight")
                         logging.debug(f"    Saved: {fname.name}")
                         plt.close(fig)
                     else:

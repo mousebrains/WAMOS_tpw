@@ -66,6 +66,6 @@ class TestFrame:
         frame = pf.frame()
 
         repr_str = repr(frame)
-        assert 'Frame(' in repr_str
+        assert "Frame(" in repr_str
         assert str(frame.n_bearings) in repr_str
         assert str(frame.n_distances) in repr_str

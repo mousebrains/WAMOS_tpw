@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 _EARTH_RADIUS = 6371000.0
 
 
-def grid_group(period: str, combine: 'Combine', n_along: int = 1200, n_cross: int = 1600) -> dict:
+def grid_group(period: str, combine: "Combine", n_along: int = 1200, n_cross: int = 1600) -> dict:
     """
     Grid a single group's frames.
 
@@ -60,29 +60,31 @@ def grid_group(period: str, combine: 'Combine', n_along: int = 1200, n_cross: in
     n_pixels = sum(f.n_bearings * f.n_distances for f in combine.frames)
 
     return {
-        'period': str(period),
-        'gridded': gridded,
-        'lat_grid': lat_grid,
-        'lon_grid': lon_grid,
-        'ship_lat': ship_lat,
-        'ship_lon': ship_lon,
-        'ref_lat': ref_lat,
-        'ref_lon': ref_lon,
-        'travel': travel,
-        'n_frames': len(combine.frames),
-        'n_pixels': n_pixels,
-        'x_range': x_edges[-1] - x_edges[0],
-        'y_range': y_edges[-1] - y_edges[0],
-        'grid_shape': (len(x_edges) - 1, len(y_edges) - 1),
+        "period": str(period),
+        "gridded": gridded,
+        "lat_grid": lat_grid,
+        "lon_grid": lon_grid,
+        "ship_lat": ship_lat,
+        "ship_lon": ship_lon,
+        "ref_lat": ref_lat,
+        "ref_lon": ref_lon,
+        "travel": travel,
+        "n_frames": len(combine.frames),
+        "n_pixels": n_pixels,
+        "x_range": x_edges[-1] - x_edges[0],
+        "y_range": y_edges[-1] - y_edges[0],
+        "grid_shape": (len(x_edges) - 1, len(y_edges) - 1),
     }
 
 
-def plot_diagnostics(combine: 'Combine',
-                     figsize: tuple[float, float] = (10, 10),
-                     n_along: int = 1200,
-                     n_cross: int = 1600,
-                     workers: int | None = None,
-                     show_track: bool = False) -> None:
+def plot_diagnostics(
+    combine: "Combine",
+    figsize: tuple[float, float] = (10, 10),
+    n_along: int = 1200,
+    n_cross: int = 1600,
+    workers: int | None = None,
+    show_track: bool = False,
+) -> None:
     """
     Show diagnostic plots for combined frames in earth coordinates.
 
@@ -117,8 +119,10 @@ def plot_diagnostics(combine: 'Combine',
     n_pixels = sum(f.n_bearings * f.n_distances for f in combine.frames)
 
     # Use rotated grid for speed, then display in lat/lon
-    logging.debug(f"Gridding {n_pixels:,} pixels from {n_frames} frames "
-                  f"to {n_cross}x{n_along} rotated grid (parallel)...")
+    logging.debug(
+        f"Gridding {n_pixels:,} pixels from {n_frames} frames "
+        f"to {n_cross}x{n_along} rotated grid (parallel)..."
+    )
 
     # Grid all frames in parallel with rotation
     x_edges, y_edges, gridded, angle = combine.grid_parallel_rotated(
@@ -191,15 +195,15 @@ def plot_diagnostics(combine: 'Combine',
         fig.subplots_adjust(left=0.12, right=0.88, top=0.88, bottom=0.12)
 
     # Round start time down, end time up to nearest second
-    start_ts = pd.Timestamp(combine.frames[0].timestamp).floor('s')
-    end_ts = pd.Timestamp(combine.frames[-1].timestamp).ceil('s')
-    title_str = f'{start_ts} to {end_ts}'
+    start_ts = pd.Timestamp(combine.frames[0].timestamp).floor("s")
+    end_ts = pd.Timestamp(combine.frames[-1].timestamp).ceil("s")
+    title_str = f"{start_ts} to {end_ts}"
 
     # Main plot: Combined intensity in lat/lon
-    im = ax_main.pcolormesh(lon_grid, lat_grid, gridded,
-                            cmap='viridis', vmin=vmin, vmax=vmax,
-                            shading='flat')
-    plt.colorbar(im, ax=ax_main, label='Intensity')
+    im = ax_main.pcolormesh(
+        lon_grid, lat_grid, gridded, cmap="viridis", vmin=vmin, vmax=vmax, shading="flat"
+    )
+    plt.colorbar(im, ax=ax_main, label="Intensity")
 
     # Overlay ship track (subsample if too many points)
     if n_radials > 5000:
@@ -210,12 +214,10 @@ def plot_diagnostics(combine: 'Combine',
         track_lon = ship_lon
         track_lat = ship_lat
 
-    ax_main.plot(track_lon, track_lat, 'r-', linewidth=1.5)
+    ax_main.plot(track_lon, track_lat, "r-", linewidth=1.5)
 
     # Find extent of valid (non-NaN, non-zero) intensity data
-    valid_mask = np.logical_and(
-            np.logical_not(np.isnan(gridded)),
-            (gridded != 0))
+    valid_mask = np.logical_and(np.logical_not(np.isnan(gridded)), (gridded != 0))
     valid_rows, valid_cols = np.where(valid_mask)
 
     if len(valid_rows) > 0:
@@ -238,7 +240,7 @@ def plot_diagnostics(combine: 'Combine',
     # Get axes dimensions in figure coordinates to determine available space
     fig_width, fig_height = fig.get_size_inches()
     plot_width = fig_width * (0.88 - 0.12)
-    plot_height = fig_height * (0.88 - 0.12) * (12/13)
+    plot_height = fig_height * (0.88 - 0.12) * (12 / 13)
 
     # Current data dimensions in "distance units" (lat as reference)
     data_width_dist = data_lon_range / aspect_ratio
@@ -264,52 +266,52 @@ def plot_diagnostics(combine: 'Combine',
     ax_main.set_xlim(lon_min, lon_max)
     ax_main.set_ylim(lat_min, lat_max)
 
-    ax_main.set_xlabel('Longitude (°)')
-    ax_main.set_ylabel('Latitude (°)')
+    ax_main.set_xlabel("Longitude (°)")
+    ax_main.set_ylabel("Latitude (°)")
     ax_main.set_title(title_str, fontsize=11)
     ax_main.set_aspect(aspect_ratio)
     ax_main.margins(0)
-    ax_main.grid(True, linestyle='--', linewidth=0.5, alpha=0.7)
+    ax_main.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
 
     # Add polar scatter plots as insets (if not showing track)
     if not show_track:
         # Ship polar in upper right corner of main axes
         if ship_speeds and ship_headings:
-            ax_ship = ax_main.inset_axes([0.88, 0.85, 0.11, 0.14], projection='polar')
-            ax_ship.set_theta_zero_location('N')
+            ax_ship = ax_main.inset_axes([0.88, 0.85, 0.11, 0.14], projection="polar")
+            ax_ship.set_theta_zero_location("N")
             ax_ship.set_theta_direction(-1)
             headings_rad = np.deg2rad(ship_headings)
             # Color by age - viridis is colorblind-friendly (dark=oldest, bright=newest)
             ages = np.linspace(0, 1, len(ship_speeds))
-            ax_ship.scatter(headings_rad, ship_speeds, c=ages, cmap='viridis',
-                           s=6, alpha=0.8)
+            ax_ship.scatter(headings_rad, ship_speeds, c=ages, cmap="viridis", s=6, alpha=0.8)
             ax_ship.set_xticklabels([])  # Remove angular labels
             ax_ship.tick_params(labelsize=4)
-            ax_ship.set_facecolor('white')
+            ax_ship.set_facecolor("white")
             ax_ship.patch.set_alpha(0.8)
             ax_ship.grid(True, linewidth=0.3, alpha=0.5)
             # Label northwest of polar plot (left of and near top)
-            ax_main.text(0.87, 0.99, 'Ship', transform=ax_main.transAxes,
-                        fontsize=7, ha='right', va='top')
+            ax_main.text(
+                0.87, 0.99, "Ship", transform=ax_main.transAxes, fontsize=7, ha="right", va="top"
+            )
 
         # Wind polar in lower right corner of main axes
         if wind_speeds and wind_dirs:
-            ax_wind = ax_main.inset_axes([0.88, 0.01, 0.11, 0.14], projection='polar')
-            ax_wind.set_theta_zero_location('N')
+            ax_wind = ax_main.inset_axes([0.88, 0.01, 0.11, 0.14], projection="polar")
+            ax_wind.set_theta_zero_location("N")
             ax_wind.set_theta_direction(-1)
             wind_rad = np.deg2rad(wind_dirs)
             # Color by age - viridis is colorblind-friendly (dark=oldest, bright=newest)
             ages = np.linspace(0, 1, len(wind_speeds))
-            ax_wind.scatter(wind_rad, wind_speeds, c=ages, cmap='viridis',
-                           s=6, alpha=0.8)
+            ax_wind.scatter(wind_rad, wind_speeds, c=ages, cmap="viridis", s=6, alpha=0.8)
             ax_wind.set_xticklabels([])  # Remove angular labels
             ax_wind.tick_params(labelsize=4)
-            ax_wind.set_facecolor('white')
+            ax_wind.set_facecolor("white")
             ax_wind.patch.set_alpha(0.8)
             ax_wind.grid(True, linewidth=0.3, alpha=0.5)
             # Label southwest of polar plot (left of and near bottom)
-            ax_main.text(0.87, 0.01, 'Wind', transform=ax_main.transAxes,
-                        fontsize=7, ha='right', va='bottom')
+            ax_main.text(
+                0.87, 0.01, "Wind", transform=ax_main.transAxes, fontsize=7, ha="right", va="bottom"
+            )
 
     # Optional track detail plot
     if show_track:
@@ -323,20 +325,20 @@ def plot_diagnostics(combine: 'Combine',
             track_y = ship_y
             colors = np.linspace(0, 1, n_radials)
 
-        ax_track.scatter(track_x, track_y, c=colors, cmap='coolwarm', s=2)
-        ax_track.plot(ship_x[0], ship_y[0], 'go', markersize=10, label='Start', zorder=5)
-        ax_track.plot(ship_x[-1], ship_y[-1], 'r^', markersize=10, label='End', zorder=5)
+        ax_track.scatter(track_x, track_y, c=colors, cmap="coolwarm", s=2)
+        ax_track.plot(ship_x[0], ship_y[0], "go", markersize=10, label="Start", zorder=5)
+        ax_track.plot(ship_x[-1], ship_y[-1], "r^", markersize=10, label="End", zorder=5)
 
-        ax_track.set_xlabel('X - East (m)')
-        ax_track.set_ylabel('Y - North (m)')
-        ax_track.set_title('Ship Track During Scan')
-        ax_track.legend(fontsize=8, loc='best')
-        ax_track.set_aspect('equal')
-        ax_track.axhline(0, color='gray', linestyle=':', alpha=0.5)
-        ax_track.axvline(0, color='gray', linestyle=':', alpha=0.5)
+        ax_track.set_xlabel("X - East (m)")
+        ax_track.set_ylabel("Y - North (m)")
+        ax_track.set_title("Ship Track During Scan")
+        ax_track.legend(fontsize=8, loc="best")
+        ax_track.set_aspect("equal")
+        ax_track.axhline(0, color="gray", linestyle=":", alpha=0.5)
+        ax_track.axvline(0, color="gray", linestyle=":", alpha=0.5)
 
     # Statistics text
-    ax_info.axis('off')
+    ax_info.axis("off")
 
     # Get frame metadata
     meta = combine.frames[0].metadata
@@ -367,23 +369,30 @@ def plot_diagnostics(combine: 'Combine',
         info_text += f"    Wind: {wind_speed_val:.1f} m/s from {wind_dir_val:.0f}°"
     info_text += f"\nFrames: {n_frames}, Radials: {n_radials:,}, Pixels: {n_pixels:,}"
 
-    ax_info.text(0.5, 0.5, info_text,
-                 transform=ax_info.transAxes,
-                 ha='center', va='center',
-                 fontfamily='monospace',
-                 fontsize=9)
+    ax_info.text(
+        0.5,
+        0.5,
+        info_text,
+        transform=ax_info.transAxes,
+        ha="center",
+        va="center",
+        fontfamily="monospace",
+        fontsize=9,
+    )
 
     logging.debug("Displaying...")
     plt.show()
 
 
-def save_frame(combine: 'Combine',
-               output_path: str,
-               figsize: tuple[float, float] = (10, 10),
-               n_along: int = 1200,
-               n_cross: int = 1600,
-               workers: int | None = None,
-               dpi: int = 100) -> None:
+def save_frame(
+    combine: "Combine",
+    output_path: str,
+    figsize: tuple[float, float] = (10, 10),
+    n_along: int = 1200,
+    n_cross: int = 1600,
+    workers: int | None = None,
+    dpi: int = 100,
+) -> None:
     """
     Save a single frame image non-interactively.
 
@@ -397,7 +406,8 @@ def save_frame(combine: 'Combine',
         dpi: Image resolution
     """
     import matplotlib
-    matplotlib.use('Agg')  # Non-interactive backend
+
+    matplotlib.use("Agg")  # Non-interactive backend
     import matplotlib.pyplot as plt
     import pandas as pd
 
@@ -453,15 +463,15 @@ def save_frame(combine: 'Combine',
     fig.subplots_adjust(left=0.12, right=0.88, top=0.88, bottom=0.12)
 
     # Title with rounded timestamps
-    start_ts = pd.Timestamp(combine.frames[0].timestamp).floor('s')
-    end_ts = pd.Timestamp(combine.frames[-1].timestamp).ceil('s')
-    title_str = f'{start_ts} to {end_ts}'
+    start_ts = pd.Timestamp(combine.frames[0].timestamp).floor("s")
+    end_ts = pd.Timestamp(combine.frames[-1].timestamp).ceil("s")
+    title_str = f"{start_ts} to {end_ts}"
 
     # Main plot
-    im = ax_main.pcolormesh(lon_grid, lat_grid, gridded,
-                            cmap='viridis', vmin=vmin, vmax=vmax,
-                            shading='flat')
-    plt.colorbar(im, ax=ax_main, label='Intensity')
+    im = ax_main.pcolormesh(
+        lon_grid, lat_grid, gridded, cmap="viridis", vmin=vmin, vmax=vmax, shading="flat"
+    )
+    plt.colorbar(im, ax=ax_main, label="Intensity")
 
     # Ship track overlay
     if n_radials > 5000:
@@ -469,7 +479,7 @@ def save_frame(combine: 'Combine',
         track_lon, track_lat = ship_lon[::step], ship_lat[::step]
     else:
         track_lon, track_lat = ship_lon, ship_lat
-    ax_main.plot(track_lon, track_lat, 'r-', linewidth=1.5)
+    ax_main.plot(track_lon, track_lat, "r-", linewidth=1.5)
 
     # Find valid data extent
     valid_mask = np.logical_and(np.logical_not(np.isnan(gridded)), gridded != 0)
@@ -491,7 +501,7 @@ def save_frame(combine: 'Combine',
 
     fig_width, fig_height = fig.get_size_inches()
     plot_width = fig_width * (0.88 - 0.12)
-    plot_height = fig_height * (0.88 - 0.12) * (12/13)
+    plot_height = fig_height * (0.88 - 0.12) * (12 / 13)
     data_width_dist = data_lon_range / aspect_ratio
     data_height_dist = data_lat_range
     plot_aspect = plot_width / plot_height
@@ -500,66 +510,75 @@ def save_frame(combine: 'Combine',
     if plot_aspect > data_aspect:
         new_lon_range = data_lat_range * plot_aspect * aspect_ratio
         lon_center = (lon_min + lon_max) / 2
-        lon_min, lon_max = lon_center - new_lon_range/2, lon_center + new_lon_range/2
+        lon_min, lon_max = lon_center - new_lon_range / 2, lon_center + new_lon_range / 2
     else:
         new_lat_range = data_width_dist / plot_aspect
         lat_center = (lat_min + lat_max) / 2
-        lat_min, lat_max = lat_center - new_lat_range/2, lat_center + new_lat_range/2
+        lat_min, lat_max = lat_center - new_lat_range / 2, lat_center + new_lat_range / 2
 
     ax_main.set_xlim(lon_min, lon_max)
     ax_main.set_ylim(lat_min, lat_max)
-    ax_main.set_xlabel('Longitude (°)')
-    ax_main.set_ylabel('Latitude (°)')
+    ax_main.set_xlabel("Longitude (°)")
+    ax_main.set_ylabel("Latitude (°)")
     ax_main.set_title(title_str, fontsize=11)
     ax_main.set_aspect(aspect_ratio)
     ax_main.margins(0)
-    ax_main.grid(True, linestyle='--', linewidth=0.5, alpha=0.7)
+    ax_main.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
 
     # Polar insets
     if ship_speeds and ship_headings:
-        ax_ship = ax_main.inset_axes([0.88, 0.85, 0.11, 0.14], projection='polar')
-        ax_ship.set_theta_zero_location('N')
+        ax_ship = ax_main.inset_axes([0.88, 0.85, 0.11, 0.14], projection="polar")
+        ax_ship.set_theta_zero_location("N")
         ax_ship.set_theta_direction(-1)
         ages = np.linspace(0, 1, len(ship_speeds))
-        ax_ship.scatter(np.deg2rad(ship_headings), ship_speeds, c=ages,
-                       cmap='viridis', s=6, alpha=0.8)
+        ax_ship.scatter(
+            np.deg2rad(ship_headings), ship_speeds, c=ages, cmap="viridis", s=6, alpha=0.8
+        )
         ax_ship.set_xticklabels([])
         ax_ship.tick_params(labelsize=4)
-        ax_ship.set_facecolor('white')
+        ax_ship.set_facecolor("white")
         ax_ship.patch.set_alpha(0.8)
         ax_ship.grid(True, linewidth=0.3, alpha=0.5)
-        ax_main.text(0.87, 0.99, 'Ship', transform=ax_main.transAxes,
-                    fontsize=7, ha='right', va='top')
+        ax_main.text(
+            0.87, 0.99, "Ship", transform=ax_main.transAxes, fontsize=7, ha="right", va="top"
+        )
 
     if wind_speeds and wind_dirs:
-        ax_wind = ax_main.inset_axes([0.88, 0.01, 0.11, 0.14], projection='polar')
-        ax_wind.set_theta_zero_location('N')
+        ax_wind = ax_main.inset_axes([0.88, 0.01, 0.11, 0.14], projection="polar")
+        ax_wind.set_theta_zero_location("N")
         ax_wind.set_theta_direction(-1)
         ages = np.linspace(0, 1, len(wind_speeds))
-        ax_wind.scatter(np.deg2rad(wind_dirs), wind_speeds, c=ages,
-                       cmap='viridis', s=6, alpha=0.8)
+        ax_wind.scatter(np.deg2rad(wind_dirs), wind_speeds, c=ages, cmap="viridis", s=6, alpha=0.8)
         ax_wind.set_xticklabels([])
         ax_wind.tick_params(labelsize=4)
-        ax_wind.set_facecolor('white')
+        ax_wind.set_facecolor("white")
         ax_wind.patch.set_alpha(0.8)
         ax_wind.grid(True, linewidth=0.3, alpha=0.5)
-        ax_main.text(0.87, 0.01, 'Wind', transform=ax_main.transAxes,
-                    fontsize=7, ha='right', va='bottom')
+        ax_main.text(
+            0.87, 0.01, "Wind", transform=ax_main.transAxes, fontsize=7, ha="right", va="bottom"
+        )
 
     # Info panel
-    ax_info.axis('off')
+    ax_info.axis("off")
     travel = combine.travel_distance()
     info_text = (
         f"Ship: {travel['total_m']:.0f}m in {travel['duration_s']:.0f}s "
         f"({travel['speed_m_s']:.2f} m/s)    "
         f"Frames: {n_frames}"
     )
-    ax_info.text(0.5, 0.5, info_text, transform=ax_info.transAxes,
-                 ha='center', va='center', fontfamily='monospace', fontsize=9)
+    ax_info.text(
+        0.5,
+        0.5,
+        info_text,
+        transform=ax_info.transAxes,
+        ha="center",
+        va="center",
+        fontfamily="monospace",
+        fontsize=9,
+    )
 
     # Save
-    fig.savefig(output_path, dpi=dpi, bbox_inches='tight',
-                facecolor='white', edgecolor='none')
+    fig.savefig(output_path, dpi=dpi, bbox_inches="tight", facecolor="white", edgecolor="none")
     plt.close(fig)
 
 
@@ -582,10 +601,9 @@ class CombineViewer:
         - Space: Play/Stop animation
     """
 
-    def __init__(self,
-                 total_groups: int = 0,
-                 cmap: str = 'viridis',
-                 figsize: tuple[float, float] = (10, 10)):
+    def __init__(
+        self, total_groups: int = 0, cmap: str = "viridis", figsize: tuple[float, float] = (10, 10)
+    ):
         """
         Initialize the viewer.
 
@@ -643,9 +661,9 @@ class CombineViewer:
         ax_next = plt.axes([0.23, 0.02, 0.1, 0.04])
         ax_play = plt.axes([0.34, 0.02, 0.1, 0.04])
 
-        self._btn_prev = Button(ax_prev, '← Prev')
-        self._btn_next = Button(ax_next, 'Next →')
-        self._btn_play = Button(ax_play, '▶ Play')
+        self._btn_prev = Button(ax_prev, "← Prev")
+        self._btn_next = Button(ax_next, "Next →")
+        self._btn_play = Button(ax_play, "▶ Play")
 
         self._btn_prev.on_clicked(self._on_prev)
         self._btn_next.on_clicked(self._on_next)
@@ -677,7 +695,7 @@ class CombineViewer:
     def _start_animation(self) -> None:
         """Start auto-advancing through groups."""
         self._playing = True
-        self._btn_play.label.set_text('■ Stop')
+        self._btn_play.label.set_text("■ Stop")
         self._fig.canvas.draw_idle()
 
         self._timer = self._fig.canvas.new_timer(interval=self._play_interval)
@@ -687,7 +705,7 @@ class CombineViewer:
     def _stop_animation(self) -> None:
         """Stop auto-advancing through groups."""
         self._playing = False
-        self._btn_play.label.set_text('▶ Play')
+        self._btn_play.label.set_text("▶ Play")
         self._fig.canvas.draw_idle()
 
         if self._timer is not None:
@@ -702,11 +720,11 @@ class CombineViewer:
 
     def _on_key(self, event) -> None:
         """Handle keyboard navigation."""
-        if event.key in ('left', 'p', 'b'):
+        if event.key in ("left", "p", "b"):
             self._on_prev(event)
-        elif event.key in ('right', 'n', 'f'):
+        elif event.key in ("right", "n", "f"):
             self._on_next(event)
-        elif event.key == ' ':
+        elif event.key == " ":
             self._on_play(event)
 
     def _draw_plot(self) -> None:
@@ -721,7 +739,7 @@ class CombineViewer:
         self._ax_info.clear()
 
         # Calculate intensity limits
-        valid_data = group['gridded'][~np.isnan(group['gridded'])]
+        valid_data = group["gridded"][~np.isnan(group["gridded"])]
         if len(valid_data) > 0:
             vmin, vmax = np.percentile(valid_data, [1, 99])
         else:
@@ -729,29 +747,34 @@ class CombineViewer:
 
         # Plot gridded intensity
         self._im = self._ax.pcolormesh(
-            group['lon_grid'], group['lat_grid'], group['gridded'],
-            cmap=self._cmap, vmin=vmin, vmax=vmax, shading='flat'
+            group["lon_grid"],
+            group["lat_grid"],
+            group["gridded"],
+            cmap=self._cmap,
+            vmin=vmin,
+            vmax=vmax,
+            shading="flat",
         )
 
         # Overlay ship track (subsample if too many points)
-        ship_lon = group['ship_lon']
-        ship_lat = group['ship_lat']
+        ship_lon = group["ship_lon"]
+        ship_lat = group["ship_lat"]
         n_points = len(ship_lon)
         if n_points > 5000:
             step = n_points // 5000
             ship_lon = ship_lon[::step]
             ship_lat = ship_lat[::step]
 
-        self._ax.plot(ship_lon, ship_lat, 'r-', linewidth=1.5)
+        self._ax.plot(ship_lon, ship_lat, "r-", linewidth=1.5)
 
         # Set axis limits based on valid data
-        gridded = group['gridded']
+        gridded = group["gridded"]
         valid_mask = np.logical_and(~np.isnan(gridded), gridded != 0)
         valid_rows, valid_cols = np.where(valid_mask)
 
         if len(valid_rows) > 0:
-            lon_vals = group['lon_grid'][valid_rows, valid_cols]
-            lat_vals = group['lat_grid'][valid_rows, valid_cols]
+            lon_vals = group["lon_grid"][valid_rows, valid_cols]
+            lat_vals = group["lat_grid"][valid_rows, valid_cols]
             lon_min, lon_max = lon_vals.min(), lon_vals.max()
             lat_min, lat_max = lat_vals.min(), lat_vals.max()
 
@@ -763,9 +786,9 @@ class CombineViewer:
             self._ax.set_ylim(lat_min, lat_max)
             self._ax.set_aspect(aspect_ratio)
 
-        self._ax.set_xlabel('Longitude (°)')
-        self._ax.set_ylabel('Latitude (°)')
-        self._ax.grid(True, linestyle='--', linewidth=0.5, alpha=0.7)
+        self._ax.set_xlabel("Longitude (°)")
+        self._ax.set_ylabel("Latitude (°)")
+        self._ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
 
         # Title with loading progress
         n_loaded = len(self._groups)
@@ -777,14 +800,14 @@ class CombineViewer:
 
         # Add colorbar only once
         if self._cbar is None:
-            self._cbar = self._fig.colorbar(self._im, ax=self._ax, label='Intensity')
+            self._cbar = self._fig.colorbar(self._im, ax=self._ax, label="Intensity")
         else:
             self._cbar.mappable = self._im
             self._im.set_clim(vmin, vmax)
 
         # Info panel
-        self._ax_info.axis('off')
-        travel = group['travel']
+        self._ax_info.axis("off")
+        travel = group["travel"]
         info_text = (
             f"Reference: ({group['ref_lat']:.6f}°, {group['ref_lon']:.6f}°)    "
             f"Coverage: {group['x_range']:.0f}m × {group['y_range']:.0f}m    "
@@ -793,10 +816,16 @@ class CombineViewer:
             f"avg {travel['speed_m_s']:.2f} m/s    "
             f"Frames: {group['n_frames']}, Pixels: {group['n_pixels']:,}"
         )
-        self._ax_info.text(0.5, 0.5, info_text,
-                           transform=self._ax_info.transAxes,
-                           ha='center', va='center',
-                           fontfamily='monospace', fontsize=9)
+        self._ax_info.text(
+            0.5,
+            0.5,
+            info_text,
+            transform=self._ax_info.transAxes,
+            ha="center",
+            va="center",
+            fontfamily="monospace",
+            fontsize=9,
+        )
 
         self._fig.canvas.draw_idle()
 
@@ -822,6 +851,6 @@ class CombineViewer:
         self._add_nav_buttons()
 
         # Connect keyboard navigation
-        self._fig.canvas.mpl_connect('key_press_event', self._on_key)
+        self._fig.canvas.mpl_connect("key_press_event", self._on_key)
 
         plt.show()

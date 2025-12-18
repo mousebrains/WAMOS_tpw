@@ -31,10 +31,10 @@ class TimingSignalExtractor:
 
     # Timing signal definitions: (bit, bin, period_seconds)
     TIMING_SIGNALS = {
-        'signal_1s': (12, 18, 1.0),           # 1 Hz - 1 second
-        'signal_250ms': (14, 19, 0.25),       # 4 Hz - 1/4 second
-        'signal_125ms': (13, 19, 0.125),      # 8 Hz - 1/8 second
-        'signal_62p5ms': (12, 19, 0.0625),    # 16 Hz - 1/16 second
+        "signal_1s": (12, 18, 1.0),  # 1 Hz - 1 second
+        "signal_250ms": (14, 19, 0.25),  # 4 Hz - 1/4 second
+        "signal_125ms": (13, 19, 0.125),  # 8 Hz - 1/8 second
+        "signal_62p5ms": (12, 19, 0.0625),  # 16 Hz - 1/16 second
     }
 
     def __init__(self, data: np.ndarray):
@@ -91,7 +91,7 @@ class TimingSignalExtractor:
         Returns:
             Radial index of first 1s transition, or None if not found
         """
-        bit, bin_idx, _ = self.TIMING_SIGNALS['signal_1s']
+        bit, bin_idx, _ = self.TIMING_SIGNALS["signal_1s"]
         signal = self.extract_timing_bit(bit, bin_idx)
         if signal is None:
             return None
@@ -123,9 +123,7 @@ class Timestamp:
     # Earth radius in meters (WGS84 mean radius)
     _EARTH_RADIUS = 6371000.0
 
-    def __init__(self,
-                 frames: list[Frame],
-                 config: WamosConfig | None = None):
+    def __init__(self, frames: list[Frame], config: WamosConfig | None = None):
         """
         Initialize Timestamp calculator for a set of contiguous frames.
 
@@ -168,10 +166,9 @@ class Timestamp:
             # Advance cumulative time by frame duration
             cumulative_time += rpt
 
-    def _calculate_frame_times(self,
-                               frame: Frame,
-                               frame_start: float,
-                               frame_duration: float) -> np.ndarray:
+    def _calculate_frame_times(
+        self, frame: Frame, frame_start: float, frame_duration: float
+    ) -> np.ndarray:
         """
         Calculate times for each radial in a frame.
 
@@ -210,9 +207,9 @@ class Timestamp:
 
         return times
 
-    def _calculate_position(self,
-                            frame_idx: int,
-                            radial_times: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def _calculate_position(
+        self, frame_idx: int, radial_times: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Calculate lat/lon for each radial based on ship motion.
 
@@ -246,7 +243,7 @@ class Timestamp:
 
         # For last frame, position is recorded at frame time, so work backward
         # For other frames, position is at frame start
-        is_last_frame = (frame_idx == len(self._frames) - 1)
+        is_last_frame = frame_idx == len(self._frames) - 1
 
         if is_last_frame:
             # Reference time is the frame timestamp (approximately end of frame)
@@ -342,8 +339,8 @@ class Timestamp:
         offsets_from_base = relative_times - frame_start
 
         # Convert to timedelta64 and add to base
-        offsets_ns = (offsets_from_base * 1e9).astype('int64')
-        return base_time + offsets_ns.astype('timedelta64[ns]')
+        offsets_ns = (offsets_from_base * 1e9).astype("int64")
+        return base_time + offsets_ns.astype("timedelta64[ns]")
 
     @property
     def frame_start_times(self) -> np.ndarray:
@@ -404,7 +401,7 @@ class Timestamp:
             f"duration={total_duration:.2f}s)"
         )
 
-    def __enter__(self) -> 'Timestamp':
+    def __enter__(self) -> "Timestamp":
         """Enter context manager."""
         return self
 
@@ -416,19 +413,20 @@ class Timestamp:
 def _add_arguments(parser) -> None:
     """Add command arguments to parser."""
     from wamos_tpw.filenames import add_common_arguments
+
     add_common_arguments(parser)
-    parser.add_argument("--config", "-c", type=str, default=None,
-                        help="YAML configuration file")
-    parser.add_argument("--max-frames", type=int, default=10,
-                        help="Maximum frames to process (default: 10)")
+    parser.add_argument("--config", "-c", type=str, default=None, help="YAML configuration file")
+    parser.add_argument(
+        "--max-frames", type=int, default=10, help="Maximum frames to process (default: 10)"
+    )
 
 
 def add_subparser(subparsers) -> None:
     """Register the 'timestamp' subcommand."""
     p = subparsers.add_parser(
-        'timestamp',
-        help='Timestamp analysis',
-        description="Calculate radial timing from polar files"
+        "timestamp",
+        help="Timestamp analysis",
+        description="Calculate radial timing from polar files",
     )
     _add_arguments(p)
     p.set_defaults(func=run)
@@ -450,7 +448,7 @@ def run(args) -> None:
     # Load frames
     logging.info(f"Loading up to {args.max_frames} frames...")
     frames = []
-    for filepath in filenames.files[:args.max_frames]:
+    for filepath in filenames.files[: args.max_frames]:
         frame = load_polar_file(filepath)
         if frame is not None:
             frames.append(frame)
@@ -480,11 +478,13 @@ def run(args) -> None:
         logging.info(f"  Frame {i}:")
         logging.info(f"    Radials: {len(times)}")
         logging.info(f"    Time range: {times[0]:.4f}s to {times[-1]:.4f}s")
-        logging.info(f"    Mean step: {dt*1000:.3f} ms")
+        logging.info(f"    Mean step: {dt * 1000:.3f} ms")
 
         # Show position
         lat, lon = timestamp.position_for_frame(i)
-        logging.info(f"    Position range: ({lat[0]:.6f}, {lon[0]:.6f}) to ({lat[-1]:.6f}, {lon[-1]:.6f})")
+        logging.info(
+            f"    Position range: ({lat[0]:.6f}, {lon[0]:.6f}) to ({lat[-1]:.6f}, {lon[-1]:.6f})"
+        )
 
         # Show absolute times
         abs_times = timestamp.absolute_times_for_frame(i)

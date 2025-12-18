@@ -39,15 +39,17 @@ class ProcessedFrames(Files):
         ...         process(frames)
     """
 
-    def __init__(self,
-                 stime: str | np.datetime64,
-                 etime: str | np.datetime64,
-                 polar_path: str,
-                 groupby: str = 'h',
-                 workers: int | None = None,
-                 loader: Callable[[str], Frame | None] | None = None,
-                 config: WamosConfig | None = None,
-                 radar_height: float | None = None) -> None:
+    def __init__(
+        self,
+        stime: str | np.datetime64,
+        etime: str | np.datetime64,
+        polar_path: str,
+        groupby: str = "h",
+        workers: int | None = None,
+        loader: Callable[[str], Frame | None] | None = None,
+        config: WamosConfig | None = None,
+        radar_height: float | None = None,
+    ) -> None:
         """
         Initialize ProcessedFrames.
 
@@ -101,13 +103,16 @@ class ProcessedFrames(Files):
 
         return theta
 
-    def deramp_frames(self, frames: list[Frame],
-                      diagnostics: bool = False,
-                      show_progress: bool = True,
-                      shadow_start: float | None = None,
-                      shadow_end: float | None = None,
-                      theta: Theta | None = None,
-                      parallel: bool = True) -> None:
+    def deramp_frames(
+        self,
+        frames: list[Frame],
+        diagnostics: bool = False,
+        show_progress: bool = True,
+        shadow_start: float | None = None,
+        shadow_end: float | None = None,
+        theta: Theta | None = None,
+        parallel: bool = True,
+    ) -> None:
         """
         Remove range-dependent intensity fall-off from frames.
 
@@ -134,8 +139,13 @@ class ProcessedFrames(Files):
             frame_iter = tqdm(frames, desc="Deramping", disable=not show_progress)
             for i, frame in enumerate(frame_iter):
                 bearing = theta.bearing_for_frame(i) if theta is not None else None
-                deramp = Deramp(frame, self._config, bearing=bearing,
-                               shadow_start=shadow_start, shadow_end=shadow_end)
+                deramp = Deramp(
+                    frame,
+                    self._config,
+                    bearing=bearing,
+                    shadow_start=shadow_start,
+                    shadow_end=shadow_end,
+                )
                 frame.deramped_intensity = deramp.corrected_intensity
                 if diagnostics:
                     deramp.plot_diagnostics()
@@ -145,16 +155,20 @@ class ProcessedFrames(Files):
         def process_frame(args):
             i, frame = args
             bearing = theta.bearing_for_frame(i) if theta is not None else None
-            deramp = Deramp(frame, self._config, bearing=bearing,
-                           shadow_start=shadow_start, shadow_end=shadow_end)
+            deramp = Deramp(
+                frame,
+                self._config,
+                bearing=bearing,
+                shadow_start=shadow_start,
+                shadow_end=shadow_end,
+            )
             return i, deramp.corrected_intensity
 
         n_workers = min(os.cpu_count() or 4, n_frames)
         results = [None] * n_frames
 
         with ThreadPoolExecutor(max_workers=n_workers) as executor:
-            futures = {executor.submit(process_frame, (i, f)): i
-                      for i, f in enumerate(frames)}
+            futures = {executor.submit(process_frame, (i, f)): i for i, f in enumerate(frames)}
 
             with tqdm(total=n_frames, desc="Deramping", disable=not show_progress) as pbar:
                 for future in as_completed(futures):
@@ -166,10 +180,13 @@ class ProcessedFrames(Files):
         for i, frame in enumerate(frames):
             frame.deramped_intensity = results[i]
 
-    def destreak_frames(self, frames: list[Frame],
-                        diagnostics: bool = False,
-                        show_progress: bool = True,
-                        parallel: bool = True) -> list[np.ndarray]:
+    def destreak_frames(
+        self,
+        frames: list[Frame],
+        diagnostics: bool = False,
+        show_progress: bool = True,
+        parallel: bool = True,
+    ) -> list[np.ndarray]:
         """
         Remove radial streak artifacts from a list of frames.
 
@@ -197,8 +214,9 @@ class ProcessedFrames(Files):
         # Diagnostics require sequential processing
         if diagnostics or not parallel or n_frames < 4:
             corrected = []
-            frame_iter = tqdm(enumerate(frames), total=n_frames,
-                             desc="Destreaking", disable=not show_progress)
+            frame_iter = tqdm(
+                enumerate(frames), total=n_frames, desc="Destreaking", disable=not show_progress
+            )
             for i, center in frame_iter:
                 prev_frame = frames[i - 1] if i > 0 else None
                 next_frame = frames[i + 1] if i < n_frames - 1 else None
@@ -225,8 +243,7 @@ class ProcessedFrames(Files):
         results = [None] * n_frames
 
         with ThreadPoolExecutor(max_workers=n_workers) as executor:
-            futures = {executor.submit(process_frame, item): item[0]
-                      for item in work_items}
+            futures = {executor.submit(process_frame, item): item[0] for item in work_items}
 
             with tqdm(total=n_frames, desc="Destreaking", disable=not show_progress) as pbar:
                 for future in as_completed(futures):
@@ -236,11 +253,14 @@ class ProcessedFrames(Files):
 
         return results
 
-    def normalize_frames(self, corrected: list[np.ndarray],
-                         low_percentile: float = 2.0,
-                         high_percentile: float = 98.0,
-                         parallel: bool = True,
-                         show_progress: bool = False) -> list[np.ndarray]:
+    def normalize_frames(
+        self,
+        corrected: list[np.ndarray],
+        low_percentile: float = 2.0,
+        high_percentile: float = 98.0,
+        parallel: bool = True,
+        show_progress: bool = False,
+    ) -> list[np.ndarray]:
         """
         Normalize frames using global statistics for consistent distribution.
 
@@ -291,8 +311,10 @@ class ProcessedFrames(Files):
         low_val = self._fast_percentile(all_samples, low_percentile)
         high_val = self._fast_percentile(all_samples, high_percentile)
 
-        logging.debug(f"Global normalization: p{low_percentile}={low_val:.2f}, "
-                     f"p{high_percentile}={high_val:.2f}")
+        logging.debug(
+            f"Global normalization: p{low_percentile}={low_val:.2f}, "
+            f"p{high_percentile}={high_val:.2f}"
+        )
 
         if high_val <= low_val:
             return [np.full_like(frame, 0.5) for frame in corrected]
@@ -319,8 +341,7 @@ class ProcessedFrames(Files):
         results = [None] * n_frames
 
         with ThreadPoolExecutor(max_workers=n_workers) as executor:
-            futures = {executor.submit(normalize_frame, (i, f)): i
-                      for i, f in enumerate(corrected)}
+            futures = {executor.submit(normalize_frame, (i, f)): i for i, f in enumerate(corrected)}
 
             with tqdm(total=n_frames, desc="Normalizing", disable=not show_progress) as pbar:
                 for future in as_completed(futures):
@@ -353,11 +374,13 @@ class ProcessedFrames(Files):
         partitioned = np.partition(data, k)
         return partitioned[k]
 
-    def process_group(self,
-                      frames: list[Frame],
-                      shadow_diagnostics: bool = False,
-                      deramp_diagnostics: bool = False,
-                      destreak_diagnostics: bool = False) -> list[np.ndarray]:
+    def process_group(
+        self,
+        frames: list[Frame],
+        shadow_diagnostics: bool = False,
+        deramp_diagnostics: bool = False,
+        destreak_diagnostics: bool = False,
+    ) -> list[np.ndarray]:
         """
         Process a single group of frames: refine theta, deramp, destreak, normalize.
 
@@ -388,9 +411,13 @@ class ProcessedFrames(Files):
             logging.info("Using config-based shadow region (detection failed)")
 
         # Deramp frames using detected shadow edges and bearing arrays
-        self.deramp_frames(frames, diagnostics=deramp_diagnostics,
-                          shadow_start=shadow_start, shadow_end=shadow_end,
-                          theta=theta)
+        self.deramp_frames(
+            frames,
+            diagnostics=deramp_diagnostics,
+            shadow_start=shadow_start,
+            shadow_end=shadow_end,
+            theta=theta,
+        )
 
         # Destreak frames (uses deramped_intensity if available)
         corrected = self.destreak_frames(frames, diagnostics=destreak_diagnostics)
@@ -400,11 +427,13 @@ class ProcessedFrames(Files):
 
         return normalized
 
-    def process(self,
-                shadow_diagnostics: bool = False,
-                deramp_diagnostics: bool = False,
-                destreak_diagnostics: bool = False,
-                parallel: bool = True) -> dict:
+    def process(
+        self,
+        shadow_diagnostics: bool = False,
+        deramp_diagnostics: bool = False,
+        destreak_diagnostics: bool = False,
+        parallel: bool = True,
+    ) -> dict:
         """
         Process all frame groups: refine theta, deramp, destreak, and normalize.
 
@@ -435,10 +464,12 @@ class ProcessedFrames(Files):
             for period, frames in self.itergroups():
                 frames = list(frames)
                 logging.info(f"Processing {period}: {len(frames)} frames")
-                corrected = self.process_group(frames,
-                                               shadow_diagnostics=shadow_diagnostics,
-                                               deramp_diagnostics=deramp_diagnostics,
-                                               destreak_diagnostics=destreak_diagnostics)
+                corrected = self.process_group(
+                    frames,
+                    shadow_diagnostics=shadow_diagnostics,
+                    deramp_diagnostics=deramp_diagnostics,
+                    destreak_diagnostics=destreak_diagnostics,
+                )
                 results[period] = corrected
             return results
 
@@ -486,6 +517,7 @@ class ProcessedFrames(Files):
 # Interactive Viewer
 # -----------------------------------------------------------------------------
 
+
 class ProcessedViewer(BaseViewer):
     """
     Interactive viewer for processed radar frame data with navigation.
@@ -499,15 +531,17 @@ class ProcessedViewer(BaseViewer):
         >>> viewer.show()
     """
 
-    def __init__(self,
-                 frames: list[Frame],
-                 vmin: float | None = None,
-                 vmax: float | None = None,
-                 cmap: str = 'viridis',
-                 figsize: tuple[float, float] = (10, 9),
-                 radar_height: float | None = None,
-                 config: WamosConfig | None = None,
-                 view: str = 'polar'):
+    def __init__(
+        self,
+        frames: list[Frame],
+        vmin: float | None = None,
+        vmax: float | None = None,
+        cmap: str = "viridis",
+        figsize: tuple[float, float] = (10, 9),
+        radar_height: float | None = None,
+        config: WamosConfig | None = None,
+        view: str = "polar",
+    ):
         """
         Initialize the processed viewer.
 
@@ -528,15 +562,19 @@ class ProcessedViewer(BaseViewer):
 
         self._frames = frames
         self._view = view
-        self._view_keys = {'1': 'polar', '2': 'ship', '3': 'earth'}
+        self._view_keys = {"1": "polar", "2": "ship", "3": "earth"}
 
         # Calculate quantile limits from all frames if not specified
         # Use corrected_intensity if available, otherwise use original intensity
         if vmin is None or vmax is None:
-            all_intensities = np.concatenate([
-                (f.corrected_intensity if f.corrected_intensity is not None else f.intensity).ravel()
-                for f in frames
-            ])
+            all_intensities = np.concatenate(
+                [
+                    (
+                        f.corrected_intensity if f.corrected_intensity is not None else f.intensity
+                    ).ravel()
+                    for f in frames
+                ]
+            )
             q_vmin, q_vmax = quantile_limits(all_intensities)
             self._vmin = vmin if vmin is not None else q_vmin
             self._vmax = vmax if vmax is not None else q_vmax
@@ -571,15 +609,17 @@ class ProcessedViewer(BaseViewer):
         self._add_nav_buttons(
             prev_pos=[0.12, 0.02, 0.1, 0.05],
             next_pos=[0.23, 0.02, 0.1, 0.05],
-            play_pos=[0.34, 0.02, 0.1, 0.05]
+            play_pos=[0.34, 0.02, 0.1, 0.05],
         )
 
         # Add view buttons
-        self._add_view_buttons([
-            ('polar', 'Polar', [0.45, 0.02, 0.1, 0.05]),
-            ('ship', 'Ship', [0.56, 0.02, 0.1, 0.05]),
-            ('earth', 'Earth', [0.67, 0.02, 0.1, 0.05]),
-        ])
+        self._add_view_buttons(
+            [
+                ("polar", "Polar", [0.45, 0.02, 0.1, 0.05]),
+                ("ship", "Ship", [0.56, 0.02, 0.1, 0.05]),
+                ("earth", "Earth", [0.67, 0.02, 0.1, 0.05]),
+            ]
+        )
 
         # Connect keyboard navigation
         self._connect_keyboard()
@@ -602,18 +642,20 @@ class ProcessedViewer(BaseViewer):
         frame = self._frames[self._current_idx]
 
         # Use corrected_intensity if available, otherwise original intensity
-        data = frame.corrected_intensity if frame.corrected_intensity is not None else frame.intensity
+        data = (
+            frame.corrected_intensity if frame.corrected_intensity is not None else frame.intensity
+        )
 
         # Clear previous plot and remove old insets
         self._ax.clear()
         self._clear_insets()
 
-        if self._view == 'polar':
+        if self._view == "polar":
             self._draw_polar(frame, data)
-        elif self._view == 'ship':
+        elif self._view == "ship":
             self._draw_ship(frame, data)
             self._draw_nav_insets(frame)
-        elif self._view == 'earth':
+        elif self._view == "earth":
             self._draw_earth(frame, data)
             self._draw_nav_insets(frame)
 
@@ -622,8 +664,7 @@ class ProcessedViewer(BaseViewer):
 
         # Add colorbar only once, but update mappable each time
         if self._cbar is None:
-            self._cbar = self._fig.colorbar(self._im, ax=self._ax,
-                                             label='Intensity')
+            self._cbar = self._fig.colorbar(self._im, ax=self._ax, label="Intensity")
         else:
             # Update colorbar to reference new image while keeping same limits
             self._cbar.mappable = self._im
@@ -633,10 +674,10 @@ class ProcessedViewer(BaseViewer):
 
     def _clear_insets(self) -> None:
         """Remove any existing inset axes."""
-        if hasattr(self, '_ship_inset') and self._ship_inset is not None:
+        if hasattr(self, "_ship_inset") and self._ship_inset is not None:
             self._ship_inset.remove()
             self._ship_inset = None
-        if hasattr(self, '_wind_inset') and self._wind_inset is not None:
+        if hasattr(self, "_wind_inset") and self._wind_inset is not None:
             self._wind_inset.remove()
             self._wind_inset = None
 
@@ -659,18 +700,21 @@ class ProcessedViewer(BaseViewer):
         # Note: ship_speed is already in m/s (converted at parse time)
         if meta.heading is not None:
             self._ship_inset = inset_axes(
-                self._ax, width=inset_size, height=inset_size,
-                loc='upper right', borderpad=0.5,
-                axes_class=None
+                self._ax,
+                width=inset_size,
+                height=inset_size,
+                loc="upper right",
+                borderpad=0.5,
+                axes_class=None,
             )
             self._draw_vector_inset(
                 self._ship_inset,
                 heading=meta.heading,
                 speed=meta.ship_speed,
                 max_speed=ship_max,
-                color='blue',
-                label='Ship',
-                label_pos='nw'
+                color="blue",
+                label="Ship",
+                label_pos="nw",
             )
         else:
             self._ship_inset = None
@@ -678,25 +722,35 @@ class ProcessedViewer(BaseViewer):
         # Wind direction/speed inset (lower right)
         if meta.wind_direction is not None:
             self._wind_inset = inset_axes(
-                self._ax, width=inset_size, height=inset_size,
-                loc='lower right', borderpad=0.5,
-                axes_class=None
+                self._ax,
+                width=inset_size,
+                height=inset_size,
+                loc="lower right",
+                borderpad=0.5,
+                axes_class=None,
             )
             self._draw_vector_inset(
                 self._wind_inset,
                 heading=meta.wind_direction,
                 speed=meta.wind_speed,
                 max_speed=wind_max,
-                color='green',
-                label='Wind',
-                label_pos='sw'
+                color="green",
+                label="Wind",
+                label_pos="sw",
             )
         else:
             self._wind_inset = None
 
-    def _draw_vector_inset(self, ax, heading: float, speed: float | None,
-                           max_speed: float, color: str, label: str,
-                           label_pos: str = 'ne') -> None:
+    def _draw_vector_inset(
+        self,
+        ax,
+        heading: float,
+        speed: float | None,
+        max_speed: float,
+        color: str,
+        label: str,
+        label_pos: str = "ne",
+    ) -> None:
         """
         Draw a polar-style vector inset showing direction and magnitude.
 
@@ -718,16 +772,28 @@ class ProcessedViewer(BaseViewer):
         circle_theta = np.linspace(0, 2 * np.pi, 100)
         for i, ring_speed in enumerate(ring_speeds):
             radius = ring_speed / max_speed
-            ax.plot(radius * np.cos(circle_theta), radius * np.sin(circle_theta),
-                   'k-', linewidth=0.4, alpha=0.3)
+            ax.plot(
+                radius * np.cos(circle_theta),
+                radius * np.sin(circle_theta),
+                "k-",
+                linewidth=0.4,
+                alpha=0.3,
+            )
             # Label outer ring only
             if i == len(ring_speeds) - 1:
-                ax.text(0, -radius - 0.08, f'{ring_speed:.0f}', ha='center', va='top',
-                       fontsize=5, alpha=0.6)
+                ax.text(
+                    0,
+                    -radius - 0.08,
+                    f"{ring_speed:.0f}",
+                    ha="center",
+                    va="top",
+                    fontsize=5,
+                    alpha=0.6,
+                )
 
         # Draw crosshairs
-        ax.axhline(0, color='gray', linewidth=0.3, alpha=0.4)
-        ax.axvline(0, color='gray', linewidth=0.3, alpha=0.4)
+        ax.axhline(0, color="gray", linewidth=0.3, alpha=0.4)
+        ax.axvline(0, color="gray", linewidth=0.3, alpha=0.4)
 
         # Draw arrow with length proportional to speed
         if speed is not None and speed > 0:
@@ -737,51 +803,84 @@ class ProcessedViewer(BaseViewer):
 
         dx = arrow_len * np.cos(theta_rad)
         dy = arrow_len * np.sin(theta_rad)
-        ax.arrow(0, 0, dx, dy, head_width=0.08, head_length=0.06,
-                fc=color, ec=color, linewidth=1.2)
+        ax.arrow(0, 0, dx, dy, head_width=0.08, head_length=0.06, fc=color, ec=color, linewidth=1.2)
 
         # Add cardinal directions (smaller)
-        ax.text(0, 1.08, 'N', ha='center', va='bottom', fontsize=5, fontweight='bold')
-        ax.text(1.08, 0, 'E', ha='left', va='center', fontsize=5)
-        ax.text(0, -1.08, 'S', ha='center', va='top', fontsize=5)
-        ax.text(-1.08, 0, 'W', ha='right', va='center', fontsize=5)
+        ax.text(0, 1.08, "N", ha="center", va="bottom", fontsize=5, fontweight="bold")
+        ax.text(1.08, 0, "E", ha="left", va="center", fontsize=5)
+        ax.text(0, -1.08, "S", ha="center", va="top", fontsize=5)
+        ax.text(-1.08, 0, "W", ha="right", va="center", fontsize=5)
 
         # Add label with speed info positioned outside the plot
         if speed is not None:
-            label_text = f'{label}\n{heading:.0f}°\n{speed:.1f} m/s'
+            label_text = f"{label}\n{heading:.0f}°\n{speed:.1f} m/s"
         else:
-            label_text = f'{label}\n{heading:.0f}°'
+            label_text = f"{label}\n{heading:.0f}°"
 
-        if label_pos == 'nw':
-            ax.text(-1.3, 1.3, label_text, ha='right', va='top', fontsize=6,
-                   fontweight='bold', color=color)
-        elif label_pos == 'sw':
-            ax.text(-1.3, -1.3, label_text, ha='right', va='bottom', fontsize=6,
-                   fontweight='bold', color=color)
-        elif label_pos == 'ne':
-            ax.text(1.3, 1.3, label_text, ha='left', va='top', fontsize=6,
-                   fontweight='bold', color=color)
-        elif label_pos == 'se':
-            ax.text(1.3, -1.3, label_text, ha='left', va='bottom', fontsize=6,
-                   fontweight='bold', color=color)
+        if label_pos == "nw":
+            ax.text(
+                -1.3,
+                1.3,
+                label_text,
+                ha="right",
+                va="top",
+                fontsize=6,
+                fontweight="bold",
+                color=color,
+            )
+        elif label_pos == "sw":
+            ax.text(
+                -1.3,
+                -1.3,
+                label_text,
+                ha="right",
+                va="bottom",
+                fontsize=6,
+                fontweight="bold",
+                color=color,
+            )
+        elif label_pos == "ne":
+            ax.text(
+                1.3,
+                1.3,
+                label_text,
+                ha="left",
+                va="top",
+                fontsize=6,
+                fontweight="bold",
+                color=color,
+            )
+        elif label_pos == "se":
+            ax.text(
+                1.3,
+                -1.3,
+                label_text,
+                ha="left",
+                va="bottom",
+                fontsize=6,
+                fontweight="bold",
+                color=color,
+            )
 
         # Set equal aspect and limits
         ax.set_xlim(-1.8, 1.3)
         ax.set_ylim(-1.5, 1.5)
-        ax.set_aspect('equal')
-        ax.axis('off')
+        ax.set_aspect("equal")
+        ax.axis("off")
 
     def _update_title(self) -> None:
         """Update the plot title with current frame info."""
         frame = self._frames[self._current_idx]
         nav_info = format_nav_title(frame)
 
-        view_labels = {'polar': 'Polar', 'ship': 'Ship', 'earth': 'Earth'}
+        view_labels = {"polar": "Polar", "ship": "Ship", "earth": "Earth"}
         view_label = view_labels.get(self._view, self._view)
 
-        title = f'Frame {self._current_idx + 1}/{len(self._frames)}: {frame.timestamp} [{view_label}]'
+        title = (
+            f"Frame {self._current_idx + 1}/{len(self._frames)}: {frame.timestamp} [{view_label}]"
+        )
         if nav_info:
-            title += f'\n{nav_info}'
+            title += f"\n{nav_info}"
 
         self._ax.set_title(title)
 
@@ -790,39 +889,48 @@ class ProcessedViewer(BaseViewer):
 # Main
 # -----------------------------------------------------------------------------
 
+
 def _add_arguments(parser) -> None:
     """Add command arguments to parser."""
     from wamos_tpw.filenames import add_common_arguments
+
     add_common_arguments(parser)
-    parser.add_argument("--groupby", "-g", type=str, default='h',
-                        help="Groupby frequency (default: h)")
-    parser.add_argument("--workers", "-w", type=int, default=None,
-                        help="Number of workers")
-    parser.add_argument("--config", "-c", type=str, default=None,
-                        help="YAML configuration file")
-    parser.add_argument("--radar-height", type=float, default=None,
-                        help="Radar height above water (m)")
-    parser.add_argument("--plot", action="store_true",
-                        help="Launch interactive viewer")
-    parser.add_argument("--view", type=str, default='polar',
-                        choices=['polar', 'ship', 'earth'],
-                        help="Initial view type (default: polar)")
-    parser.add_argument("--cmap", type=str, default='viridis',
-                        help="Colormap (default: viridis)")
-    parser.add_argument("--shadow-diagnostics", action="store_true",
-                        help="Show shadow detection diagnostic plots")
-    parser.add_argument("--destreak-diagnostics", action="store_true",
-                        help="Show destreak diagnostic plots")
-    parser.add_argument("--deramp-diagnostics", action="store_true",
-                        help="Show deramp (range correction) diagnostic plots")
+    parser.add_argument(
+        "--groupby", "-g", type=str, default="h", help="Groupby frequency (default: h)"
+    )
+    parser.add_argument("--workers", "-w", type=int, default=None, help="Number of workers")
+    parser.add_argument("--config", "-c", type=str, default=None, help="YAML configuration file")
+    parser.add_argument(
+        "--radar-height", type=float, default=None, help="Radar height above water (m)"
+    )
+    parser.add_argument("--plot", action="store_true", help="Launch interactive viewer")
+    parser.add_argument(
+        "--view",
+        type=str,
+        default="polar",
+        choices=["polar", "ship", "earth"],
+        help="Initial view type (default: polar)",
+    )
+    parser.add_argument("--cmap", type=str, default="viridis", help="Colormap (default: viridis)")
+    parser.add_argument(
+        "--shadow-diagnostics", action="store_true", help="Show shadow detection diagnostic plots"
+    )
+    parser.add_argument(
+        "--destreak-diagnostics", action="store_true", help="Show destreak diagnostic plots"
+    )
+    parser.add_argument(
+        "--deramp-diagnostics",
+        action="store_true",
+        help="Show deramp (range correction) diagnostic plots",
+    )
 
 
 def add_subparser(subparsers) -> None:
     """Register the 'process' subcommand."""
     p = subparsers.add_parser(
-        'process',
-        help='Process frames (destreak, deramp) with viewer',
-        description="Load and process WAMOS polar frames"
+        "process",
+        help="Process frames (destreak, deramp) with viewer",
+        description="Load and process WAMOS polar frames",
     )
     _add_arguments(p)
     p.set_defaults(func=run)
@@ -834,7 +942,7 @@ def run(args) -> None:
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s"
+        format="%(asctime)s %(levelname)s %(message)s",
     )
 
     # Load config
@@ -852,7 +960,7 @@ def run(args) -> None:
         radar_height=args.radar_height,
     ) as pframes:
         t1 = time.time()
-        logging.info(f"Discovered {len(pframes)} files in {t1-t0:.3f}s")
+        logging.info(f"Discovered {len(pframes)} files in {t1 - t0:.3f}s")
         logging.debug(f"{pframes}")
 
         if args.plot:
@@ -862,10 +970,12 @@ def run(args) -> None:
                 logging.info(f"{period}: {len(frames)} frames")
 
                 # Process the group and store corrected intensities on frames
-                corrected = pframes.process_group(frames,
-                                                  shadow_diagnostics=args.shadow_diagnostics,
-                                                  deramp_diagnostics=args.deramp_diagnostics,
-                                                  destreak_diagnostics=args.destreak_diagnostics)
+                corrected = pframes.process_group(
+                    frames,
+                    shadow_diagnostics=args.shadow_diagnostics,
+                    deramp_diagnostics=args.deramp_diagnostics,
+                    destreak_diagnostics=args.destreak_diagnostics,
+                )
                 for frame, corr_intensity in zip(frames, corrected):
                     frame.corrected_intensity = corr_intensity
 
@@ -876,7 +986,7 @@ def run(args) -> None:
                     cmap=args.cmap,
                     radar_height=args.radar_height,
                     config=config,
-                    view=args.view
+                    view=args.view,
                 )
                 logging.info("Navigation: <- -> keys, Prev/Next buttons, Space=Play/Stop")
                 logging.info("Views: 1=Polar, 2=Ship, 3=Earth (or click buttons)")
@@ -884,9 +994,11 @@ def run(args) -> None:
                 viewer.show()
         else:
             # Process all groups
-            pframes.process(shadow_diagnostics=args.shadow_diagnostics,
-                           deramp_diagnostics=args.deramp_diagnostics,
-                           destreak_diagnostics=args.destreak_diagnostics)
+            pframes.process(
+                shadow_diagnostics=args.shadow_diagnostics,
+                deramp_diagnostics=args.deramp_diagnostics,
+                destreak_diagnostics=args.destreak_diagnostics,
+            )
 
 
 def main() -> None:
