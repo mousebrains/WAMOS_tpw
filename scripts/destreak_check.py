@@ -84,9 +84,7 @@ def load_frame(fn: str) -> dict | None:
         return None
 
 
-def print_progress(
-    current: int, total: int, width: int = 40, prefix: str = "Progress"
-) -> None:
+def print_progress(current: int, total: int, width: int = 40, prefix: str = "Progress") -> None:
     """
     Print a progress bar that updates in place.
 
@@ -101,16 +99,14 @@ def print_progress(
     pct = current / total
     filled = int(width * pct)
     bar = "█" * filled + "░" * (width - filled)
-    msg = f"\r{prefix}: [{bar}] {current:>{len(str(total))}}/{total} ({pct*100:.1f}%)"
+    msg = f"\r{prefix}: [{bar}] {current:>{len(str(total))}}/{total} ({pct * 100:.1f}%)"
     print(msg, end="", flush=True)
     if current == total:
         print()  # Newline when complete
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Check and visualize destreaking of polar frames"
-    )
+    parser = argparse.ArgumentParser(description="Check and visualize destreaking of polar frames")
 
     add_time_range_arguments(parser)
     add_logging_arguments(parser)
@@ -179,7 +175,8 @@ def main() -> int:
         help="Figure size as 'width,height' in inches (default: 12,8)",
     )
     parser.add_argument(
-        "--output", "-o",
+        "--output",
+        "-o",
         type=str,
         default=None,
         help="Save frames to files instead of displaying (use %%d for frame number)",
@@ -204,10 +201,10 @@ def main() -> int:
     )
 
     parser.add_argument(
-            "--no-plot",
-            action="store_true",
-            help="Load and destreak frames without plotting",
-            )
+        "--no-plot",
+        action="store_true",
+        help="Load and destreak frames without plotting",
+    )
 
     args = parser.parse_args()
     setup_logging(args)
@@ -244,10 +241,11 @@ def main() -> int:
         n_loaded = len(results)
         dt = time.time() - stime
         dtPerFrame = dt / n_loaded if n_loaded > 0 else None
-        print(f"Successfully loaded {n_loaded} of {n_files} frames",
-              f"in {dt:.3f} seconds",
-              f"{1/dtPerFrame:.1f} frames/second" if dtPerFrame else "",
-              )
+        print(
+            f"Successfully loaded {n_loaded} of {n_files} frames",
+            f"in {dt:.3f} seconds",
+            f"{1 / dtPerFrame:.1f} frames/second" if dtPerFrame else "",
+        )
 
         # Print timing breakdown
         if n_loaded > 0:
@@ -264,12 +262,17 @@ def main() -> int:
 
             # Print destreak internal timing breakdown
             destreak_keys = [
-                "astype_float", "convolve_streak", "convolve_adj", "threshold_mask",
-                "run_length_1", "gap_merge", "run_length_2", "finalize"
+                "astype_float",
+                "convolve_streak",
+                "convolve_adj",
+                "threshold_mask",
+                "run_length_1",
+                "gap_merge",
+                "run_length_2",
+                "finalize",
             ]
             destreak_totals = {
-                k: sum(r["destreak"].timing[k] for r in results)
-                for k in destreak_keys
+                k: sum(r["destreak"].timing[k] for r in results) for k in destreak_keys
             }
             destreak_total = sum(destreak_totals.values())
             print("\nDestreak internal breakdown (per-frame averages):")
@@ -332,32 +335,46 @@ def main() -> int:
                 streak_pct = destreaker.streak_fraction * 100
 
                 fig, axes = plt.subplots(
-                        1, 3, figsize=(figsize[0] * 1.3, figsize[1] * 0.6),
-                        sharex=True, sharey=True
-                        )
+                    1, 3, figsize=(figsize[0] * 1.3, figsize[1] * 0.6), sharex=True, sharey=True
+                )
 
                 pcm0 = axes[0].pcolormesh(
-                        range_bins, bearing_bins, original_slice,
-                        shading="flat", cmap=args.cmap, vmin=args.vmin, vmax=args.vmax,
-                        )
+                    range_bins,
+                    bearing_bins,
+                    original_slice,
+                    shading="flat",
+                    cmap=args.cmap,
+                    vmin=args.vmin,
+                    vmax=args.vmax,
+                )
                 axes[0].set_xlabel("Range Bin")
                 axes[0].set_ylabel("Bearing Index")
                 axes[0].set_title("Original")
                 fig.colorbar(pcm0, ax=axes[0], label="Intensity")
 
                 pcm1 = axes[1].pcolormesh(
-                        range_bins, bearing_bins, streak_mask_slice.astype(float),
-                        shading="flat", cmap="Reds", vmin=0, vmax=1,
-                        )
+                    range_bins,
+                    bearing_bins,
+                    streak_mask_slice.astype(float),
+                    shading="flat",
+                    cmap="Reds",
+                    vmin=0,
+                    vmax=1,
+                )
                 axes[1].set_xlabel("Range Bin")
                 axes[1].set_ylabel("Bearing Index")
                 axes[1].set_title(f"Streak Mask ({n_streaks} pixels, {streak_pct:.2f}%)")
                 fig.colorbar(pcm1, ax=axes[1], label="Streak")
 
                 pcm2 = axes[2].pcolormesh(
-                        range_bins, bearing_bins, destreaked_slice,
-                        shading="flat", cmap=args.cmap, vmin=args.vmin, vmax=args.vmax,
-                        )
+                    range_bins,
+                    bearing_bins,
+                    destreaked_slice,
+                    shading="flat",
+                    cmap=args.cmap,
+                    vmin=args.vmin,
+                    vmax=args.vmax,
+                )
                 axes[2].set_xlabel("Range Bin")
                 axes[2].set_ylabel("Bearing Index")
                 axes[2].set_title("Destreaked")
@@ -374,7 +391,7 @@ def main() -> int:
                     out_path = args.output % (i + 1)
                 else:
                     out_path = Path(args.output)
-                    out_path = out_path.parent / f"{out_path.stem}_{i+1:04d}{out_path.suffix}"
+                    out_path = out_path.parent / f"{out_path.stem}_{i + 1:04d}{out_path.suffix}"
                 fig.savefig(out_path, dpi=args.dpi, bbox_inches="tight")
                 print(f"Saved: {out_path}")
                 plt.close(fig)
@@ -413,8 +430,11 @@ def main() -> int:
                     # Create figure
                     if self.destreak:
                         self.fig, self.axes = plt.subplots(
-                            1, 3, figsize=(figsize[0] * 1.3, figsize[1] * 0.7),
-                            sharex=True, sharey=True
+                            1,
+                            3,
+                            figsize=(figsize[0] * 1.3, figsize[1] * 0.7),
+                            sharex=True,
+                            sharey=True,
                         )
                     else:
                         self.fig, ax = plt.subplots(figsize=figsize)
@@ -459,21 +479,26 @@ def main() -> int:
                     rng_end = self.range_end if self.range_end else original.shape[1]
                     rng_end = min(rng_end, original.shape[1])
 
-                    original_slice = original[:, self.range_start:rng_end]
+                    original_slice = original[:, self.range_start : rng_end]
                     n_bearings, n_ranges = original_slice.shape
                     range_bins = np.arange(self.range_start, self.range_start + n_ranges + 1)
                     bearing_bins = np.arange(n_bearings + 1)
 
                     if self.destreak:
                         destreaker = r["destreak"]
-                        destreaked_slice = destreaker.intensity[:, self.range_start:rng_end]
-                        streak_mask_slice = destreaker.streak_mask[:, self.range_start:rng_end]
+                        destreaked_slice = destreaker.intensity[:, self.range_start : rng_end]
+                        streak_mask_slice = destreaker.streak_mask[:, self.range_start : rng_end]
                         n_streaks = destreaker.n_streak_pixels
                         streak_pct = destreaker.streak_fraction * 100
 
                         pcm0 = self.axes[0].pcolormesh(
-                            range_bins, bearing_bins, original_slice,
-                            shading="flat", cmap=self.cmap, vmin=self.vmin, vmax=self.vmax,
+                            range_bins,
+                            bearing_bins,
+                            original_slice,
+                            shading="flat",
+                            cmap=self.cmap,
+                            vmin=self.vmin,
+                            vmax=self.vmax,
                         )
                         self.axes[0].set_xlabel("Range Bin")
                         self.axes[0].set_ylabel("Bearing Index")
@@ -481,8 +506,13 @@ def main() -> int:
                         self.colorbars.append(self.fig.colorbar(pcm0, ax=self.axes[0]))
 
                         pcm1 = self.axes[1].pcolormesh(
-                            range_bins, bearing_bins, streak_mask_slice.astype(float),
-                            shading="flat", cmap="Reds", vmin=0, vmax=1,
+                            range_bins,
+                            bearing_bins,
+                            streak_mask_slice.astype(float),
+                            shading="flat",
+                            cmap="Reds",
+                            vmin=0,
+                            vmax=1,
                         )
                         self.axes[1].set_xlabel("Range Bin")
                         self.axes[1].set_ylabel("Bearing Index")
@@ -492,31 +522,37 @@ def main() -> int:
                         self.colorbars.append(self.fig.colorbar(pcm1, ax=self.axes[1]))
 
                         pcm2 = self.axes[2].pcolormesh(
-                            range_bins, bearing_bins, destreaked_slice,
-                            shading="flat", cmap=self.cmap, vmin=self.vmin, vmax=self.vmax,
+                            range_bins,
+                            bearing_bins,
+                            destreaked_slice,
+                            shading="flat",
+                            cmap=self.cmap,
+                            vmin=self.vmin,
+                            vmax=self.vmax,
                         )
                         self.axes[2].set_xlabel("Range Bin")
                         self.axes[2].set_ylabel("Bearing Index")
                         self.axes[2].set_title("Destreaked")
                         self.colorbars.append(self.fig.colorbar(pcm2, ax=self.axes[2]))
 
-                        suptitle = (
-                            f"Frame {self.current_idx + 1}/{self.n_frames}: {timestamp}"
-                        )
+                        suptitle = f"Frame {self.current_idx + 1}/{self.n_frames}: {timestamp}"
                         suptitle += f"\nShape: {n_bearings} x {n_ranges}"
                         self.fig.suptitle(suptitle)
                     else:
                         pcm = self.axes[0].pcolormesh(
-                            range_bins, bearing_bins, original_slice,
-                            shading="flat", cmap=self.cmap, vmin=self.vmin, vmax=self.vmax,
+                            range_bins,
+                            bearing_bins,
+                            original_slice,
+                            shading="flat",
+                            cmap=self.cmap,
+                            vmin=self.vmin,
+                            vmax=self.vmax,
                         )
                         self.axes[0].set_xlabel("Range Bin")
                         self.axes[0].set_ylabel("Bearing Index")
                         self.colorbars.append(self.fig.colorbar(pcm, ax=self.axes[0]))
 
-                        title = (
-                            f"Frame {self.current_idx + 1}/{self.n_frames}: {timestamp}"
-                        )
+                        title = f"Frame {self.current_idx + 1}/{self.n_frames}: {timestamp}"
                         title += f"\nShape: {n_bearings} x {n_ranges}"
                         self.axes[0].set_title(title)
 

@@ -15,6 +15,8 @@ Dec-2025, Pat Welch, pat@mousebrains.com
         in collaboration with Anthropic's Claude Code
 """
 
+from __future__ import annotations
+
 import argparse
 import logging
 import os
@@ -23,6 +25,7 @@ import time
 import yaml
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -33,9 +36,9 @@ if src_path.exists():
 
 from wamos_tpw import Filenames, PolarFrame  # noqa: E402
 from wamos_tpw.args import add_time_range_arguments  # noqa: E402
-from wamos_tpw.destreak import Destreak
-from wamos_tpw.theta import Theta
-from wamos_tpw.shadow import Shadow
+from wamos_tpw.destreak import Destreak  # noqa: E402
+from wamos_tpw.theta import Theta  # noqa: E402
+from wamos_tpw.shadow import Shadow  # noqa: E402
 from wamos_tpw.logging_config import add_logging_arguments, setup_logging  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -44,7 +47,7 @@ logger = logging.getLogger(__name__)
 def load_frame(
     fn: str,
     config: Config | None = None,
-    ) -> dict | None:
+) -> dict | None:
     """
     Load a single frame with all required data.
 
@@ -61,7 +64,7 @@ def load_frame(
         polar_frame = PolarFrame(fn)
         t1 = time.perf_counter()
 
-        my_config = config.refine(polar_frame.metadata) # This tower's config
+        my_config = config.refine(polar_frame.metadata)  # This tower's config
 
         theta = Theta(polar_frame, my_config.bias.theta)
         t2 = time.perf_counter()
@@ -96,7 +99,7 @@ def print_progress(current: int, total: int, width: int = 40, prefix: str = "Pro
     pct = current / total
     filled = int(width * pct)
     bar = "=" * filled + ">" * (1 if filled < width else 0) + " " * (width - filled - 1)
-    msg = f"\r{prefix}: [{bar}] {current:>{len(str(total))}}/{total} ({pct*100:.1f}%)"
+    msg = f"\r{prefix}: [{bar}] {current:>{len(str(total))}}/{total} ({pct * 100:.1f}%)"
     print(msg, end="", flush=True)
     if current == total:
         print()
@@ -466,8 +469,7 @@ class IntensityStdViewer:
 
         # Compute std by range (excluding shadow) with outlier removal
         std_range_orig, std_range_cleaned = compute_std_by_range(
-            frame["intensity"], theta, shadow_leading, shadow_trailing,
-            n_sigma=self.n_sigma
+            frame["intensity"], theta, shadow_leading, shadow_trailing, n_sigma=self.n_sigma
         )
 
         t_after_std_range = time.perf_counter()
@@ -478,16 +480,13 @@ class IntensityStdViewer:
         # Compute normalized intensity (intensity / smoothed_range_std)
         std_range_broadcast = std_range_smoothed[np.newaxis, :]
         with np.errstate(divide="ignore", invalid="ignore"):
-            normalized = np.where(
-                std_range_broadcast > 0, intensity / std_range_broadcast, np.nan
-            )
+            normalized = np.where(std_range_broadcast > 0, intensity / std_range_broadcast, np.nan)
 
         t_after_range_norm = time.perf_counter()
 
         # Compute std by angle from the normalized data with outlier removal
         std_angle_orig, std_angle_cleaned = compute_std_by_angle(
-            normalized, theta, shadow_leading, shadow_trailing,
-            n_sigma=self.n_sigma
+            normalized, theta, shadow_leading, shadow_trailing, n_sigma=self.n_sigma
         )
 
         t_after_std_angle = time.perf_counter()
@@ -520,12 +519,12 @@ class IntensityStdViewer:
             pct_range_norm = 100 * t_range_norm / t_total_std
             pct_std_angle = 100 * t_std_angle / t_total_std
             pct_angle_norm = 100 * t_angle_norm / t_total_std
-            print(f"  Shadow masking:     {t_shadow*1000:7.2f}ms ({pct_shadow:5.1f}%)")
-            print(f"  Std by range:       {t_std_range*1000:7.2f}ms ({pct_std_range:5.1f}%)")
-            print(f"  Range normalize:    {t_range_norm*1000:7.2f}ms ({pct_range_norm:5.1f}%)")
-            print(f"  Std by angle:       {t_std_angle*1000:7.2f}ms ({pct_std_angle:5.1f}%)")
-            print(f"  Angle normalize:    {t_angle_norm*1000:7.2f}ms ({pct_angle_norm:5.1f}%)")
-            print(f"  Total:              {t_total_std*1000:7.2f}ms")
+            print(f"  Shadow masking:     {t_shadow * 1000:7.2f}ms ({pct_shadow:5.1f}%)")
+            print(f"  Std by range:       {t_std_range * 1000:7.2f}ms ({pct_std_range:5.1f}%)")
+            print(f"  Range normalize:    {t_range_norm * 1000:7.2f}ms ({pct_range_norm:5.1f}%)")
+            print(f"  Std by angle:       {t_std_angle * 1000:7.2f}ms ({pct_std_angle:5.1f}%)")
+            print(f"  Angle normalize:    {t_angle_norm * 1000:7.2f}ms ({pct_angle_norm:5.1f}%)")
+            print(f"  Total:              {t_total_std * 1000:7.2f}ms")
 
         # Remove old colorbars if they exist
         if self.cbar_intensity is not None:
@@ -573,27 +572,35 @@ class IntensityStdViewer:
             vmin_int, vmax_int = 0, 1
 
         mesh1 = self.ax_intensity.pcolormesh(
-            theta_mesh, r_mesh, intensity,
-            shading="auto", cmap="viridis", vmin=vmin_int, vmax=vmax_int,
+            theta_mesh,
+            r_mesh,
+            intensity,
+            shading="auto",
+            cmap="viridis",
+            vmin=vmin_int,
+            vmax=vmax_int,
         )
         self.ax_intensity.set_theta_zero_location("N")  # type: ignore[attr-defined]
         self.ax_intensity.set_theta_direction(-1)  # type: ignore[attr-defined]
         self.ax_intensity.set_title("Intensity (shadow=NaN)", fontsize=10)
         self._add_range_rings(self.ax_intensity, max_range)
-        self.cbar_intensity = plt.colorbar(
-            mesh1, ax=self.ax_intensity, shrink=0.7, pad=0.1
-        )
+        self.cbar_intensity = plt.colorbar(mesh1, ax=self.ax_intensity, shrink=0.7, pad=0.1)
 
         # Add wind arrow relative to ship (ship heading is "up"/0 in ship frame)
         self.ax_intensity.annotate(
-            "", xy=(wind_relative_rad, arrow_len),
+            "",
+            xy=(wind_relative_rad, arrow_len),
             xytext=(wind_relative_rad, max_range * 0.15),
             arrowprops={"arrowstyle": "->", "color": "red", "lw": 2},
         )
         self.ax_intensity.text(
-            wind_relative_rad, max_range * 0.5,
+            wind_relative_rad,
+            max_range * 0.5,
             f"Wind\n{wind_speed:.1f} m/s\n({wind_relative:.0f}° rel)",
-            ha="center", va="center", fontsize=7, color="red",
+            ha="center",
+            va="center",
+            fontsize=7,
+            color="red",
             bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.8},
         )
 
@@ -604,12 +611,19 @@ class IntensityStdViewer:
             slant_ranges, std_range_orig, "b-", linewidth=1, alpha=0.4, label="Original"
         )
         self.ax_std_range.plot(
-            slant_ranges, std_range_cleaned, "g-", linewidth=1, alpha=0.6,
-            label=f"Outliers removed ({self.n_sigma}σ)"
+            slant_ranges,
+            std_range_cleaned,
+            "g-",
+            linewidth=1,
+            alpha=0.6,
+            label=f"Outliers removed ({self.n_sigma}σ)",
         )
         self.ax_std_range.plot(
-            slant_ranges, std_range_smoothed, "r-", linewidth=2,
-            label=f"Smoothed (w={self.smooth_range})"
+            slant_ranges,
+            std_range_smoothed,
+            "r-",
+            linewidth=2,
+            label=f"Smoothed (w={self.smooth_range})",
         )
         self.ax_std_range.set_xlabel("Slant Range (m)", fontsize=10)
         self.ax_std_range.set_ylabel("Std", fontsize=10)
@@ -619,11 +633,14 @@ class IntensityStdViewer:
 
         # Add ship/wind info
         self.ax_std_range.text(
-            0.98, 0.98,
+            0.98,
+            0.98,
             f"Ship: {ship_speed:.1f} m/s @ {ship_heading:.0f}°\n"
             f"Wind: {wind_speed:.1f} m/s from {wind_dir:.0f}°",
             transform=self.ax_std_range.transAxes,
-            ha="right", va="top", fontsize=8,
+            ha="right",
+            va="top",
+            fontsize=8,
             bbox={"boxstyle": "round", "facecolor": "wheat", "alpha": 0.8},
         )
 
@@ -638,20 +655,24 @@ class IntensityStdViewer:
             vmin_norm, vmax_norm = 0, 1
 
         mesh2 = self.ax_normalized.pcolormesh(
-            theta_mesh, r_mesh, normalized,
-            shading="auto", cmap="viridis", vmin=vmin_norm, vmax=vmax_norm,
+            theta_mesh,
+            r_mesh,
+            normalized,
+            shading="auto",
+            cmap="viridis",
+            vmin=vmin_norm,
+            vmax=vmax_norm,
         )
         self.ax_normalized.set_theta_zero_location("N")  # type: ignore[attr-defined]
         self.ax_normalized.set_theta_direction(-1)  # type: ignore[attr-defined]
         self.ax_normalized.set_title("I / Range_Std", fontsize=10)
         self._add_range_rings(self.ax_normalized, max_range)
-        self.cbar_normalized = plt.colorbar(
-            mesh2, ax=self.ax_normalized, shrink=0.7, pad=0.1
-        )
+        self.cbar_normalized = plt.colorbar(mesh2, ax=self.ax_normalized, shrink=0.7, pad=0.1)
 
         # Add wind arrow relative to ship
         self.ax_normalized.annotate(
-            "", xy=(wind_relative_rad, arrow_len),
+            "",
+            xy=(wind_relative_rad, arrow_len),
             xytext=(wind_relative_rad, max_range * 0.15),
             arrowprops={"arrowstyle": "->", "color": "red", "lw": 2},
         )
@@ -663,12 +684,15 @@ class IntensityStdViewer:
             theta, std_angle_orig, "b-", linewidth=1, alpha=0.4, label="Original"
         )
         self.ax_std_angle.plot(
-            theta, std_angle_cleaned, "g-", linewidth=1, alpha=0.6,
-            label=f"Outliers removed ({self.n_sigma}σ)"
+            theta,
+            std_angle_cleaned,
+            "g-",
+            linewidth=1,
+            alpha=0.6,
+            label=f"Outliers removed ({self.n_sigma}σ)",
         )
         self.ax_std_angle.plot(
-            theta, std_angle_smoothed, "r-", linewidth=2,
-            label=f"Smoothed (w={self.smooth_angle})"
+            theta, std_angle_smoothed, "r-", linewidth=2, label=f"Smoothed (w={self.smooth_angle})"
         )
         self.ax_std_angle.set_xlabel("Theta (deg)", fontsize=10)
         self.ax_std_angle.set_ylabel("Std", fontsize=10)
@@ -679,12 +703,18 @@ class IntensityStdViewer:
         wind_rel_wrapped = wind_relative % 360
         wind_reciprocal = (wind_relative + 180) % 360
         self.ax_std_angle.axvline(
-            wind_rel_wrapped, color="red", linestyle="--", alpha=0.7,
-            label=f"Downwind ({wind_rel_wrapped:.0f}°)"
+            wind_rel_wrapped,
+            color="red",
+            linestyle="--",
+            alpha=0.7,
+            label=f"Downwind ({wind_rel_wrapped:.0f}°)",
         )
         self.ax_std_angle.axvline(
-            wind_reciprocal, color="blue", linestyle="--", alpha=0.7,
-            label=f"Upwind ({wind_reciprocal:.0f}°)"
+            wind_reciprocal,
+            color="blue",
+            linestyle="--",
+            alpha=0.7,
+            label=f"Upwind ({wind_reciprocal:.0f}°)",
         )
         # Update legend to include wind lines
         self.ax_std_angle.legend(loc="best", fontsize=8)
@@ -700,8 +730,13 @@ class IntensityStdViewer:
             vmin_full, vmax_full = 0, 1
 
         mesh3 = self.ax_fully_normalized.pcolormesh(
-            theta_mesh, r_mesh, fully_normalized,
-            shading="auto", cmap="viridis", vmin=vmin_full, vmax=vmax_full,
+            theta_mesh,
+            r_mesh,
+            fully_normalized,
+            shading="auto",
+            cmap="viridis",
+            vmin=vmin_full,
+            vmax=vmax_full,
         )
         self.ax_fully_normalized.set_theta_zero_location("N")  # type: ignore[attr-defined]
         self.ax_fully_normalized.set_theta_direction(-1)  # type: ignore[attr-defined]
@@ -713,7 +748,8 @@ class IntensityStdViewer:
 
         # Add wind arrow relative to ship
         self.ax_fully_normalized.annotate(
-            "", xy=(wind_relative_rad, arrow_len),
+            "",
+            xy=(wind_relative_rad, arrow_len),
             xytext=(wind_relative_rad, max_range * 0.15),
             arrowprops={"arrowstyle": "->", "color": "red", "lw": 2},
         )
@@ -752,8 +788,7 @@ class IntensityStdViewer:
         theta_circle = np.linspace(0, 2 * np.pi, 100)
         for r in ring_radii:
             ax.plot(  # type: ignore[attr-defined]
-                theta_circle, np.full_like(theta_circle, r),
-                "w--", linewidth=0.5, alpha=0.5
+                theta_circle, np.full_like(theta_circle, r), "w--", linewidth=0.5, alpha=0.5
             )
         ax.set_rticks(ring_radii)  # type: ignore[attr-defined]
 
@@ -763,13 +798,34 @@ class IntensityStdViewer:
 
         plt.show()
 
+
+class Tower_config:
+    """Tower-specific configuration wrapper."""
+
+    def __init__(self, config: dict) -> None:
+        self._config = config or {}
+
+    def __repr__(self) -> str:
+        return f"Tower_config({self._config})"
+
+    def __getitem__(self, key: str) -> Any:
+        return self._config.get(key)
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._config
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._config.get(key, default)
+
+
 class Config:
-    """ Load YAML configuration file, if specified."""
+    """Load YAML configuration file, if specified."""
+
     def __init__(self, filename: str) -> None:
         try:
             with open(filename, "r") as f:
                 self._config = yaml.safe_load(f)
-        except:
+        except Exception:
             self._config = {}
             logging.exception("Failed to load config file %s", filename)
 
@@ -782,7 +838,7 @@ class Config:
     def __contains__(self, key: str) -> bool:
         return key in self._config
 
-    def refine(self, metadata: dict) -> "Config":
+    def refine(self, metadata: dict) -> Tower_config:
         """
         Refine configuration based on frame metadata's tower name.
 
@@ -795,6 +851,7 @@ class Config:
             return Tower_config({})
         return Tower_config(self._config[tower])
 
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="View intensity, std by range, and normalized intensity"
@@ -804,11 +861,11 @@ def main() -> int:
     add_logging_arguments(parser)
 
     parser.add_argument(
-            "--config",
-            type=str,
-            default=None,
-            help="Path to configuration file (optional)",
-            )
+        "--config",
+        type=str,
+        default=None,
+        help="Path to configuration file (optional)",
+    )
 
     parser.add_argument(
         "--workers",
@@ -841,10 +898,7 @@ def main() -> int:
         results: list[dict] = []
 
         with ThreadPoolExecutor(max_workers=args.workers) as executor:
-            futures = {
-                executor.submit(load_frame, fn, config): fn
-                for fn in files
-            }
+            futures = {executor.submit(load_frame, fn, config): fn for fn in files}
 
             for i, future in enumerate(as_completed(futures)):
                 print_progress(i + 1, n_files, prefix="Loading")

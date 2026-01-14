@@ -62,13 +62,14 @@ def load_frame_bits(args: tuple) -> tuple:
     fn, distance_bins = args
     try:
         frame = PolarFrame(fn)
-        a = np.bitwise_and(frame.raw[:, distance_bins], 0xf000)
+        a = np.bitwise_and(frame.raw[:, distance_bins], 0xF000)
         a = np.right_shift(a, 12).astype(np.uint8)
         ts = np.datetime64(frame.metadata.get("frame_datetime") or frame.metadata.get("datetime"))
         return ts, a
     except Exception as e:
         logger.warning(f"Failed to load {fn}: {e}")
         return None, None
+
 
 def calc_stats(bits, times):
     """
@@ -96,7 +97,7 @@ def calc_stats(bits, times):
             hz[index] = np.nan
             std[index] = np.nan
         else:
-            dt = np.diff(times[iTransition]).astype('timedelta64[ms]').astype(float) / 1000.0
+            dt = np.diff(times[iTransition]).astype("timedelta64[ms]").astype(float) / 1000.0
             hz[index] = 1 / dt.mean()
             std[index] = dt.std()
 
@@ -119,7 +120,7 @@ def print_progress(current: int, total: int, width: int = 40, prefix: str = "Pro
     filled = int(width * pct)
     bar = "█" * filled + "░" * (width - filled)
     cnt_width = len(str(total))
-    msg = f"\r{prefix}: [{bar}] {current:>{cnt_width}}/{total} ({pct*100:.1f}%)"
+    msg = f"\r{prefix}: [{bar}] {current:>{cnt_width}}/{total} ({pct * 100:.1f}%)"
     print(msg, end="", flush=True)
     if current == total:
         print()  # Newline when complete
@@ -242,7 +243,7 @@ def _calc_single_correlation(args):
     b = col_j - col_j.mean()
 
     # Full cross-correlation
-    xcorr = correlate(a, b, mode='full')
+    xcorr = correlate(a, b, mode="full")
     mid = len(xcorr) // 2
 
     # Search within max_lag
@@ -298,10 +299,10 @@ def calc_correlations(
 
     bit_names = ["b12", "b13", "b14", "b15"]
     for i, bin_idx in enumerate(distance_bins):
-        data[:, i*4 + 0] = (nibble[:, i] & 0b0001).astype(np.float32)  # b12
-        data[:, i*4 + 1] = (nibble[:, i] & 0b0010).astype(np.float32)  # b13
-        data[:, i*4 + 2] = (nibble[:, i] & 0b0100).astype(np.float32)  # b14
-        data[:, i*4 + 3] = (nibble[:, i] & 0b1000).astype(np.float32)  # b15
+        data[:, i * 4 + 0] = (nibble[:, i] & 0b0001).astype(np.float32)  # b12
+        data[:, i * 4 + 1] = (nibble[:, i] & 0b0010).astype(np.float32)  # b13
+        data[:, i * 4 + 2] = (nibble[:, i] & 0b0100).astype(np.float32)  # b14
+        data[:, i * 4 + 3] = (nibble[:, i] & 0b1000).astype(np.float32)  # b15
         labels.extend([f"b{b}_d{bin_idx:02d}" for b in [12, 13, 14, 15]])
         # Get frequencies for each bit at this distance bin
         for bit_name in bit_names:
@@ -357,8 +358,10 @@ def calc_correlations(
     n_pairs = len(work_items)
     n_workers = workers or os.cpu_count()
     logger.info(
-        "Calculating %d correlation pairs (%d skipped due to frequency mismatch) "
-        "with %d workers", n_pairs, skipped, n_workers
+        "Calculating %d correlation pairs (%d skipped due to frequency mismatch) with %d workers",
+        n_pairs,
+        skipped,
+        n_workers,
     )
 
     # Calculate correlations in parallel
@@ -382,8 +385,7 @@ def calc_correlations(
 
 
 def print_correlation_table(
-    corr_matrix, p_matrix, lag_matrix, lag_corr_matrix, labels,
-    threshold=0.1, p_threshold=0.05
+    corr_matrix, p_matrix, lag_matrix, lag_corr_matrix, labels, threshold=0.1, p_threshold=0.05
 ):
     """
     Print significant correlations in a table format with lag information.
@@ -445,48 +447,48 @@ def main():
         "--distance-bins",
         type=str,
         default="0:21",
-        help="Distance bins to analyze (e.g., '0,18,19,20' or '0:21')"
+        help="Distance bins to analyze (e.g., '0,18,19,20' or '0:21')",
     )
     parser.add_argument(
         "--workers",
         type=int,
         default=None,
-        help=f"Number of worker threads (default: CPU count = {os.cpu_count()})"
+        help=f"Number of worker threads (default: CPU count = {os.cpu_count()})",
     )
     parser.add_argument(
         "--min-sigma",
         type=float,
         default=5.0,
-        help="Minimum significance (mean_interval/std) for frequency table (default: 5.0)"
+        help="Minimum significance (mean_interval/std) for frequency table (default: 5.0)",
     )
     parser.add_argument(
         "--correlations",
         action="store_true",
-        help="Calculate and display cross-correlations between bits and distance bins"
+        help="Calculate and display cross-correlations between bits and distance bins",
     )
     parser.add_argument(
         "--corr-threshold",
         type=float,
         default=0.1,
-        help="Minimum absolute correlation to display (default: 0.1)"
+        help="Minimum absolute correlation to display (default: 0.1)",
     )
     parser.add_argument(
         "--p-threshold",
         type=float,
         default=0.05,
-        help="Maximum p-value for significance (default: 0.05)"
+        help="Maximum p-value for significance (default: 0.05)",
     )
     parser.add_argument(
         "--freq-tolerance",
         type=float,
         default=0.25,
-        help="Maximum relative frequency difference for correlation pairs (default: 0.25 = 25%%)"
+        help="Maximum relative frequency difference for correlation pairs (default: 0.25 = 25%%)",
     )
     parser.add_argument(
         "--max-lag",
         type=int,
         default=1000,
-        help="Maximum lag to search for cross-correlation (default: 1000 samples)"
+        help="Maximum lag to search for cross-correlation (default: 1000 samples)",
     )
     args = parser.parse_args()
     setup_logging(args)
@@ -518,8 +520,8 @@ def main():
 
         print(f"Successfully loaded {len(bits)} unique frames")
 
-        times = [] # Time sorted timestamps
-        nibble = [] # Time sorted bits
+        times = []  # Time sorted timestamps
+        nibble = []  # Time sorted bits
         for ts in sorted(bits):
             val = bits[ts]
             nibble.append(val)
@@ -532,10 +534,10 @@ def main():
         times = np.concatenate(times, axis=0)
 
         # Interpolate missing timestamps
-        q = np.where(np.isfinite(times))[0] # Valid timestamps
-        indices = np.arange(times.shape[0]) # All indices
-        f = interp1d(indices[q], times[q], kind='nearest', fill_value="extrapolate")
-        times = f(indices).astype("datetime64[us]") # Fill in missing values
+        q = np.where(np.isfinite(times))[0]  # Valid timestamps
+        indices = np.arange(times.shape[0])  # All indices
+        f = interp1d(indices[q], times[q], kind="nearest", fill_value="extrapolate")
+        times = f(indices).astype("datetime64[us]")  # Fill in missing values
 
         # Calculate statistics for each bit
         stats = {
@@ -560,14 +562,19 @@ def main():
                 nibble, distance_bins, stats, args.workers, args.freq_tolerance, args.max_lag
             )
             print_correlation_table(
-                corr_matrix, p_matrix, lag_matrix, lag_corr_matrix, labels,
+                corr_matrix,
+                p_matrix,
+                lag_matrix,
+                lag_corr_matrix,
+                labels,
                 threshold=args.corr_threshold,
-                p_threshold=args.p_threshold
+                p_threshold=args.p_threshold,
             )
 
     except (FileNotFoundError, ValueError, OSError) as e:
         logger.exception(f"Error: {e}")
         return
+
 
 if __name__ == "__main__":
     main()

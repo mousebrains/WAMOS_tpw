@@ -56,9 +56,7 @@ def load_frame_data(fn: str, bins: list[int]) -> tuple | None:
     """
     try:
         frame = PolarFrame(fn)
-        ts = np.datetime64(
-            frame.metadata.get("frame_datetime") or frame.metadata.get("datetime")
-        )
+        ts = np.datetime64(frame.metadata.get("frame_datetime") or frame.metadata.get("datetime"))
 
         # Extract 12-bit counter from 3 bins
         # Bin 0 (of the 3): bits 8-11
@@ -67,13 +65,13 @@ def load_frame_data(fn: str, bins: list[int]) -> tuple | None:
         raw = frame.raw
 
         # Get top nibble (bits 12-15) from each bin, shifted appropriately
-        counter = np.right_shift(np.bitwise_and(raw[:, bins[0]], 0xf000), 4).astype(
+        counter = np.right_shift(np.bitwise_and(raw[:, bins[0]], 0xF000), 4).astype(
             np.uint16
         )  # bits 8-11
-        counter += np.right_shift(np.bitwise_and(raw[:, bins[1]], 0xf000), 8).astype(
+        counter += np.right_shift(np.bitwise_and(raw[:, bins[1]], 0xF000), 8).astype(
             np.uint16
         )  # bits 4-7
-        counter += np.right_shift(np.bitwise_and(raw[:, bins[2]], 0xf000), 12).astype(
+        counter += np.right_shift(np.bitwise_and(raw[:, bins[2]], 0xF000), 12).astype(
             np.uint16
         )  # bits 0-3
 
@@ -92,9 +90,7 @@ def load_frame_data(fn: str, bins: list[int]) -> tuple | None:
         return None
 
 
-def print_progress(
-    current: int, total: int, width: int = 40, prefix: str = "Progress"
-) -> None:
+def print_progress(current: int, total: int, width: int = 40, prefix: str = "Progress") -> None:
     """Print a progress bar that updates in place."""
     if total == 0:
         return
@@ -102,7 +98,7 @@ def print_progress(
     filled = int(width * pct)
     bar = "█" * filled + "░" * (width - filled)
     cnt_width = len(str(total))
-    msg = f"\r{prefix}: [{bar}] {current:>{cnt_width}}/{total} ({pct*100:.1f}%)"
+    msg = f"\r{prefix}: [{bar}] {current:>{cnt_width}}/{total} ({pct * 100:.1f}%)"
     print(msg, end="", flush=True)
     if current == total:
         print()
@@ -129,9 +125,7 @@ def main() -> int:
         default=None,
         help="Save plot to file instead of displaying",
     )
-    parser.add_argument(
-        "--dpi", type=int, default=150, help="DPI for saved plots (default: 150)"
-    )
+    parser.add_argument("--dpi", type=int, default=150, help="DPI for saved plots (default: 150)")
     parser.add_argument(
         "--figsize",
         type=str,
@@ -179,14 +173,11 @@ def main() -> int:
             transition_bin = int(match.group(1))
             transition_bit = int(match.group(2))
             if transition_bit not in (12, 13, 14, 15):
-                logger.error(
-                    f"Invalid bit in --transition: {transition_bit}. Must be 12-15."
-                )
+                logger.error(f"Invalid bit in --transition: {transition_bit}. Must be 12-15.")
                 return 1
         else:
             logger.error(
-                f"Invalid --transition format: {args.transition}. "
-                "Use dNNbNN (e.g., d00b12)"
+                f"Invalid --transition format: {args.transition}. Use dNNbNN (e.g., d00b12)"
             )
             return 1
 
@@ -207,9 +198,7 @@ def main() -> int:
             logger.error("No files found in time range")
             return 1
 
-        logger.info(
-            "Loading %d files with %d workers", n_files, args.workers or os.cpu_count()
-        )
+        logger.info("Loading %d files with %d workers", n_files, args.workers or os.cpu_count())
 
         # Load frames in parallel
         results: dict = {}
@@ -245,8 +234,7 @@ def main() -> int:
 
         combined_counter = np.concatenate(counter_list, axis=0)
         combined_bits: dict[int, np.ndarray] = {
-            bit_num: np.concatenate(bit_lists[bit_num], axis=0)
-            for bit_num in (12, 13, 14, 15)
+            bit_num: np.concatenate(bit_lists[bit_num], axis=0) for bit_num in (12, 13, 14, 15)
         }
         total_samples = len(combined_counter)
 

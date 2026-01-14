@@ -114,7 +114,7 @@ def print_progress(current: int, total: int, width: int = 40, prefix: str = "Pro
     pct = current / total
     filled = int(width * pct)
     bar = "=" * filled + ">" * (1 if filled < width else 0) + " " * (width - filled - 1)
-    msg = f"\r{prefix}: [{bar}] {current:>{len(str(total))}}/{total} ({pct*100:.1f}%)"
+    msg = f"\r{prefix}: [{bar}] {current:>{len(str(total))}}/{total} ({pct * 100:.1f}%)"
     print(msg, end="", flush=True)
     if current == total:
         print()
@@ -434,10 +434,12 @@ def compute_wind_relative_intensity(
             phi0 = 0.0
 
             popt, _ = curve_fit(
-                cosine_func, theta_valid, y_valid,
+                cosine_func,
+                theta_valid,
+                y_valid,
                 p0=[a0, phi0, b0],
                 bounds=([-np.inf, -np.pi, -np.inf], [np.inf, np.pi, np.inf]),
-                maxfev=5000
+                maxfev=5000,
             )
             a, phi, b = popt
 
@@ -600,7 +602,10 @@ def fit_cosine(theta: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, dict]:
     valid = np.isfinite(y) & (y > 0)
     if np.sum(valid) < 4:
         return np.full_like(y, np.nan), {
-            "a": np.nan, "b": np.nan, "phi": np.nan, "r_squared": np.nan
+            "a": np.nan,
+            "b": np.nan,
+            "phi": np.nan,
+            "r_squared": np.nan,
         }
 
     theta_valid = np.deg2rad(theta[valid])
@@ -613,10 +618,12 @@ def fit_cosine(theta: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, dict]:
         phi0 = 0.0  # Assume max at upwind (0°)
 
         popt, _ = curve_fit(
-            cosine_func, theta_valid, y_valid,
+            cosine_func,
+            theta_valid,
+            y_valid,
             p0=[a0, phi0, b0],
             bounds=([-np.inf, -np.pi, -np.inf], [np.inf, np.pi, np.inf]),
-            maxfev=5000
+            maxfev=5000,
         )
         a, phi, b = popt
 
@@ -630,12 +637,13 @@ def fit_cosine(theta: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, dict]:
         theta_rad = np.deg2rad(theta)
         y_fitted = cosine_func(theta_rad, a, phi, b)
 
-        return y_fitted, {
-            "a": a, "b": b, "phi": np.rad2deg(phi), "r_squared": r_squared
-        }
+        return y_fitted, {"a": a, "b": b, "phi": np.rad2deg(phi), "r_squared": r_squared}
     except Exception:
         return np.full_like(y, np.nan), {
-            "a": np.nan, "b": np.nan, "phi": np.nan, "r_squared": np.nan
+            "a": np.nan,
+            "b": np.nan,
+            "phi": np.nan,
+            "r_squared": np.nan,
         }
 
 
@@ -684,8 +692,11 @@ def plot_wind_relative_intensity(
     ax1.plot(range_centers, range_means, "b-", linewidth=1.5, label="Mean")
     ax1.plot(range_centers, range_medians, "g-", linewidth=1.5, label="Median")
     ax1.plot(
-        range_centers, range_medians_smoothed, "r-", linewidth=2.5,
-        label=f"Smoothed Median (window={smooth_window})"
+        range_centers,
+        range_medians_smoothed,
+        "r-",
+        linewidth=2.5,
+        label=f"Smoothed Median (window={smooth_window})",
     )
 
     if show_std:
@@ -707,12 +718,9 @@ def plot_wind_relative_intensity(
 
     # Secondary y-axis for std
     ax1_std = ax1.twinx()
+    ax1_std.plot(range_centers, range_adjusted_stds, "m-", linewidth=1, alpha=0.6, label="Std")
     ax1_std.plot(
-        range_centers, range_adjusted_stds, "m-", linewidth=1, alpha=0.6, label="Std"
-    )
-    ax1_std.plot(
-        range_centers, range_adjusted_stds_smoothed, "m-", linewidth=2.5,
-        label="Smoothed Std"
+        range_centers, range_adjusted_stds_smoothed, "m-", linewidth=2.5, label="Smoothed Std"
     )
     ax1_std.set_ylabel("Std (after median+cosine)", fontsize=11, color="purple")
     ax1_std.tick_params(axis="y", labelcolor="purple")
@@ -745,16 +753,12 @@ def plot_wind_relative_intensity(
             )
 
     # Plot combined data and its fit (the one actually used for correction)
-    ax2.plot(
-        angle_centers, combined_angle_means, "k-", linewidth=2, label="All ranges"
-    )
+    ax2.plot(angle_centers, combined_angle_means, "k-", linewidth=2, label="All ranges")
 
     # Plot combined cosine fit
     theta_rad = np.deg2rad(angle_centers)
     phi_rad = np.deg2rad(cosine_params["phi"])
-    combined_fit = (
-        cosine_params["a"] * np.cos(theta_rad - phi_rad) + cosine_params["b"]
-    )
+    combined_fit = cosine_params["a"] * np.cos(theta_rad - phi_rad) + cosine_params["b"]
     ax2.plot(angle_centers, combined_fit, "k--", linewidth=2.5, label="Combined fit")
 
     # Format fit info
@@ -831,14 +835,18 @@ def plot_wind_relative_intensity(
 
         # Bottom-left: Averaged destreaked intensity
         mesh1 = ax3.pcolormesh(
-            lon_edges, lat_edges, destreak_norm,
-            shading="auto", cmap="viridis", vmin=0, vmax=1,
+            lon_edges,
+            lat_edges,
+            destreak_norm,
+            shading="auto",
+            cmap="viridis",
+            vmin=0,
+            vmax=1,
         )
         ax3.set_xlabel("Longitude (°E)", fontsize=11)
         ax3.set_ylabel("Latitude (°N)", fontsize=11)
         ax3.set_title(
-            f"Avg Destreaked Intensity [0,1] ({earth_data['n_frames']} frames)",
-            fontsize=12
+            f"Avg Destreaked Intensity [0,1] ({earth_data['n_frames']} frames)", fontsize=12
         )
         ax3.set_aspect("equal", adjustable="box")
         _add_range_rings_earth(ax3, center_lon, center_lat, lon_edges, lat_edges)
@@ -846,14 +854,18 @@ def plot_wind_relative_intensity(
 
         # Bottom-right: Averaged adjusted intensity
         mesh2 = ax4.pcolormesh(
-            lon_edges, lat_edges, adjusted_norm,
-            shading="auto", cmap="viridis", vmin=0, vmax=1,
+            lon_edges,
+            lat_edges,
+            adjusted_norm,
+            shading="auto",
+            cmap="viridis",
+            vmin=0,
+            vmax=1,
         )
         ax4.set_xlabel("Longitude (°E)", fontsize=11)
         ax4.set_ylabel("Latitude (°N)", fontsize=11)
         ax4.set_title(
-            f"Avg Adjusted Intensity [0,1] ({earth_data['n_frames']} frames)",
-            fontsize=12
+            f"Avg Adjusted Intensity [0,1] ({earth_data['n_frames']} frames)", fontsize=12
         )
         ax4.set_aspect("equal", adjustable="box")
         _add_range_rings_earth(ax4, center_lon, center_lat, lon_edges, lat_edges)
@@ -872,8 +884,12 @@ def plot_wind_relative_intensity(
         stats_lines.append(fit_info)
     stats_text = "\n".join(stats_lines)
     fig.text(
-        0.5, 0.01, stats_text,
-        ha="center", va="bottom", fontsize=9,
+        0.5,
+        0.01,
+        stats_text,
+        ha="center",
+        va="bottom",
+        fontsize=9,
         fontfamily="monospace",
         bbox={"boxstyle": "round", "facecolor": "wheat", "alpha": 0.8},
     )
@@ -897,10 +913,7 @@ def _add_range_rings_earth(
 
     max_lon_dist = max(abs(lon_edges[-1] - center_lon), abs(lon_edges[0] - center_lon))
     max_lat_dist = max(abs(lat_edges[-1] - center_lat), abs(lat_edges[0] - center_lat))
-    max_range_m = max(
-        max_lon_dist * meters_per_deg_lon,
-        max_lat_dist * meters_per_deg_lat
-    )
+    max_range_m = max(max_lon_dist * meters_per_deg_lon, max_lat_dist * meters_per_deg_lat)
 
     ring_interval = 1000.0  # 1km rings
     ring_radii = np.arange(ring_interval, max_range_m + ring_interval, ring_interval)
@@ -1051,9 +1064,7 @@ def compute_averaged_earth_intensity(
     adjusted_sum = np.zeros((grid_size, grid_size), dtype=np.float64)
     count_grid = np.zeros((grid_size, grid_size), dtype=np.int64)
 
-    range_bin_size = (
-        intensity_data["range_centers"][1] - intensity_data["range_centers"][0]
-    )
+    range_bin_size = intensity_data["range_centers"][1] - intensity_data["range_centers"][0]
 
     # Second pass: accumulate intensity onto grid
     n_frames = len(results)
@@ -1144,9 +1155,7 @@ def compute_averaged_earth_intensity(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Plot average intensity vs wind-relative angle"
-    )
+    parser = argparse.ArgumentParser(description="Plot average intensity vs wind-relative angle")
 
     add_time_range_arguments(parser)
     add_logging_arguments(parser)

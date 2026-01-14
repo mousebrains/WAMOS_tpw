@@ -109,7 +109,7 @@ def print_progress(current: int, total: int, width: int = 40, prefix: str = "Pro
     pct = current / total
     filled = int(width * pct)
     bar = "=" * filled + ">" * (1 if filled < width else 0) + " " * (width - filled - 1)
-    msg = f"\r{prefix}: [{bar}] {current:>{len(str(total))}}/{total} ({pct*100:.1f}%)"
+    msg = f"\r{prefix}: [{bar}] {current:>{len(str(total))}}/{total} ({pct * 100:.1f}%)"
     print(msg, end="", flush=True)
     if current == total:
         print()
@@ -187,9 +187,7 @@ class CoordinateViewer:
         self.btn_next.on_clicked(self._on_next)
 
         # Add info text area
-        self.info_text = self.fig.text(
-            0.02, 0.02, "", fontsize=9, fontfamily="monospace"
-        )
+        self.info_text = self.fig.text(0.02, 0.02, "", fontsize=9, fontfamily="monospace")
 
         self.fig.subplots_adjust(bottom=0.12, top=0.92, hspace=0.3, wspace=0.25)
 
@@ -251,11 +249,11 @@ class CoordinateViewer:
 
         # Clip to available range bins
         actual_end = min(self.range_start + self.n_ranges, intensity.shape[1])
-        intensity_slice = intensity[:, self.range_start:actual_end]
+        intensity_slice = intensity[:, self.range_start : actual_end]
 
         # Get range arrays from frame (slant and horizontal)
-        slant_ranges = frame["slant_ranges"][self.range_start:actual_end]
-        horizontal_ranges = frame["horizontal_ranges"][self.range_start:actual_end]
+        slant_ranges = frame["slant_ranges"][self.range_start : actual_end]
+        horizontal_ranges = frame["horizontal_ranges"][self.range_start : actual_end]
 
         # Get navigation data
         nav = self.transformer.get_frame_navigation(self.current_idx)
@@ -321,8 +319,7 @@ class CoordinateViewer:
         theta_circle = np.linspace(0, 2 * np.pi, 100)
         for r in ring_radii:
             self.ax_ship_polar.plot(
-                theta_circle, np.full_like(theta_circle, r),
-                "w--", linewidth=0.5, alpha=0.5
+                theta_circle, np.full_like(theta_circle, r), "w--", linewidth=0.5, alpha=0.5
             )
         # Set radial ticks at 500m intervals
         self.ax_ship_polar.set_rticks(ring_radii)  # type: ignore[attr-defined]
@@ -360,9 +357,7 @@ class CoordinateViewer:
             circle_theta = np.linspace(0, 2 * np.pi, 100)
             circle_lon = ship_lon + (r * np.cos(circle_theta)) / meters_per_deg_lon
             circle_lat = ship_lat + (r * np.sin(circle_theta)) / meters_per_deg_lat
-            self.ax_earth.plot(
-                circle_lon, circle_lat, "w--", linewidth=0.5, alpha=0.5
-            )
+            self.ax_earth.plot(circle_lon, circle_lat, "w--", linewidth=0.5, alpha=0.5)
 
         # Update info text
         ts_str = str(meta["timestamp"])[:26] if meta["timestamp"] is not None else "N/A"
@@ -580,11 +575,15 @@ def main() -> int:
             print(f"  Detected shadow in {n_detected} of {len(results)} frames")
 
             if leading_edges:
-                print(f"  Leading edge: {np.median(leading_edges):.1f}° "
-                      f"(range: {np.min(leading_edges):.1f}° - {np.max(leading_edges):.1f}°)")
+                print(
+                    f"  Leading edge: {np.median(leading_edges):.1f}° "
+                    f"(range: {np.min(leading_edges):.1f}° - {np.max(leading_edges):.1f}°)"
+                )
             if trailing_edges:
-                print(f"  Trailing edge: {np.median(trailing_edges):.1f}° "
-                      f"(range: {np.min(trailing_edges):.1f}° - {np.max(trailing_edges):.1f}°)")
+                print(
+                    f"  Trailing edge: {np.median(trailing_edges):.1f}° "
+                    f"(range: {np.min(trailing_edges):.1f}° - {np.max(trailing_edges):.1f}°)"
+                )
 
             # Apply theta adjustment if requested
             if args.adjust != "none" and leading_edges and trailing_edges:
@@ -614,11 +613,9 @@ def main() -> int:
 
                 print(f"  Adjusted {n_adjusted} frames")
                 if shifts:
-                    print(f"  Shift: mean={np.mean(shifts):.3f}°, "
-                          f"std={np.std(shifts):.3f}°")
+                    print(f"  Shift: mean={np.mean(shifts):.3f}°, std={np.std(shifts):.3f}°")
                 if scales and args.adjust == "shift_scale":
-                    print(f"  Scale: mean={np.mean(scales):.6f}, "
-                          f"std={np.std(scales):.6f}")
+                    print(f"  Scale: mean={np.mean(scales):.6f}, std={np.std(scales):.6f}")
 
         # Create coordinate transformer
         print("Creating coordinate transformer...")

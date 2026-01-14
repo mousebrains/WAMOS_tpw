@@ -123,7 +123,7 @@ def print_progress(current: int, total: int, width: int = 40, prefix: str = "Pro
     pct = current / total
     filled = int(width * pct)
     bar = "█" * filled + "░" * (width - filled)
-    msg = f"\r{prefix}: [{bar}] {current:>{len(str(total))}}/{total} ({pct*100:.1f}%)"
+    msg = f"\r{prefix}: [{bar}] {current:>{len(str(total))}}/{total} ({pct * 100:.1f}%)"
     print(msg, end="", flush=True)
     if current == total:
         print()  # Newline when complete
@@ -180,7 +180,8 @@ def main() -> int:
         help="Show plot of theta vs time",
     )
     parser.add_argument(
-        "--output", "-o",
+        "--output",
+        "-o",
         type=str,
         default=None,
         help="Save plot to file instead of displaying",
@@ -387,14 +388,16 @@ def main() -> int:
             gaps.append(gap)
 
             if abs(gap) > args.tolerance:
-                discontinuities.append({
-                    "index": i,
-                    "gap": gap,
-                    "prev_ts": prev["timestamp"],
-                    "curr_ts": curr["timestamp"],
-                    "prev_last": prev_last,
-                    "curr_first": curr_first,
-                })
+                discontinuities.append(
+                    {
+                        "index": i,
+                        "gap": gap,
+                        "prev_ts": prev["timestamp"],
+                        "curr_ts": curr["timestamp"],
+                        "prev_last": prev_last,
+                        "curr_first": curr_first,
+                    }
+                )
 
         # Calculate aggregate statistics
         all_spans = [r["wtheta"].theta_span for r in results]
@@ -495,10 +498,8 @@ def main() -> int:
             gaps_arr = np.array(gaps)
             print(f"  Gap mean:        {np.mean(gaps_arr):.4f}°")
             print(f"  Gap std:         {np.std(gaps_arr):.4f}°")
-            print(f"  Gap range:       {np.min(gaps_arr):.4f}° to "
-                  f"{np.max(gaps_arr):.4f}°")
-        print(f"  Discontinuities: {len(discontinuities)} "
-              f"(|gap| > {args.tolerance}°)")
+            print(f"  Gap range:       {np.min(gaps_arr):.4f}° to {np.max(gaps_arr):.4f}°")
+        print(f"  Discontinuities: {len(discontinuities)} (|gap| > {args.tolerance}°)")
 
         if discontinuities:
             print("\nDiscontinuities:")
@@ -507,11 +508,7 @@ def main() -> int:
             print(hdr)
             print("-" * 70)
             for d in discontinuities[:20]:
-                ts_str = (
-                    str(d["curr_ts"])[:26]
-                    if d["curr_ts"] is not None
-                    else "N/A"
-                )
+                ts_str = str(d["curr_ts"])[:26] if d["curr_ts"] is not None else "N/A"
                 print(
                     f"{d['index']:4d} {ts_str:>26} {d['gap']:>10.4f}° "
                     f"{d['prev_last']:>10.4f}° {d['curr_first']:>10.4f}°"
@@ -743,13 +740,11 @@ def main() -> int:
                             elif args.adjust == "shift_scale":
                                 # Adjusted = (original - frame_leading) * scale + target_leading
                                 adj_lead = (
-                                    (orig_leading - orig_leading) * wtheta.scale
-                                    + median_leading
-                                )
+                                    orig_leading - orig_leading
+                                ) * wtheta.scale + median_leading
                                 adj_trail = (
-                                    (orig_trailing - orig_leading) * wtheta.scale
-                                    + median_leading
-                                )
+                                    orig_trailing - orig_leading
+                                ) * wtheta.scale + median_leading
                                 adj_leading_edges.append(adj_lead)
                                 adj_trailing_edges.append(adj_trail)
 
@@ -806,12 +801,8 @@ def main() -> int:
                     return mu, sigma, skew, kurt
 
                 # Plot original edges
-                _ = plot_hist_with_gaussian(
-                    leading_edges, "blue", "Original Leading", alpha=0.4
-                )
-                _ = plot_hist_with_gaussian(
-                    trailing_edges, "red", "Original Trailing", alpha=0.4
-                )
+                _ = plot_hist_with_gaussian(leading_edges, "blue", "Original Leading", alpha=0.4)
+                _ = plot_hist_with_gaussian(trailing_edges, "red", "Original Trailing", alpha=0.4)
 
                 # Plot adjusted edges if available
                 if adj_leading_edges and adj_trailing_edges:
@@ -920,12 +911,8 @@ def main() -> int:
                 print("-" * 90)
 
             for i, r in enumerate(results):
-                ts_str = (
-                    str(r["timestamp"])[:26]
-                    if r["timestamp"] is not None
-                    else "N/A"
-                )
-                gap_str = f"{gaps[i-1]:.4f}°" if i > 0 else "N/A"
+                ts_str = str(r["timestamp"])[:26] if r["timestamp"] is not None else "N/A"
+                gap_str = f"{gaps[i - 1]:.4f}°" if i > 0 else "N/A"
                 wt = r["wtheta"]
                 n_bear = r["n_bearings"]
 
@@ -995,12 +982,7 @@ def main() -> int:
             # Add frame boundary lines (vertical, blue)
             for boundary in frame_boundaries[:-1]:
                 if boundary < len(times_concat):
-                    ax.axvline(
-                        times_concat[boundary],
-                        color="blue",
-                        linewidth=0.5,
-                        alpha=0.7
-                    )
+                    ax.axvline(times_concat[boundary], color="blue", linewidth=0.5, alpha=0.7)
 
             # Format x-axis as datetime
             ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))

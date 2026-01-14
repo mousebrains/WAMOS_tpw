@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class GPSPoint:
     """Single GPS observation."""
+
     time: datetime
     lat: float
     lon: float
@@ -60,7 +61,8 @@ def parse_args() -> argparse.Namespace:
     add_logging_arguments(parser)
 
     parser.add_argument(
-        "-o", "--output",
+        "-o",
+        "--output",
         type=Path,
         default=Path("gps_track.nc"),
         help="Output NetCDF file path",
@@ -384,7 +386,9 @@ class NetCDFWriter:
 
         # Speed variable
         speed_var = self.ds.createVariable(
-            "speed", "f4", ("time",),
+            "speed",
+            "f4",
+            ("time",),
             fill_value=np.float32(-9999.0),
         )
         speed_var.long_name = "platform speed over ground"
@@ -395,7 +399,9 @@ class NetCDFWriter:
 
         # Heading variable
         heading_var = self.ds.createVariable(
-            "heading", "f4", ("time",),
+            "heading",
+            "f4",
+            ("time",),
             fill_value=np.float32(-9999.0),
         )
         heading_var.long_name = "platform heading"
@@ -427,9 +433,9 @@ class NetCDFWriter:
         end_idx = start_idx + n
 
         # Convert times to numeric values
-        time_values = np.array([
-            (p.time - self.epoch).total_seconds() for p in points
-        ], dtype=np.float64)
+        time_values = np.array(
+            [(p.time - self.epoch).total_seconds() for p in points], dtype=np.float64
+        )
 
         # Extract arrays
         lat_values = np.array([p.lat for p in points], dtype=np.float64)

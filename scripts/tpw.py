@@ -4,10 +4,8 @@
 #
 # Jan-2026, Pat Welch, pat@mousebrains.com
 
-from scipy.ndimage import label, convolve1d
-from scipy.signal import convolve2d
+from scipy.ndimage import label
 import numpy as np
-import sys
 import time
 
 # Horizontal connectivity kernel
@@ -34,7 +32,7 @@ print(q.astype(np.uint8))
 t0 = time.perf_counter()
 [b, nFeatures] = label(~q, structure=kernel)
 cnt = np.bincount(b.ravel())
-RL = cnt[b] # Run Length image
+RL = cnt[b]  # Run Length image
 t1 = time.perf_counter()
 dt += t1 - t0
 print("not nFeatures", nFeatures)
@@ -58,7 +56,7 @@ print(q1.astype(np.int8) - q.astype(np.int8))
 t0 = time.perf_counter()
 [b, nFeatures] = label(q1, structure=kernel)
 cnt = np.bincount(b.ravel())
-RL = cnt[b] # Run Length image
+RL = cnt[b]  # Run Length image
 t1 = time.perf_counter()
 dt += t1 - t0
 print("nFeatures", nFeatures)

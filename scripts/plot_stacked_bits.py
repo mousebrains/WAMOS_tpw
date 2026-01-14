@@ -53,11 +53,10 @@ def parse_signal_spec(spec: str) -> tuple[int, int]:
     Raises:
         ValueError: If spec format is invalid
     """
-    match = re.match(r'^b(\d+)_d(\d+)$', spec)
+    match = re.match(r"^b(\d+)_d(\d+)$", spec)
     if not match:
         raise ValueError(
-            f"Invalid signal spec '{spec}'. "
-            "Expected format: b{bit}_d{bin} (e.g., b13_d00)"
+            f"Invalid signal spec '{spec}'. Expected format: b{{bit}}_d{{bin}} (e.g., b13_d00)"
         )
 
     bit = int(match.group(1))
@@ -117,7 +116,7 @@ def print_progress(current: int, total: int, width: int = 40, prefix: str = "Pro
     filled = int(width * pct)
     bar = "█" * filled + "░" * (width - filled)
     cnt_width = len(str(total))
-    msg = f"\r{prefix}: [{bar}] {current:>{cnt_width}}/{total} ({pct*100:.1f}%)"
+    msg = f"\r{prefix}: [{bar}] {current:>{cnt_width}}/{total} ({pct * 100:.1f}%)"
     print(msg, end="", flush=True)
     if current == total:
         print()
@@ -131,33 +130,30 @@ def main():
     add_time_range_arguments(parser)
     add_logging_arguments(parser)
 
+    parser.add_argument("signals", nargs="+", help="Signal specifications (e.g., b13_d00 b12_d20)")
     parser.add_argument(
-        "signals",
-        nargs="+",
-        help="Signal specifications (e.g., b13_d00 b12_d20)"
-    )
-    parser.add_argument(
-        "--output", "-o",
+        "--output",
+        "-o",
         type=str,
         default=None,
-        help="Output file path (if not specified, displays interactively)"
+        help="Output file path (if not specified, displays interactively)",
     )
     parser.add_argument(
         "--workers",
         type=int,
         default=None,
-        help=f"Number of worker threads (default: CPU count = {os.cpu_count()})"
+        help=f"Number of worker threads (default: CPU count = {os.cpu_count()})",
     )
     parser.add_argument(
         "--figsize",
         type=str,
         default="16,10",
-        help="Figure size as 'width,height' in inches (default: 16,10)"
+        help="Figure size as 'width,height' in inches (default: 16,10)",
     )
     parser.add_argument(
         "--no-frame-lines",
         action="store_true",
-        help="Don't show vertical lines at frame boundaries"
+        help="Don't show vertical lines at frame boundaries",
     )
 
     args = parser.parse_args()

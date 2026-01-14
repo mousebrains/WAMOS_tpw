@@ -75,7 +75,7 @@ def print_progress(current: int, total: int, width: int = 40, prefix: str = "Pro
     filled = int(width * pct)
     bar = "█" * filled + "░" * (width - filled)
     cnt_width = len(str(total))
-    msg = f"\r{prefix}: [{bar}] {current:>{cnt_width}}/{total} ({pct*100:.1f}%)"
+    msg = f"\r{prefix}: [{bar}] {current:>{cnt_width}}/{total} ({pct * 100:.1f}%)"
     print(msg, end="", flush=True)
     if current == total:
         print()
@@ -107,7 +107,7 @@ def calc_stats(bits, times):
             hz[index] = np.nan
             std[index] = np.nan
         else:
-            dt = np.diff(times[iTransition]).astype('timedelta64[ms]').astype(float) / 1000.0
+            dt = np.diff(times[iTransition]).astype("timedelta64[ms]").astype(float) / 1000.0
             hz[index] = 1 / dt.mean()
             std[index] = dt.std()
 
@@ -204,9 +204,7 @@ def print_stats_by_frequency(distance_bins, stats_dict, min_sigma=5.0):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Plot top 4 bits for multiple WAMOS polar frames"
-    )
+    parser = argparse.ArgumentParser(description="Plot top 4 bits for multiple WAMOS polar frames")
 
     add_time_range_arguments(parser)
     add_logging_arguments(parser)
@@ -215,59 +213,49 @@ def main():
         "--distance-bins",
         type=str,
         default="0:21",
-        help="Distance bins to display (e.g., '0:21' or '0,18,19,50')"
+        help="Distance bins to display (e.g., '0:21' or '0,18,19,50')",
     )
     parser.add_argument(
-        "--output", "-o",
-        type=str,
-        default=None,
-        help="Save plot to file instead of displaying"
+        "--output", "-o", type=str, default=None, help="Save plot to file instead of displaying"
     )
+    parser.add_argument("--dpi", type=int, default=150, help="DPI for saved plots (default: 150)")
     parser.add_argument(
-        "--dpi",
-        type=int,
-        default=150,
-        help="DPI for saved plots (default: 150)"
-    )
-    parser.add_argument(
-        "--summary",
-        action="store_true",
-        help="Print bit statistics summary instead of plotting"
+        "--summary", action="store_true", help="Print bit statistics summary instead of plotting"
     )
     parser.add_argument(
         "--min-sigma",
         type=float,
         default=5.0,
-        help="Minimum significance (mean_interval/std) for frequency table (default: 5.0)"
+        help="Minimum significance (mean_interval/std) for frequency table (default: 5.0)",
     )
     parser.add_argument(
         "--figsize",
         type=str,
         default="14,10",
-        help="Figure size as 'width,height' in inches (default: 14,10)"
+        help="Figure size as 'width,height' in inches (default: 14,10)",
     )
     parser.add_argument(
         "--workers",
         type=int,
         default=None,
-        help=f"Number of worker threads (default: CPU count = {os.cpu_count()})"
+        help=f"Number of worker threads (default: CPU count = {os.cpu_count()})",
     )
     parser.add_argument(
         "--group-by-distance",
         action="store_true",
-        help="Group bits by distance bin (b12-15 for d00, then b12-15 for d01, etc.)"
+        help="Group bits by distance bin (b12-15 for d00, then b12-15 for d01, etc.)",
     )
     parser.add_argument(
         "--reverse-bits",
         action="store_true",
-        help="Display bits in reverse order (b15 to b12) when using --group-by-distance"
+        help="Display bits in reverse order (b15 to b12) when using --group-by-distance",
     )
     parser.add_argument(
         "--transition",
         type=str,
         default=None,
         metavar="dNNbNN",
-        help="Show transition lines for specified bit/bin (e.g., d00b12 for bit 12 at bin 0)"
+        help="Show transition lines for specified bit/bin (e.g., d00b12 for bit 12 at bin 0)",
     )
 
     args = parser.parse_args()
@@ -278,7 +266,8 @@ def main():
     transition_bin = 0
     if args.transition:
         import re
-        match = re.match(r'd(\d+)b(\d+)', args.transition.lower())
+
+        match = re.match(r"d(\d+)b(\d+)", args.transition.lower())
         if match:
             transition_bin = int(match.group(1))
             transition_bit = int(match.group(2))
@@ -342,7 +331,7 @@ def main():
                 frame = frames_dict[ts]
                 # Extract top nibble for selected distance bins
                 raw_selected = frame.raw[:, distance_bins]
-                nibble = np.right_shift(np.bitwise_and(raw_selected, 0xf000), 12).astype(np.uint8)
+                nibble = np.right_shift(np.bitwise_and(raw_selected, 0xF000), 12).astype(np.uint8)
                 nibble_list.append(nibble)
 
                 # Build timestamp array (only first sample has the timestamp)
@@ -357,7 +346,7 @@ def main():
             # Interpolate missing timestamps
             q = np.where(np.isfinite(times))[0]
             indices = np.arange(times.shape[0])
-            f = interp1d(indices[q], times[q], kind='nearest', fill_value="extrapolate")
+            f = interp1d(indices[q], times[q], kind="nearest", fill_value="extrapolate")
             times = f(indices).astype("datetime64[us]")
 
             # Calculate statistics for each bit
@@ -384,15 +373,23 @@ def main():
             if args.group_by_distance:
                 # Group by distance bin: b12-15 for d00, then b12-15 for d01, etc.
                 fig, axes = plot_frames_bits_by_distance(
-                    frames, distance_bins=distance_bins, figsize=figsize, title=title,
+                    frames,
+                    distance_bins=distance_bins,
+                    figsize=figsize,
+                    title=title,
                     reverse_bits=args.reverse_bits,
-                    transition_bit=transition_bit, transition_bin=transition_bin
+                    transition_bit=transition_bit,
+                    transition_bin=transition_bin,
                 )
             else:
                 # Default: 2x2 grid with one subplot per bit
                 fig, axes = plot_frames_bits(
-                    frames, distance_bins=distance_bins, figsize=figsize, title=title,
-                    transition_bit=transition_bit, transition_bin=transition_bin
+                    frames,
+                    distance_bins=distance_bins,
+                    figsize=figsize,
+                    title=title,
+                    transition_bit=transition_bit,
+                    transition_bin=transition_bin,
                 )
 
             if args.output:

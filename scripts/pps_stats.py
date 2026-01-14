@@ -101,16 +101,14 @@ def print_progress(current: int, total: int, width: int = 40, prefix: str = "Pro
     filled = int(width * pct)
     bar = "█" * filled + "░" * (width - filled)
     cnt_width = len(str(total))
-    msg = f"\r{prefix}: [{bar}] {current:>{cnt_width}}/{total} ({pct*100:.1f}%)"
+    msg = f"\r{prefix}: [{bar}] {current:>{cnt_width}}/{total} ({pct * 100:.1f}%)"
     print(msg, end="", flush=True)
     if current == total:
         print()
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Analyze PPS pulse statistics across polar files"
-    )
+    parser = argparse.ArgumentParser(description="Analyze PPS pulse statistics across polar files")
 
     add_time_range_arguments(parser)
     add_logging_arguments(parser)
@@ -134,13 +132,9 @@ def main() -> int:
         "--workers",
         type=int,
         default=None,
-        help=f"Number of worker threads (default: CPU count = {os.cpu_count()})"
+        help=f"Number of worker threads (default: CPU count = {os.cpu_count()})",
     )
-    parser.add_argument(
-        "--per-frame",
-        action="store_true",
-        help="Show per-frame statistics"
-    )
+    parser.add_argument("--per-frame", action="store_true", help="Show per-frame statistics")
 
     args = parser.parse_args()
     setup_logging(args)
@@ -236,16 +230,19 @@ def main() -> int:
 
         print("\nFrames:")
         print(f"  Total loaded:    {n_loaded}")
-        print(f"  Bearings/frame:  {np.mean(all_bearings):.1f} mean, "
-              f"{np.min(all_bearings)}-{np.max(all_bearings)} range")
+        print(
+            f"  Bearings/frame:  {np.mean(all_bearings):.1f} mean, "
+            f"{np.min(all_bearings)}-{np.max(all_bearings)} range"
+        )
         if all_rpts:
-            print(f"  RPT (seconds):   {np.mean(all_rpts):.4f} mean, "
-                  f"{np.min(all_rpts):.4f}-{np.max(all_rpts):.4f} range")
+            print(
+                f"  RPT (seconds):   {np.mean(all_rpts):.4f} mean, "
+                f"{np.min(all_rpts):.4f}-{np.max(all_rpts):.4f} range"
+            )
 
         print("\nPPS Pulses:")
         print(f"  Total pulses:    {total_pulses}")
-        print(f"  Pulses/frame:    {np.mean(all_pulses):.2f} mean, "
-              f"{np.std(all_pulses):.2f} std")
+        print(f"  Pulses/frame:    {np.mean(all_pulses):.2f} mean, {np.std(all_pulses):.2f} std")
         print(f"  Pulses range:    {np.min(all_pulses)}-{np.max(all_pulses)}")
         print(f"  Pulse frequency: {pulse_freq:.4f} Hz (expected: 1.0 Hz)")
 
@@ -261,8 +258,8 @@ def main() -> int:
 
         if frame_gaps:
             print("\nFrame Gaps (time between expected end and actual start):")
-            print(f"  Mean gap:        {np.mean(frame_gaps)*1000:.3f} ms")
-            print(f"  Std gap:         {np.std(frame_gaps)*1000:.3f} ms")
+            print(f"  Mean gap:        {np.mean(frame_gaps) * 1000:.3f} ms")
+            print(f"  Std gap:         {np.std(frame_gaps) * 1000:.3f} ms")
             min_gap = np.min(frame_gaps) * 1000
             max_gap = np.max(frame_gaps) * 1000
             print(f"  Range:           {min_gap:.3f} to {max_gap:.3f} ms")
@@ -277,15 +274,19 @@ def main() -> int:
             print("\n" + "=" * 60)
             print("PER-FRAME DETAILS")
             print("=" * 60)
-            print(f"{'#':>4} {'Timestamp':>26} {'RPT':>7} {'Bearings':>8} "
-                  f"{'Pulses':>7} {'MeanGap':>8}")
+            print(
+                f"{'#':>4} {'Timestamp':>26} {'RPT':>7} {'Bearings':>8} "
+                f"{'Pulses':>7} {'MeanGap':>8}"
+            )
             print("-" * 65)
 
             for i, r in enumerate(results):
                 ts_str = str(r["timestamp"])[:26] if r["timestamp"] is not None else "N/A"
                 gap_str = f"{r['mean_gap']:.1f}" if not np.isnan(r["mean_gap"]) else "N/A"
-                print(f"{i:4d} {ts_str:>26} {r['rpt']:7.4f} {r['n_bearings']:8d} "
-                      f"{r['n_pulses']:7d} {gap_str:>8}")
+                print(
+                    f"{i:4d} {ts_str:>26} {r['rpt']:7.4f} {r['n_bearings']:8d} "
+                    f"{r['n_pulses']:7d} {gap_str:>8}"
+                )
 
         print()
         return 0

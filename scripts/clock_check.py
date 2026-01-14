@@ -71,16 +71,14 @@ def print_progress(current: int, total: int, width: int = 40, prefix: str = "Pro
     filled = int(width * pct)
     bar = "█" * filled + "░" * (width - filled)
     cnt_width = len(str(total))
-    msg = f"\r{prefix}: [{bar}] {current:>{cnt_width}}/{total} ({pct*100:.1f}%)"
+    msg = f"\r{prefix}: [{bar}] {current:>{cnt_width}}/{total} ({pct * 100:.1f}%)"
     print(msg, end="", flush=True)
     if current == total:
         print()  # Newline when complete
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Check clocking consistency across polar files"
-    )
+    parser = argparse.ArgumentParser(description="Check clocking consistency across polar files")
 
     add_time_range_arguments(parser)
     add_logging_arguments(parser)
@@ -104,7 +102,7 @@ def main() -> int:
         "--workers",
         type=int,
         default=None,
-        help=f"Number of worker threads (default: CPU count = {os.cpu_count()})"
+        help=f"Number of worker threads (default: CPU count = {os.cpu_count()})",
     )
     args = parser.parse_args()
     setup_logging(args)
@@ -189,13 +187,17 @@ def main() -> int:
 
         print("\nFrames:")
         print(f"  Total loaded:   {n_frames}")
-        print(f"  Bearings/frame: {np.mean(bearing_counts):.1f} mean, "
-              f"{np.min(bearing_counts)}-{np.max(bearing_counts)} range")
+        print(
+            f"  Bearings/frame: {np.mean(bearing_counts):.1f} mean, "
+            f"{np.min(bearing_counts)}-{np.max(bearing_counts)} range"
+        )
 
         print("\nPPS Pulses:")
         print(f"  Total pulses:   {sum(pulse_counts)}")
-        print(f"  Pulses/frame:   {np.mean(pulse_counts):.2f} mean, "
-              f"{np.min(pulse_counts)}-{np.max(pulse_counts)} range")
+        print(
+            f"  Pulses/frame:   {np.mean(pulse_counts):.2f} mean, "
+            f"{np.min(pulse_counts)}-{np.max(pulse_counts)} range"
+        )
 
         print("\nFrame Durations:")
         print(f"  Mean:  {np.mean(durations):.4f}s")
@@ -204,9 +206,9 @@ def main() -> int:
 
         if gaps:
             print("\nFrame-to-Frame Gaps:")
-            print(f"  Mean:  {np.mean(gaps)*1000:.3f} ms")
-            print(f"  Std:   {np.std(gaps)*1000:.3f} ms")
-            print(f"  Range: {np.min(gaps)*1000:.3f} to {np.max(gaps)*1000:.3f} ms")
+            print(f"  Mean:  {np.mean(gaps) * 1000:.3f} ms")
+            print(f"  Std:   {np.std(gaps) * 1000:.3f} ms")
+            print(f"  Range: {np.min(gaps) * 1000:.3f} to {np.max(gaps) * 1000:.3f} ms")
 
             # Count anomalous gaps
             large_gaps = [g for g in gaps if abs(g) > 0.1]  # > 100ms

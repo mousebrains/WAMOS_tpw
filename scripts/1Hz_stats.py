@@ -37,6 +37,7 @@ from wamos_tpw.plotting import parse_distance_bins  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
+
 def load_frame_bits(args: tuple) -> list | None:
     """
     Worker function to load a single frame and extract top nibble bits.
@@ -54,7 +55,7 @@ def load_frame_bits(args: tuple) -> list | None:
 
     try:
         frame = PolarFrame(fn)
-        a = np.bitwise_and(frame.raw[:, distance_bins], 0xf000)
+        a = np.bitwise_and(frame.raw[:, distance_bins], 0xF000)
         a = np.right_shift(a, 12).astype(np.uint8)
 
         qPre = np.bitwise_and(a[:, d18], 0b0001) == 0  # 1Hz is zero
@@ -78,7 +79,7 @@ def load_frame_bits(args: tuple) -> list | None:
 
         row = [rpt]
         row.extend(first)  # First bit in frame
-        row.extend(nPre)   # Number of transitions pre 1Hz transition
+        row.extend(nPre)  # Number of transitions pre 1Hz transition
         row.extend(nPost)  # Number of transitions post 1Hz transition
         row.extend((np.array(nPost) / (rpt - 1)).tolist())  # Normalized post counts
 
@@ -86,6 +87,7 @@ def load_frame_bits(args: tuple) -> list | None:
     except Exception as e:
         logger.warning(f"Failed to load {fn}: {e}")
         return None
+
 
 def print_progress(current: int, total: int, width: int = 40, prefix: str = "Progress") -> None:
     """
@@ -103,10 +105,11 @@ def print_progress(current: int, total: int, width: int = 40, prefix: str = "Pro
     filled = int(width * pct)
     bar = "█" * filled + "░" * (width - filled)
     cnt_width = len(str(total))
-    msg = f"\r{prefix}: [{bar}] {current:>{cnt_width}}/{total} ({pct*100:.1f}%)"
+    msg = f"\r{prefix}: [{bar}] {current:>{cnt_width}}/{total} ({pct * 100:.1f}%)"
     print(msg, end="", flush=True)
     if current == total:
         print()  # Newline when complete
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -120,13 +123,13 @@ def main():
         "--distance-bins",
         type=str,
         default="0:21",
-        help="Distance bins to analyze (e.g., '0,18,19,20' or '0:21')"
+        help="Distance bins to analyze (e.g., '0,18,19,20' or '0:21')",
     )
     parser.add_argument(
         "--workers",
         type=int,
         default=None,
-        help=f"Number of worker threads (default: CPU count = {os.cpu_count()})"
+        help=f"Number of worker threads (default: CPU count = {os.cpu_count()})",
     )
     args = parser.parse_args()
     setup_logging(args)
