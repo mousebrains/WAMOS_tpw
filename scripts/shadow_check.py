@@ -30,8 +30,10 @@ import os
 import resource
 import sys
 import time
+import tracemalloc
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from threading import Lock
 
 import numpy as np
 from scipy import stats
@@ -51,6 +53,23 @@ from wamos_tpw.theta import Theta  # noqa: E402 - Single-frame theta calculator
 
 logger = logging.getLogger(__name__)
 
+# Global timing accumulators (thread-safe)
+_timing_lock = Lock()
+_timing_stats = {
+    "polarfile": [],
+    "frame": [],
+    "theta": [],
+    "destreak": [],
+    "shadow": [],
+}
+_memory_stats = {
+    "polarfile": [],
+    "frame": [],
+    "theta": [],
+    "destreak": [],
+    "shadow": [],
+}
+
 
 def load_frame(
     fn: str,
@@ -61,17 +80,62 @@ def load_frame(
 
     Args:
         fn: Filename to load
-        detect_shadow: Whether to detect shadow regions
+        config: Configuration object
 
     Returns:
         Dictionary with frame info, or None on error.
     """
     try:
+        timings = {}
+        memories = {}
+
+        # PolarFile loading
+        tracemalloc.start()
+        t0 = time.perf_counter()
         pf = PolarFile(fn, config=config)
+        timings["polarfile"] = time.perf_counter() - t0
+        _, memories["polarfile"] = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+        # Frame extraction
+        tracemalloc.start()
+        t0 = time.perf_counter()
         frame = pf.frame()
+        timings["frame"] = time.perf_counter() - t0
+        _, memories["frame"] = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+        # Theta calculation
+        tracemalloc.start()
+        t0 = time.perf_counter()
         theta = Theta(frame)
+        timings["theta"] = time.perf_counter() - t0
+        _, memories["theta"] = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+        # Destreak processing
+        tracemalloc.start()
+        t0 = time.perf_counter()
         destreaked = Destreak(frame)
+        timings["destreak"] = time.perf_counter() - t0
+        _, memories["destreak"] = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+        # Shadow detection
+        tracemalloc.start()
+        t0 = time.perf_counter()
         shadow = Shadow(destreaked.intensity, theta)
+        timings["shadow"] = time.perf_counter() - t0
+        _, memories["shadow"] = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+        # Accumulate timing stats (thread-safe)
+        with _timing_lock:
+            for step, t in timings.items():
+                _timing_stats[step].append(t)
+            for step, m in memories.items():
+                _memory_stats[step].append(m)
+
         return {
             "filename": fn,
             "shadow": shadow,
@@ -255,6 +319,28 @@ def main() -> int:
         print(
             f"Successfully loaded {n_loaded} of {n_files} frames in {elapsed:.2f}s ({fps:.1f} frames/sec)"
         )
+
+        # Print per-step timing and memory statistics
+        if n_loaded > 0:
+            print("\n=== Per-Step Processing Statistics ===")
+            total_time = sum(sum(times) for times in _timing_stats.values())
+            total_mem = sum(sum(mems) for mems in _memory_stats.values())
+
+            print(
+                f"{'Step':<12} {'Time (ms)':<12} {'Time %':<10} {'Memory (KB)':<14} {'Mem %':<10}"
+            )
+            print("-" * 58)
+            for step in ["polarfile", "frame", "theta", "destreak", "shadow"]:
+                times = _timing_stats[step]
+                mems = _memory_stats[step]
+                if times:
+                    avg_time_ms = np.mean(times) * 1000
+                    time_pct = (sum(times) / total_time * 100) if total_time > 0 else 0
+                    avg_mem_kb = np.mean(mems) / 1024
+                    mem_pct = (sum(mems) / total_mem * 100) if total_mem > 0 else 0
+                    print(
+                        f"{step:<12} {avg_time_ms:<12.3f} {time_pct:<10.1f} {avg_mem_kb:<14.1f} {mem_pct:<10.1f}"
+                    )
 
         if n_loaded == 0:
             logger.error("No valid frames loaded")
