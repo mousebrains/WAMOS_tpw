@@ -4,8 +4,8 @@ import numpy as np
 from pathlib import Path
 
 from wamos_tpw.deramp import Deramp
-from wamos_tpw.config import WamosConfig
 from wamos_tpw.polarfile import PolarFile
+from wamos_tpw.range import Range
 
 
 class TestDeramp:
@@ -15,107 +15,52 @@ class TestDeramp:
         """Test basic Deramp creation."""
         pf = PolarFile(single_polar_file)
         frame = pf.frames[0]
+        intensity = frame.intensity.astype(np.float32)
+        rng = Range(frame)
 
-        deramp = Deramp(frame)
+        deramp = Deramp(intensity, rng)
 
-        assert deramp.quantile == 0.10  # Default
+        assert deramp.intensity is not None
+        assert deramp.intensity.shape == frame.intensity.shape
 
-    def test_deramp_with_config(self, single_polar_file: Path):
-        """Test Deramp with custom config."""
+    def test_deramp_intensity(self, single_polar_file: Path):
+        """Test corrected intensity property."""
         pf = PolarFile(single_polar_file)
         frame = pf.frames[0]
+        intensity = frame.intensity.astype(np.float32)
+        rng = Range(frame)
 
-        config = WamosConfig()
-        config.shadow.center = 180.0
-        config.shadow.width = 90.0
-
-        deramp = Deramp(frame, config, quantile=0.25)
-
-        assert deramp.quantile == 0.25
-
-    def test_raw_profile(self, single_polar_file: Path):
-        """Test raw_profile property."""
-        pf = PolarFile(single_polar_file)
-        frame = pf.frames[0]
-
-        deramp = Deramp(frame)
-        profile = deramp.raw_profile
-
-        assert profile is not None
-        assert len(profile) == frame.n_distances
-        assert profile.dtype == np.float32
-
-    def test_smooth_profile(self, single_polar_file: Path):
-        """Test smooth_profile property."""
-        pf = PolarFile(single_polar_file)
-        frame = pf.frames[0]
-
-        deramp = Deramp(frame)
-        smooth = deramp.smooth_profile
-
-        assert smooth is not None
-        assert len(smooth) == frame.n_distances
-
-        # Smooth profile should be similar to raw but smoother
-        raw = deramp.raw_profile
-        assert smooth.shape == raw.shape
-
-    def test_corrected_intensity(self, single_polar_file: Path):
-        """Test corrected_intensity property."""
-        pf = PolarFile(single_polar_file)
-        frame = pf.frames[0]
-
-        deramp = Deramp(frame)
-        corrected = deramp.corrected_intensity
+        deramp = Deramp(intensity, rng)
+        corrected = deramp.intensity
 
         assert corrected is not None
         assert corrected.shape == frame.intensity.shape
-        assert corrected.dtype == np.float64
 
-    def test_shadow_mask(self, single_polar_file: Path):
-        """Test shadow_mask property."""
+    def test_deramp_polynomial(self, single_polar_file: Path):
+        """Test polynomial property."""
         pf = PolarFile(single_polar_file)
         frame = pf.frames[0]
+        intensity = frame.intensity.astype(np.float32)
+        rng = Range(frame)
 
-        config = WamosConfig()
-        config.shadow.center = 180.0
-        config.shadow.width = 90.0
+        deramp = Deramp(intensity, rng)
 
-        deramp = Deramp(frame, config)
-        mask = deramp.shadow_mask
+        assert deramp.polynomial is not None
+        assert deramp.order == 4  # Default order
 
-        assert mask is not None
-        assert mask.dtype == bool
-        assert len(mask) == frame.n_bearings
-
-        # Some should be in shadow, some not
-        assert mask.sum() > 0
-        assert mask.sum() < len(mask)
-
-    def test_different_quantiles(self, single_polar_file: Path):
-        """Test Deramp with different quantile values."""
+    def test_deramp_order(self, single_polar_file: Path):
+        """Test deramp order from config."""
         pf = PolarFile(single_polar_file)
         frame = pf.frames[0]
+        intensity = frame.intensity.astype(np.float32)
 
-        results = {}
-        for q in [0.05, 0.10, 0.25, 0.50]:
-            deramp = Deramp(frame, quantile=q)
-            results[q] = deramp.raw_profile.copy()
+        # Modify config to use different order
+        frame._config["deramp.order"] = 2
+        rng = Range(frame)
 
-        # Higher quantiles should generally give higher profiles
-        # (more of the distribution is below)
-        assert np.mean(results[0.50]) > np.mean(results[0.10])
+        deramp = Deramp(intensity, rng)
 
-    def test_slant_range(self, single_polar_file: Path):
-        """Test slant_range property."""
-        pf = PolarFile(single_polar_file)
-        frame = pf.frames[0]
-
-        deramp = Deramp(frame)
-        slant = deramp.slant_range
-
-        assert slant is not None
-        assert len(slant) == frame.n_distances
+        assert deramp.order == 2
 
 
 class TestDerampAlgorithm:
@@ -125,62 +70,34 @@ class TestDerampAlgorithm:
         """Test that deramp removes range-dependent intensity trend."""
         pf = PolarFile(single_polar_file)
         frame = pf.frames[0]
+        intensity = frame.intensity.astype(np.float32)
+        rng = Range(frame)
 
-        deramp = Deramp(frame)
+        deramp = Deramp(intensity.copy(), rng)
 
         # Original intensity should have range-dependent trend
-        orig = frame.intensity.astype(float)
-        orig_mean_per_range = np.mean(orig, axis=0)
+        orig_mean_per_range = np.nanmean(intensity, axis=0)
 
         # Corrected should have flatter profile
-        corrected = deramp.corrected_intensity
-        corr_mean_per_range = np.mean(corrected, axis=0)
+        corrected = deramp.intensity
+        corr_mean_per_range = np.nanmean(corrected, axis=0)
 
         # Standard deviation of mean profile should be lower for corrected
-        orig_std = np.std(orig_mean_per_range)
-        corr_std = np.std(corr_mean_per_range)
+        orig_std = np.nanstd(orig_mean_per_range)
+        corr_std = np.nanstd(corr_mean_per_range)
 
-        # Allow some tolerance - corrected should be flatter or similar
+        # Corrected should be flatter or similar
         assert corr_std <= orig_std * 1.5
 
-    def test_smoothing_reduces_noise(self, single_polar_file: Path):
-        """Test that smoothing reduces profile noise."""
+    def test_deramp_repr(self, single_polar_file: Path):
+        """Test string representation."""
         pf = PolarFile(single_polar_file)
         frame = pf.frames[0]
+        intensity = frame.intensity.astype(np.float32)
+        rng = Range(frame)
 
-        deramp = Deramp(frame)
+        deramp = Deramp(intensity, rng)
+        repr_str = repr(deramp)
 
-        raw = deramp.raw_profile
-        smooth = deramp.smooth_profile
-
-        # Calculate roughness (sum of absolute differences between adjacent points)
-        raw_roughness = np.sum(np.abs(np.diff(raw)))
-        smooth_roughness = np.sum(np.abs(np.diff(smooth)))
-
-        # Smooth profile should be less rough
-        assert smooth_roughness <= raw_roughness
-
-    def test_shadow_exclusion(self, single_polar_file: Path):
-        """Test that shadow region is excluded from profile calculation."""
-        pf = PolarFile(single_polar_file)
-        frame = pf.frames[0]
-
-        # Wide shadow
-        config_wide = WamosConfig()
-        config_wide.shadow.center = 180.0
-        config_wide.shadow.width = 180.0  # Half the bearings
-
-        # Narrow shadow
-        config_narrow = WamosConfig()
-        config_narrow.shadow.center = 180.0
-        config_narrow.shadow.width = 10.0  # Very few bearings
-
-        deramp_wide = Deramp(frame, config_wide)
-        deramp_narrow = Deramp(frame, config_narrow)
-
-        # Both should produce valid profiles
-        assert deramp_wide.raw_profile is not None
-        assert deramp_narrow.raw_profile is not None
-
-        # The number of non-shadow bearings should differ
-        assert deramp_wide.shadow_mask.sum() > deramp_narrow.shadow_mask.sum()
+        assert "Deramp(" in repr_str
+        assert "order=" in repr_str

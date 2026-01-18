@@ -45,10 +45,10 @@ class Deramp:
     _DERAMP_ORDER_DEFAULT = 4  # Fit to 4th order polynomial
 
     def __init__(
-            self,
-            intensity: np.ndarray,
-            rng: Range,
-            ) -> None:
+        self,
+        intensity: np.ndarray,
+        rng: Range,
+    ) -> None:
         """
         Deramp a single frame.
 
@@ -203,8 +203,13 @@ class DerampDiag:
         fit_values = self._deramp.polynomial(x)
 
         ax2.plot(slant, pre_mean, label="Pre-deramp mean", alpha=0.7)
-        ax2.plot(slant, fit_values, label=f"Polynomial fit (order={self._deramp.order})",
-                 linestyle="--", linewidth=2)
+        ax2.plot(
+            slant,
+            fit_values,
+            label=f"Polynomial fit (order={self._deramp.order})",
+            linestyle="--",
+            linewidth=2,
+        )
         ax2.plot(slant, post_mean, label="Post-deramp mean", alpha=0.7)
         ax2.set_xlabel("Slant range (m)")
         ax2.set_ylabel("Mean intensity")
@@ -271,11 +276,14 @@ def run(args) -> None:
     logging.info("Frame: %s", frame.timestamp)
     logging.info("Shape: %s", frame.shape)
     logging.info("Polynomial order: %d", deramp.order)
-    logging.info("Original intensity: [%.1f, %.1f]",
-                 np.nanmin(original_intensity if original_intensity is not None else masked_intensity),
-                 np.nanmax(original_intensity if original_intensity is not None else masked_intensity))
-    logging.info("Deramped intensity: [%.1f, %.1f]",
-                 np.nanmin(deramp.intensity), np.nanmax(deramp.intensity))
+    logging.info(
+        "Original intensity: [%.1f, %.1f]",
+        np.nanmin(original_intensity if original_intensity is not None else masked_intensity),
+        np.nanmax(original_intensity if original_intensity is not None else masked_intensity),
+    )
+    logging.info(
+        "Deramped intensity: [%.1f, %.1f]", np.nanmin(deramp.intensity), np.nanmax(deramp.intensity)
+    )
 
     if args.plot:
         diag = DerampDiag(original_intensity, rng, deramp)

@@ -165,7 +165,9 @@ def main() -> int:
 
         n_loaded = len(results)
         fps = n_loaded / elapsed if elapsed > 0 else 0
-        print(f"\nSuccessfully loaded {n_loaded} of {n_files} frames in {elapsed:.2f}s ({fps:.1f} frames/sec)")
+        print(
+            f"\nSuccessfully loaded {n_loaded} of {n_files} frames in {elapsed:.2f}s ({fps:.1f} frames/sec)"
+        )
 
         if n_loaded == 0:
             logger.error("No valid frames loaded")

@@ -146,9 +146,11 @@ class Config:
         name = self._filename or "None"
         return f"{type(self).__name__}({name}):\n{pprint.pformat(self._config)}"
 
+
 def _add_arguments(parser) -> None:
     """Add command arguments to parser."""
     parser.add_argument("config", nargs="?", type=str, default=None, help="YAML configuration file")
+
 
 def add_subparser(subparsers) -> None:
     """Register the 'config' subcommand."""
@@ -171,6 +173,7 @@ def run(args) -> None:
     # Normal display mode
     logging.info("Configuration: %s", config)
 
+
 def main() -> None:
     """Standalone CLI entry point."""
     from argparse import ArgumentParser
@@ -182,6 +185,7 @@ def main() -> None:
     args = parser.parse_args()
     setup_logging(args)
     run(args)
+
 
 # Backward compatibility alias
 WamosConfig = Config

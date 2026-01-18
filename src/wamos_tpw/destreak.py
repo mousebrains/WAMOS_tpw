@@ -49,7 +49,7 @@ class Destreak:
 
     # Constants
     _MIN_STREAK_LENGTH = 10  # Minimum contiguous bins to confirm streak
-    _MAX_GAP_LENGTH = 4    # Maximum gap length to merge streak segments
+    _MAX_GAP_LENGTH = 4  # Maximum gap length to merge streak segments
     _THRESHOLD_SIGMA = 3.0  # Threshold in terms of one-sided std deviations
 
     def __init__(self, frame: Frame, save_mask: bool = False) -> None:
@@ -69,17 +69,17 @@ class Destreak:
 
         # Get parameters from config (with class defaults as fallback)
         min_streak_length = config.get("destreak.min_streak_length", self._MIN_STREAK_LENGTH)
-        max_gap_length    = config.get("destreak.max_gap_length", self._MAX_GAP_LENGTH)
-        threshold_sigma   = config.get("destreak.threshold_sigma", self._THRESHOLD_SIGMA)
+        max_gap_length = config.get("destreak.max_gap_length", self._MAX_GAP_LENGTH)
+        threshold_sigma = config.get("destreak.threshold_sigma", self._THRESHOLD_SIGMA)
 
-        # 2D convolution kernel for streak detection 
-        kernel    = np.array([[-1, -1, -1], [2, 2, 2], [-1, -1, -1]], dtype=np.float32) 
-        kAdjacent = np.array([[ 1,  1,  1], [0, 0, 0], [ 1,  1,  1]], dtype=np.float32) 
+        # 2D convolution kernel for streak detection
+        kernel = np.array([[-1, -1, -1], [2, 2, 2], [-1, -1, -1]], dtype=np.float32)
+        kAdjacent = np.array([[1, 1, 1], [0, 0, 0], [1, 1, 1]], dtype=np.float32)
         kAdjacent = kAdjacent / kAdjacent.sum()  # Normalize
 
-        intensity = frame.intensity.astype(np.float32) # Signed for calculation
-        a = convolve2d(intensity, kernel,    mode='same', boundary='wrap')
-        b = convolve2d(intensity, kAdjacent, mode='same', boundary='wrap')
+        intensity = frame.intensity.astype(np.float32)  # Signed for calculation
+        a = convolve2d(intensity, kernel, mode="same", boundary="wrap")
+        b = convolve2d(intensity, kAdjacent, mode="same", boundary="wrap")
 
         sigma = np.std(a)
         thres_center = threshold_sigma * sigma
@@ -89,7 +89,7 @@ class Destreak:
         # We expect large negative on either side for adjacent streaks
 
         qAdjacent = a <= -thres_adjacent
-        qCenter   = a >= thres_center
+        qCenter = a >= thres_center
         q = qCenter & np.roll(qAdjacent, +1, axis=0) & np.roll(qAdjacent, -1, axis=0)
 
         qAny = np.any(q, axis=1)
@@ -110,15 +110,15 @@ class Destreak:
         cnt = np.bincount(labels.ravel())
         RL = cnt[labels]
         qShort = (RL <= max_gap_length) & ~qStreaks
-        qStreaks |= qShort # Flip short false gaps to true
+        qStreaks |= qShort  # Flip short false gaps to true
 
         # Find streaks
         [labels, _] = ndimage.label(qStreaks, structure=kernelHorizontal)
         cnt = np.bincount(labels.ravel())
         RL = cnt[labels]
-        qStreaks &= RL >= min_streak_length # Keep only long enough streaks
+        qStreaks &= RL >= min_streak_length  # Keep only long enough streaks
 
-        q[qAny] = qStreaks # Update original mask
+        q[qAny] = qStreaks  # Update original mask
 
         # Store statistics
         self._n_streak_pixels = int(q.sum())
@@ -244,12 +244,20 @@ class DestreakDiag:
         # Streak mask
         streak_mask = self._destreak.streak_mask
         if streak_mask is not None:
-            im1 = axes[1].imshow(streak_mask, aspect="auto", cmap="Reds")
-            axes[1].set_title(f"Streak Mask ({self._destreak.n_streak_pixels} pixels, "
-                             f"{self._destreak.streak_fraction:.2%})")
+            axes[1].imshow(streak_mask, aspect="auto", cmap="Reds")
+            axes[1].set_title(
+                f"Streak Mask ({self._destreak.n_streak_pixels} pixels, "
+                f"{self._destreak.streak_fraction:.2%})"
+            )
         else:
-            axes[1].text(0.5, 0.5, "Mask not saved\n(use save_mask=True)",
-                        ha="center", va="center", transform=axes[1].transAxes)
+            axes[1].text(
+                0.5,
+                0.5,
+                "Mask not saved\n(use save_mask=True)",
+                ha="center",
+                va="center",
+                transform=axes[1].transAxes,
+            )
             axes[1].set_title("Streak Mask (not saved)")
         axes[1].set_xlabel("Distance bin")
         axes[1].set_ylabel("Bearing bin")
@@ -261,14 +269,18 @@ class DestreakDiag:
         axes[2].set_ylabel("Bearing bin")
         plt.colorbar(im2, ax=axes[2], label="Intensity")
 
-        fig.suptitle(f"Destreak: {self._frame.timestamp} | "
-                    f"Streaks: {self._destreak.n_streak_pixels} ({self._destreak.streak_fraction:.2%})")
+        fig.suptitle(
+            f"Destreak: {self._frame.timestamp} | "
+            f"Streaks: {self._destreak.n_streak_pixels} ({self._destreak.streak_fraction:.2%})"
+        )
         plt.tight_layout()
         plt.show()
 
     def __repr__(self) -> str:
-        return (f"DestreakDiag(frame={self._frame.timestamp}, "
-                f"streaks={self._destreak.n_streak_pixels} ({self._destreak.streak_fraction:.2%}))")
+        return (
+            f"DestreakDiag(frame={self._frame.timestamp}, "
+            f"streaks={self._destreak.n_streak_pixels} ({self._destreak.streak_fraction:.2%}))"
+        )
 
 
 def destreak_frame(frame: Frame) -> np.ndarray:
@@ -316,16 +328,16 @@ def run(args) -> None:
         logging.info("File: %s", filepath)
         logging.info("Frame: %s", frame.timestamp)
         logging.info("Shape: %s", frame.shape)
-        logging.info("Streaks: %d pixels (%.2f%%)",
-                    ds.n_streak_pixels, ds.streak_fraction * 100)
-        logging.info("Original intensity: [%.1f, %.1f]",
-                    frame.intensity.min(), frame.intensity.max())
-        logging.info("Destreaked intensity: [%.1f, %.1f]",
-                    ds.intensity.min(), ds.intensity.max())
+        logging.info("Streaks: %d pixels (%.2f%%)", ds.n_streak_pixels, ds.streak_fraction * 100)
+        logging.info(
+            "Original intensity: [%.1f, %.1f]", frame.intensity.min(), frame.intensity.max()
+        )
+        logging.info("Destreaked intensity: [%.1f, %.1f]", ds.intensity.min(), ds.intensity.max())
 
         if args.plot:
             diag = DestreakDiag(frame, ds)
             diag.plot()
+
 
 def main() -> None:
     """Standalone CLI entry point."""

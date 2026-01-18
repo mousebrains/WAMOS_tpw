@@ -1706,14 +1706,18 @@ def main() -> int:
         elapsed = time.perf_counter() - t0
         n_loaded = len(frames)
         fps = n_loaded / elapsed if elapsed > 0 else 0
-        print(f"Successfully loaded {n_loaded} of {n_files} frames in {elapsed:.2f}s ({fps:.1f} frames/sec)")
+        print(
+            f"Successfully loaded {n_loaded} of {n_files} frames in {elapsed:.2f}s ({fps:.1f} frames/sec)"
+        )
 
         if n_loaded == 0:
             logger.error("No valid frames loaded")
             return 1
 
         # Sort by timestamp
-        frames.sort(key=lambda f: f.timestamp if f.timestamp is not None else np.datetime64(0, "ns"))
+        frames.sort(
+            key=lambda f: f.timestamp if f.timestamp is not None else np.datetime64(0, "ns")
+        )
 
         # Create multi-frame Theta for bearing calculation with shadow refinement
         print("Calculating bearings with shadow refinement...")

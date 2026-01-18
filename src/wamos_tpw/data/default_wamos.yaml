@@ -1,5 +1,22 @@
 # WAMOS parameters keyed by the tower name, lower case, in the polar file
 
+# Global settings (used when tower-specific config is not available)
+
+# Radar settings
+radar:
+  height: null  # Radar height above water (meters), null = use frame metadata
+
+# Shadow region settings (used by bearing.Theta for shadow exclusion)
+shadow:
+  start: 130    # Start angle of shadow region (degrees)
+  end: 230      # End angle of shadow region (degrees)
+
+# Offset settings for heading calculations
+offsets:
+  bow_to_radar: 0.0     # Angle from bow to radar (degrees)
+  heading_delay: 0.0    # Heading delay correction (degrees)
+  compass: 0.0          # Compass offset (degrees)
+
 # Theta refinement settings (used by bearing.Theta for multi-frame processing)
 theta_refinement:
   enabled: true  # Enable shadow-based theta refinement

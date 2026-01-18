@@ -125,8 +125,8 @@ class Range:
             return self._slant_range + self._range_bias
 
         # Calculate ground range: sqrt(slant² - height²)
-        height_sq = self._radar_height ** 2
-        slant_sq = self._slant_range ** 2
+        height_sq = self._radar_height**2
+        slant_sq = self._slant_range**2
 
         # Where slant > height, compute ground range; otherwise 0
         ground = np.where(slant_sq > height_sq, np.sqrt(slant_sq - height_sq), 0.0)
@@ -252,12 +252,8 @@ def run(args) -> None:
     logging.info("Range bias (from config): %s m", rng.range_bias)
     logging.info("Range resolution: %.4f m/bin", rng.range_resolution)
     logging.info("Number of bins: %s", len(rng))
-    logging.info(
-        "Slant range: [%.2f, %.2f] m", rng.slant_range.min(), rng.slant_range.max()
-    )
-    logging.info(
-        "Ground range: [%.2f, %.2f] m", rng.ground_range.min(), rng.ground_range.max()
-    )
+    logging.info("Slant range: [%.2f, %.2f] m", rng.slant_range.min(), rng.slant_range.max())
+    logging.info("Ground range: [%.2f, %.2f] m", rng.ground_range.min(), rng.ground_range.max())
 
     # Show some sample values
     n_samples = min(5, len(rng))
@@ -265,7 +261,9 @@ def run(args) -> None:
     for i in range(n_samples):
         logging.info(
             "  Bin %s: slant=%.2f m, ground=%.2f m",
-            i, rng.slant_range_at_bin(i), rng.ground_range_at_bin(i)
+            i,
+            rng.slant_range_at_bin(i),
+            rng.ground_range_at_bin(i),
         )
 
 

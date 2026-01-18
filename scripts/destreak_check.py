@@ -345,7 +345,9 @@ def main() -> int:
                 fig.colorbar(pcm2, ax=axes[2], label="Intensity")
 
                 suptitle = f"Frame {i + 1}/{n_loaded}: {timestamp}"
-                suptitle += f"\nShape: {n_bearings} bearings x {n_ranges} ranges, {streak_pct:.2f}% streaks"
+                suptitle += (
+                    f"\nShape: {n_bearings} bearings x {n_ranges} ranges, {streak_pct:.2f}% streaks"
+                )
                 fig.suptitle(suptitle)
 
                 fig.tight_layout()

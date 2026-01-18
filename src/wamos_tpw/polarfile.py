@@ -57,10 +57,9 @@ class PolarFile:
 
     _LENGTH_FIELD_SIZE = 10  # Bytes for ASCII length field
 
-    def __init__(self, 
-                 filepath: str | Path, 
-                 metadata_only: bool = False, 
-                 config: Config | None = None) -> None:
+    def __init__(
+        self, filepath: str | Path, metadata_only: bool = False, config: Config | None = None
+    ) -> None:
         """
         Initialize and parse a WAMOS polar file.
 
@@ -89,7 +88,9 @@ class PolarFile:
         if suffix == ".zst" or name.endswith(".pol.zst"):
             with open(self._filepath, "rb") as f:
                 dctx = zstd.ZstdDecompressor()
-                data = dctx.decompress(f.read())
+                # Use stream_reader for files without content size in header
+                with dctx.stream_reader(f) as reader:
+                    data = reader.read()
             fp = io.BytesIO(data)
             self._parse_from_fp(fp)
         else:
@@ -316,7 +317,10 @@ class PolarFile:
             if len(buffer) != length:
                 logging.warning(
                     "%s: Frame %s: expected %s bytes, got %s",
-                    self._filepath, idx, length, len(buffer)
+                    self._filepath,
+                    idx,
+                    length,
+                    len(buffer),
                 )
                 break
 
@@ -333,7 +337,9 @@ class PolarFile:
                     usable = n_radials * n_samples
                     logging.warning(
                         "%s: Frame %s: truncating %s values",
-                        self._filepath, idx, data.size - usable
+                        self._filepath,
+                        idx,
+                        data.size - usable,
                     )
                     data = data[:usable].reshape((n_radials, n_samples))
 
@@ -557,8 +563,7 @@ def run(args) -> None:
                 logging.info("  Timestamp: %s", frame.timestamp)
                 logging.info("  Shape: %s", frame.shape)
                 logging.info(
-                    "  Intensity range: [%s, %s]",
-                    frame.intensity.min(), frame.intensity.max()
+                    "  Intensity range: [%s, %s]", frame.intensity.min(), frame.intensity.max()
                 )
                 logging.info("  Bit12 (PPS) any: %s", frame.bit12.any())
                 logging.info("  Bit13 (bearing) any: %s", frame.bit13.any())

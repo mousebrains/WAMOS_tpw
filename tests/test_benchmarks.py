@@ -185,36 +185,33 @@ class TestProcessingBenchmarks:
 
     def test_deramp_processing(self, benchmark, single_polar_file):
         """Benchmark deramp processing on real data."""
-        from wamos_tpw.config import WamosConfig
         from wamos_tpw.deramp import Deramp
         from wamos_tpw.polarfile import PolarFile
+        from wamos_tpw.range import Range
 
         pf = PolarFile(single_polar_file)
         frame = pf.frames[0]
-        config = WamosConfig()
-        bearing = np.linspace(0, 359, frame.n_bearings)
+        intensity = frame.intensity.astype(np.float32)
+        rng = Range(frame)
 
         def process():
-            deramp = Deramp(frame, config, bearing=bearing)
-            return deramp.corrected_intensity
+            deramp = Deramp(intensity.copy(), rng)
+            return deramp.intensity
 
         result = benchmark(process)
         assert result.shape == frame.intensity.shape
 
     def test_destreak_processing(self, benchmark, single_polar_file):
         """Benchmark destreak processing on real data."""
-        from wamos_tpw.config import WamosConfig
         from wamos_tpw.destreak import Destreak
         from wamos_tpw.polarfile import PolarFile
 
         pf = PolarFile(single_polar_file)
         frame = pf.frames[0]
-        frame.deramped_intensity = frame.intensity.astype(np.float64)
-        config = WamosConfig()
 
         def process():
-            ds = Destreak(None, frame, None, config)
-            return ds.corrected_intensity
+            ds = Destreak(frame)
+            return ds.intensity
 
         result = benchmark(process)
         assert result.shape == frame.intensity.shape

@@ -89,7 +89,9 @@ def load_frame_bits(args: tuple) -> tuple:
         result = {}
         for bit, dist_bin in signals:
             if dist_bin >= frame.n_distances:
-                logger.warning(f"Distance bin {dist_bin} >= n_distances {frame.n_distances} in {fn}")
+                logger.warning(
+                    f"Distance bin {dist_bin} >= n_distances {frame.n_distances} in {fn}"
+                )
                 continue
 
             if bit == 12:

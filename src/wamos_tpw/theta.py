@@ -231,10 +231,7 @@ class Theta:
         return len(self._theta)
 
     def __repr__(self) -> str:
-        return (
-            f"radials={len(self)}, "
-            f"range=[{self._theta.min():.1f}, {self._theta.max():.1f}])"
-        )
+        return f"radials={len(self)}, range=[{self._theta.min():.1f}, {self._theta.max():.1f}])"
 
 
 class ThetaDiag:
@@ -300,9 +297,15 @@ class ThetaDiag:
             f"Radials: {len(theta_values)}\n"
             f"Range: [{theta_values.min():.1f}, {theta_values.max():.1f}]°"
         )
-        ax.text(0.02, 0.98, stats_text, transform=ax.transAxes,
-                verticalalignment='top', fontsize=9,
-                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        ax.text(
+            0.02,
+            0.98,
+            stats_text,
+            transform=ax.transAxes,
+            verticalalignment="top",
+            fontsize=9,
+            bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
+        )
 
         plt.tight_layout()
         plt.show()

@@ -54,8 +54,8 @@ class TestTheta:
         frames = pf.frames[:1]
 
         config = WamosConfig()
-        config.shadow.center = 180.0
-        config.shadow.width = 90.0
+        config["shadow.center"] = 180.0
+        config["shadow.width"] = 90.0
 
         theta = Theta(frames, config, refine=False)
 
@@ -85,8 +85,8 @@ class TestTheta:
         frames = pf.frames[:1]
 
         config = WamosConfig()
-        config.shadow.center = 180.0
-        config.shadow.width = 90.0  # 135-225 degrees
+        config["shadow.start"] = 135.0
+        config["shadow.end"] = 225.0
 
         theta = Theta(frames, config, refine=False)
         shadow_mask = theta.in_shadow(0)
@@ -203,8 +203,8 @@ class TestBearing:
         frames = pf.frames[:1]
 
         config = WamosConfig()
-        config.offsets.bow_to_radar = 10.0  # 10 degree offset
-        config.offsets.heading_delay = 5.0
+        config["offsets.bow_to_radar"] = 10.0  # 10 degree offset
+        config["offsets.heading_delay"] = 5.0
 
         theta = Theta(frames, config, refine=False)
         bearing = Bearing(theta)

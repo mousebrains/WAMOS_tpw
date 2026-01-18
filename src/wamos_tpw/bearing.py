@@ -24,6 +24,7 @@ from wamos_tpw.plotting import (
     get_radar_height,
 )
 
+
 class Theta:
     """
     Calculate radar beam angle (theta) relative to ship for contiguous frames.

@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
 """
-Check that the theta (beam angle) word makes sense frame-to-frame.
+Check theta (beam angle) and shadow region statistics across multiple frames.
 
 This script loads all polar files for a given time range and calculates
-statistics on the 12-bit theta value extracted from timing bits (bins 18-20).
-Uses run-length encoding to evenly distribute angles within each theta bin.
+statistics on shadow region detection, including variance in shadow indices
+and theta angles.
 
 Features:
-  - Extracts 12-bit theta from nibbles at bins 18, 19, 20
-  - Uses run-length encoding to find constant-theta segments
-  - Evenly distributes angles within each segment
-  - Checks frame-to-frame angle continuity
-  - Multi-frame context for better edge accuracy
+  - Detects shadow regions using intensity-based edge detection
+  - Calculates variance statistics for shadow start/end indices and thetas
+  - Generates 4-panel scatter plots showing shadow parameter relationships
+  - Reports mean, std, variance, and range for all shadow parameters
 
 Usage:
     python theta_check.py 20220405 20220406 /path/to/POLAR
-    python theta_check.py 20220405 20220406 /path/to/POLAR --tolerance 2.0
-    python theta_check.py 20220405 20220406 /path/to/POLAR --per-frame
+    python theta_check.py 20220405 20220406 /path/to/POLAR --plot
+    python theta_check.py 20220405 20220406 /path/to/POLAR --plot -o shadow_stats.png
 
 For best performance with free-threaded Python 3.13+:
     python3.13t theta_check.py ... --workers 8
@@ -55,7 +54,7 @@ logger = logging.getLogger(__name__)
 def load_frame(
     fn: str,
     config: Config,
-    ) -> dict | None:
+) -> dict | None:
     """
     Worker function to load a single frame and extract theta information.
 
@@ -240,10 +239,7 @@ def main() -> int:
         config = Config(args.config)
         t0 = time.perf_counter()
         with ThreadPoolExecutor(max_workers=args.workers) as executor:
-            futures = {
-                executor.submit(load_frame, fn, config): fn
-                for fn in files
-            }
+            futures = {executor.submit(load_frame, fn, config): fn for fn in files}
 
             for i, future in enumerate(as_completed(futures)):
                 if args.progress_flag:
@@ -255,13 +251,174 @@ def main() -> int:
 
         n_loaded = len(results)
         fps = n_loaded / elapsed if elapsed > 0 else 0
-        print(f"Successfully loaded {n_loaded} of {n_files} frames in {elapsed:.2f}s ({fps:.1f} frames/sec)")
+        print(
+            f"Successfully loaded {n_loaded} of {n_files} frames in {elapsed:.2f}s ({fps:.1f} frames/sec)"
+        )
 
         if n_loaded == 0:
             logger.error("No valid frames loaded")
             return 1
 
-        results.sort( key=lambda x: x["filename"] )
+        results.sort(key=lambda x: x["filename"])
+
+        # Extract shadow data for statistics
+        shadow_indices_start = []
+        shadow_indices_end = []
+        shadow_thetas_start = []
+        shadow_thetas_end = []
+        frame_numbers = []
+
+        for i, r in enumerate(results):
+            shadow = r["shadow"]
+            if len(shadow.indices) > 0:
+                # Take first shadow region (typically the main aft shadow)
+                shadow_indices_start.append(shadow.indices[0, 0])
+                shadow_indices_end.append(shadow.indices[0, 1])
+                shadow_thetas_start.append(shadow.thetas[0, 0])
+                shadow_thetas_end.append(shadow.thetas[0, 1])
+                frame_numbers.append(i)
+
+        shadow_indices_start = np.array(shadow_indices_start)
+        shadow_indices_end = np.array(shadow_indices_end)
+        shadow_thetas_start = np.array(shadow_thetas_start)
+        shadow_thetas_end = np.array(shadow_thetas_end)
+        frame_numbers = np.array(frame_numbers)
+
+        # Calculate statistics
+        n_with_shadow = len(shadow_indices_start)
+        print(f"\nFrames with shadow detected: {n_with_shadow} of {n_loaded}")
+
+        if n_with_shadow > 0:
+            # Index statistics
+            idx_start_mean = shadow_indices_start.mean()
+            idx_start_std = shadow_indices_start.std()
+            idx_start_var = shadow_indices_start.var()
+            idx_end_mean = shadow_indices_end.mean()
+            idx_end_std = shadow_indices_end.std()
+            idx_end_var = shadow_indices_end.var()
+            idx_width = shadow_indices_end - shadow_indices_start
+            idx_width_mean = idx_width.mean()
+            idx_width_std = idx_width.std()
+
+            # Theta statistics
+            theta_start_mean = shadow_thetas_start.mean()
+            theta_start_std = shadow_thetas_start.std()
+            theta_start_var = shadow_thetas_start.var()
+            theta_end_mean = shadow_thetas_end.mean()
+            theta_end_std = shadow_thetas_end.std()
+            theta_end_var = shadow_thetas_end.var()
+            theta_width = shadow_thetas_end - shadow_thetas_start
+            theta_width_mean = theta_width.mean()
+            theta_width_std = theta_width.std()
+
+            print("\n=== Shadow Index Statistics ===")
+            print(
+                f"Start index:  mean={idx_start_mean:.1f}, std={idx_start_std:.2f}, var={idx_start_var:.2f}"
+            )
+            print(
+                f"End index:    mean={idx_end_mean:.1f}, std={idx_end_std:.2f}, var={idx_end_var:.2f}"
+            )
+            print(f"Width:        mean={idx_width_mean:.1f}, std={idx_width_std:.2f}")
+            print(
+                f"Range:        start=[{shadow_indices_start.min()}, {shadow_indices_start.max()}], "
+                f"end=[{shadow_indices_end.min()}, {shadow_indices_end.max()}]"
+            )
+
+            print("\n=== Shadow Theta Statistics ===")
+            print(
+                f"Start theta:  mean={theta_start_mean:.2f}°, std={theta_start_std:.3f}°, var={theta_start_var:.4f}"
+            )
+            print(
+                f"End theta:    mean={theta_end_mean:.2f}°, std={theta_end_std:.3f}°, var={theta_end_var:.4f}"
+            )
+            print(f"Width:        mean={theta_width_mean:.2f}°, std={theta_width_std:.3f}°")
+            print(
+                f"Range:        start=[{shadow_thetas_start.min():.2f}°, {shadow_thetas_start.max():.2f}°], "
+                f"end=[{shadow_thetas_end.min():.2f}°, {shadow_thetas_end.max():.2f}°]"
+            )
+
+        # Generate scatter plot if requested
+        if args.plot and n_with_shadow > 0:
+            import matplotlib.pyplot as plt
+
+            try:
+                figsize = tuple(float(x) for x in args.figsize.split(","))
+            except ValueError:
+                figsize = (14, 8)
+
+            fig, axes = plt.subplots(2, 2, figsize=figsize)
+
+            # Plot 1: Shadow indices over time (frame number)
+            ax = axes[0, 0]
+            ax.scatter(frame_numbers, shadow_indices_start, s=3, alpha=0.5, label="Start", c="blue")
+            ax.scatter(frame_numbers, shadow_indices_end, s=3, alpha=0.5, label="End", c="red")
+            ax.set_xlabel("Frame number")
+            ax.set_ylabel("Shadow index")
+            ax.set_title("Shadow Indices vs Frame")
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+
+            # Plot 2: Shadow thetas over time (frame number)
+            ax = axes[0, 1]
+            ax.scatter(frame_numbers, shadow_thetas_start, s=3, alpha=0.5, label="Start", c="blue")
+            ax.scatter(frame_numbers, shadow_thetas_end, s=3, alpha=0.5, label="End", c="red")
+            ax.set_xlabel("Frame number")
+            ax.set_ylabel("Shadow theta (°)")
+            ax.set_title("Shadow Thetas vs Frame")
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+
+            # Plot 3: Start index vs Start theta (scatter)
+            ax = axes[1, 0]
+            sc = ax.scatter(
+                shadow_thetas_start,
+                shadow_indices_start,
+                s=5,
+                alpha=0.5,
+                c=frame_numbers,
+                cmap="viridis",
+            )
+            ax.set_xlabel("Start theta (°)")
+            ax.set_ylabel("Start index")
+            ax.set_title("Start Index vs Start Theta")
+            ax.grid(True, alpha=0.3)
+            plt.colorbar(sc, ax=ax, label="Frame")
+
+            # Plot 4: End index vs End theta (scatter)
+            ax = axes[1, 1]
+            sc = ax.scatter(
+                shadow_thetas_end,
+                shadow_indices_end,
+                s=5,
+                alpha=0.5,
+                c=frame_numbers,
+                cmap="viridis",
+            )
+            ax.set_xlabel("End theta (°)")
+            ax.set_ylabel("End index")
+            ax.set_title("End Index vs End Theta")
+            ax.grid(True, alpha=0.3)
+            plt.colorbar(sc, ax=ax, label="Frame")
+
+            fig.suptitle(
+                f"Shadow Statistics: {args.stime} to {args.etime} ({n_with_shadow} frames)"
+            )
+            plt.tight_layout()
+
+            if args.output:
+                plt.savefig(args.output, dpi=args.dpi, bbox_inches="tight")
+                print(f"\nSaved plot: {args.output}")
+            else:
+                plt.show()
+
+        # Report peak memory usage
+        peak_mem = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if sys.platform == "darwin":
+            peak_mem_mb = peak_mem / (1024 * 1024)
+        else:
+            peak_mem_mb = peak_mem / 1024
+        print(f"\nPeak memory: {peak_mem_mb:.1f} MB")
+
         return 0
 
     except (FileNotFoundError, ValueError, OSError):

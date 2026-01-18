@@ -54,10 +54,10 @@ class Dewind:
     """
 
     def __init__(
-            self,
-            intensity: np.ndarray,
-            theta: Theta,
-            ) -> None:
+        self,
+        intensity: np.ndarray,
+        theta: Theta,
+    ) -> None:
         """
         Dewind a single frame.
 
@@ -126,8 +126,10 @@ class Dewind:
         return _sin_model(theta_values, self._amplitude, self._phi)
 
     def __repr__(self) -> str:
-        return (f"Dewind(amplitude={self._amplitude:.2f}, "
-                f"phi={self.phi_degrees:.1f}°, shape={self._intensity.shape})")
+        return (
+            f"Dewind(amplitude={self._amplitude:.2f}, "
+            f"phi={self.phi_degrees:.1f}°, shape={self._intensity.shape})"
+        )
 
 
 class DewindDiag:
@@ -228,7 +230,9 @@ class DewindDiag:
         ax0.set_ylabel("Theta (degrees)")
 
         # Dewind-corrected intensity (sorted by theta)
-        im1 = ax1.imshow(corrected_sorted, aspect="auto", cmap=cmap, vmin=vmin, vmax=vmax, extent=extent)
+        im1 = ax1.imshow(
+            corrected_sorted, aspect="auto", cmap=cmap, vmin=vmin, vmax=vmax, extent=extent
+        )
         ax1.set_title(f"Dewind (A={self._dewind.amplitude:.1f}, φ={self._dewind.phi_degrees:.1f}°)")
         ax1.set_xlabel("Distance bin")
 
@@ -243,9 +247,13 @@ class DewindDiag:
         fit_values = self._dewind.fit(theta_sorted)
 
         ax2.plot(theta_sorted, pre_mean, label="Pre-dewind mean", alpha=0.7)
-        ax2.plot(theta_sorted, fit_values,
-                 label=f"Sinusoidal fit (A={self._dewind.amplitude:.1f}, φ={self._dewind.phi_degrees:.1f}°)",
-                 linestyle="--", linewidth=2)
+        ax2.plot(
+            theta_sorted,
+            fit_values,
+            label=f"Sinusoidal fit (A={self._dewind.amplitude:.1f}, φ={self._dewind.phi_degrees:.1f}°)",
+            linestyle="--",
+            linewidth=2,
+        )
         ax2.plot(theta_sorted, post_mean, label="Post-dewind mean", alpha=0.7)
         ax2.set_xlabel("Theta (degrees)")
         ax2.set_ylabel("Mean intensity")
@@ -258,8 +266,10 @@ class DewindDiag:
         plt.show()
 
     def __repr__(self) -> str:
-        return (f"DewindDiag(amplitude={self._dewind.amplitude:.2f}, "
-                f"phi={self._dewind.phi_degrees:.1f}°, shape={self._intensity.shape})")
+        return (
+            f"DewindDiag(amplitude={self._dewind.amplitude:.2f}, "
+            f"phi={self._dewind.phi_degrees:.1f}°, shape={self._intensity.shape})"
+        )
 
 
 def _add_arguments(parser) -> None:
@@ -315,10 +325,16 @@ def run(args) -> None:
     logging.info("Frame: %s", frame.timestamp)
     logging.info("Shape: %s", frame.shape)
     logging.info("Fit: amplitude=%.2f, phi=%.1f°", dewind.amplitude, dewind.phi_degrees)
-    logging.info("Pre-dewind intensity: [%.1f, %.1f]",
-                 np.nanmin(deramped_intensity), np.nanmax(deramped_intensity))
-    logging.info("Post-dewind intensity: [%.1f, %.1f]",
-                 np.nanmin(dewind.intensity), np.nanmax(dewind.intensity))
+    logging.info(
+        "Pre-dewind intensity: [%.1f, %.1f]",
+        np.nanmin(deramped_intensity),
+        np.nanmax(deramped_intensity),
+    )
+    logging.info(
+        "Post-dewind intensity: [%.1f, %.1f]",
+        np.nanmin(dewind.intensity),
+        np.nanmax(dewind.intensity),
+    )
 
     if args.plot:
         diag = DewindDiag(deramped_intensity, theta, dewind)

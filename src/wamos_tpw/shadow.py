@@ -59,7 +59,7 @@ class Shadow:
         self,
         intensity: np.ndarray,
         theta: Theta,
-        ) -> None:
+    ) -> None:
         """
         Initialize Shadow detector.
 
@@ -86,19 +86,19 @@ class Shadow:
 
         range_fraction = config.get("range_fraction", self._RANGE_FRACTION_DEFAULT)
         range_slice = int(
-                np.clip(np.ceil(range_fraction * intensity.shape[1]), 1, intensity.shape[1])
-                )
+            np.clip(np.ceil(range_fraction * intensity.shape[1]), 1, intensity.shape[1])
+        )
 
         intensity = intensity[:, :range_slice]
         kernel = np.ones((5, 5))  # LHS is +1
-        kernel[2, :] = 0          # Ignore center
-        kernel[3:, :] *= -1       # RHS is -1
+        kernel[2, :] = 0  # Ignore center
+        kernel[3:, :] *= -1  # RHS is -1
 
         regions = []
 
         for region in indices:
-            a = intensity[region[0]:(region[1] + 1), :]
-            b = convolve2d(a, kernel, mode='same', boundary='wrap')
+            a = intensity[region[0] : (region[1] + 1), :]
+            b = convolve2d(a, kernel, mode="same", boundary="wrap")
             bSum = b.sum(axis=1)
             iRHS = np.argmax(bSum)  # high to low
             iLHS = np.argmin(bSum)  # low to high
@@ -112,7 +112,7 @@ class Shadow:
         masked_intensity = intensity.astype(np.float32, copy=True)
         mask = np.zeros(masked_intensity.shape[0], dtype=bool)
         for region in self._indices:
-            mask[region[0]:region[1] + 1] = True
+            mask[region[0] : region[1] + 1] = True
         masked_intensity[mask, :] = np.nan
         return masked_intensity
 
@@ -174,8 +174,7 @@ class ShadowDiag:
         # Cache statistics
         n_distances = intensity.shape[1]
         self._n_shadow_pixels = sum(
-            (region[1] - region[0] + 1) * n_distances
-            for region in shadow.indices
+            (region[1] - region[0] + 1) * n_distances for region in shadow.indices
         )
         total_pixels = intensity.size
         self._shadow_fraction = self._n_shadow_pixels / total_pixels if total_pixels > 0 else 0.0
@@ -232,8 +231,7 @@ class ShadowDiag:
             vmax = np.nanmax(original)
 
         fig, (ax0, ax1, cax) = plt.subplots(
-            1, 3, figsize=figsize,
-            gridspec_kw={"width_ratios": [1, 1, 0.05]}
+            1, 3, figsize=figsize, gridspec_kw={"width_ratios": [1, 1, 0.05]}
         )
 
         # Original intensity
@@ -245,7 +243,9 @@ class ShadowDiag:
         # Shadow-masked intensity
         im1 = ax1.imshow(masked, aspect="auto", cmap=cmap, vmin=vmin, vmax=vmax)
         theta_str = ", ".join(f"θ=[{t[0]:.1f}°, {t[1]:.1f}°]" for t in self._shadow.thetas)
-        ax1.set_title(f"Shadow Masked ({self.n_shadow_pixels} pixels, {self.shadow_fraction:.2%}) {theta_str}")
+        ax1.set_title(
+            f"Shadow Masked ({self.n_shadow_pixels} pixels, {self.shadow_fraction:.2%}) {theta_str}"
+        )
         ax1.set_xlabel("Distance bin")
         ax1.sharex(ax0)
         ax1.sharey(ax0)
@@ -253,14 +253,18 @@ class ShadowDiag:
         # Single colorbar in dedicated axes
         fig.colorbar(im1, cax=cax, label="Intensity")
 
-        fig.suptitle(f"Shadow Detection | Regions: {len(self._shadow.indices)} | "
-                    f"Masked: {self.shadow_fraction:.2%}")
+        fig.suptitle(
+            f"Shadow Detection | Regions: {len(self._shadow.indices)} | "
+            f"Masked: {self.shadow_fraction:.2%}"
+        )
         plt.tight_layout()
         plt.show()
 
     def __repr__(self) -> str:
-        return (f"ShadowDiag(regions={len(self._shadow.indices)}, "
-                f"shadow_pixels={self.n_shadow_pixels} ({self.shadow_fraction:.2%}))")
+        return (
+            f"ShadowDiag(regions={len(self._shadow.indices)}, "
+            f"shadow_pixels={self.n_shadow_pixels} ({self.shadow_fraction:.2%}))"
+        )
 
 
 def _add_arguments(parser) -> None:
@@ -312,8 +316,9 @@ def run(args) -> None:
     logging.info("Shadow regions: %d", len(shadow.indices))
     logging.info("Shadow pixels: %d (%.2f%%)", diag.n_shadow_pixels, diag.shadow_fraction * 100)
     for i, (t, idx) in enumerate(zip(shadow.thetas, shadow.indices)):
-        logging.info("  Region %d: theta=[%.2f, %.2f], indices=[%d, %d]",
-                    i, t[0], t[1], idx[0], idx[1])
+        logging.info(
+            "  Region %d: theta=[%.2f, %.2f], indices=[%d, %d]", i, t[0], t[1], idx[0], idx[1]
+        )
 
     if args.plot:
         diag.plot()

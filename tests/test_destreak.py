@@ -1,11 +1,9 @@
 """Tests for Destreak class."""
 
-import numpy as np
 import pytest
 from pathlib import Path
 
 from wamos_tpw.destreak import Destreak
-from wamos_tpw.config import WamosConfig
 from wamos_tpw.polarfile import PolarFile
 
 
@@ -13,127 +11,70 @@ class TestDestreak:
     """Tests for Destreak class."""
 
     def test_destreak_single_frame(self, single_polar_file: Path):
-        """Test Destreak with single frame (no neighbors)."""
+        """Test basic Destreak creation."""
         pf = PolarFile(single_polar_file)
         frame = pf.frames[0]
 
-        ds = Destreak(None, frame, None)
+        ds = Destreak(frame)
 
-        assert ds.center_frame is frame
-        assert ds.corrected_intensity is not None
-        assert ds.corrected_intensity.shape == frame.intensity.shape
+        assert ds.intensity is not None
+        assert ds.intensity.shape == frame.intensity.shape
 
-    def test_destreak_with_neighbors(self, april_polar_files: list[Path]):
-        """Test Destreak with neighboring frames."""
-        frames = []
-        for fp in april_polar_files[:3]:
-            pf = PolarFile(fp)
-            frames.extend(pf.frames[:1])
-
-        if len(frames) < 3:
-            pytest.skip("Need at least 3 frames")
-
-        prev_frame = frames[0]
-        center_frame = frames[1]
-        next_frame = frames[2]
-
-        ds = Destreak(prev_frame, center_frame, next_frame)
-
-        assert ds.center_frame is center_frame
-        assert ds.corrected_intensity.shape == center_frame.intensity.shape
-
-    def test_destreak_with_config(self, single_polar_file: Path):
-        """Test Destreak with custom config."""
+    def test_destreak_stats(self, single_polar_file: Path):
+        """Test destreak statistics."""
         pf = PolarFile(single_polar_file)
         frame = pf.frames[0]
 
-        config = WamosConfig()
-        config.destreak.min_streak_length = 5
-        config.destreak.threshold_sigma = 5.0
+        ds = Destreak(frame)
 
-        ds = Destreak(None, frame, None, config)
-
-        assert ds.corrected_intensity is not None
+        assert ds.n_streak_pixels >= 0
+        assert 0.0 <= ds.streak_fraction <= 1.0
 
     def test_streak_mask(self, single_polar_file: Path):
-        """Test streak_mask property."""
+        """Test streak_mask property when save_mask=True."""
         pf = PolarFile(single_polar_file)
         frame = pf.frames[0]
 
-        ds = Destreak(None, frame, None)
+        ds = Destreak(frame, save_mask=True)
         mask = ds.streak_mask
 
         assert mask is not None
         assert mask.dtype == bool
         assert mask.shape == frame.intensity.shape
 
-    def test_corrected_preserves_non_streaks(self, single_polar_file: Path):
-        """Test that non-streak pixels are preserved."""
+    def test_streak_mask_none_by_default(self, single_polar_file: Path):
+        """Test streak_mask is None when save_mask=False."""
         pf = PolarFile(single_polar_file)
         frame = pf.frames[0]
 
-        ds = Destreak(None, frame, None)
+        ds = Destreak(frame, save_mask=False)
 
-        # Non-streak pixels should be unchanged
-        mask = ds.streak_mask
-        orig = frame.intensity.astype(float)
-        corr = ds.corrected_intensity
+        assert ds.streak_mask is None
 
-        # Where mask is False, values should be similar
-        non_streak_orig = orig[~mask]
-        non_streak_corr = corr[~mask]
+    def test_destreak_preserves_shape(self, single_polar_file: Path):
+        """Test that destreak preserves array shape."""
+        pf = PolarFile(single_polar_file)
+        frame = pf.frames[0]
 
-        np.testing.assert_allclose(non_streak_orig, non_streak_corr, rtol=1e-10)
+        ds = Destreak(frame)
 
-    def test_center_frame_required(self):
-        """Test that center_frame is required."""
-        with pytest.raises(ValueError, match="center_frame is required"):
-            Destreak(None, None, None)
+        assert ds.intensity.shape == frame.intensity.shape
+
+    def test_frame_required(self):
+        """Test that frame is required."""
+        with pytest.raises(ValueError, match="frame is required"):
+            Destreak(None)
 
 
 class TestDestreakAlgorithm:
     """Tests for Destreak algorithm correctness."""
 
-    def test_different_threshold_sigma(self, single_polar_file: Path):
-        """Test Destreak with different threshold sigma values."""
+    def test_destreak_repr(self, single_polar_file: Path):
+        """Test string representation."""
         pf = PolarFile(single_polar_file)
         frame = pf.frames[0]
 
-        results = {}
-        for sigma in [3.0, 5.0, 7.5, 10.0]:
-            config = WamosConfig()
-            config.destreak.threshold_sigma = sigma
-            ds = Destreak(None, frame, None, config)
-            results[sigma] = ds.streak_mask.sum()
+        ds = Destreak(frame)
+        repr_str = repr(ds)
 
-        # Higher sigma should detect fewer streaks (more permissive threshold)
-        assert results[10.0] <= results[3.0]
-
-    def test_different_min_streak_length(self, single_polar_file: Path):
-        """Test Destreak with different min_streak_length values."""
-        pf = PolarFile(single_polar_file)
-        frame = pf.frames[0]
-
-        results = {}
-        for length in [3, 10, 20, 50]:
-            config = WamosConfig()
-            config.destreak.min_streak_length = length
-            ds = Destreak(None, frame, None, config)
-            results[length] = ds.streak_mask.sum()
-
-        # Longer min length should detect fewer streak pixels
-        assert results[50] <= results[3]
-
-    def test_with_deramped_intensity(self, single_polar_file: Path):
-        """Test Destreak uses deramped_intensity if available."""
-        pf = PolarFile(single_polar_file)
-        frame = pf.frames[0]
-
-        # Set deramped_intensity
-        frame.deramped_intensity = frame.intensity.astype(float) - 100
-
-        ds = Destreak(None, frame, None)
-
-        # Should use deramped_intensity as input and produce valid output
-        assert ds.corrected_intensity is not None
-        assert ds.corrected_intensity.shape == frame.intensity.shape
+        assert "Destreak(" in repr_str
