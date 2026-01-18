@@ -17,7 +17,9 @@ Dec-2025, Pat Welch, pat@mousebrains.com
 
 import argparse
 import logging
+import resource
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -30,12 +32,31 @@ src_path = Path(__file__).parent.parent / "src"
 if src_path.exists():
     sys.path.insert(0, str(src_path))
 
-from wamos_tpw import Filenames, PolarFrame  # noqa: E402
-from wamos_tpw.args import add_time_range_arguments  # noqa: E402
-from wamos_tpw.filenames import extract_file_timestamp  # noqa: E402
+from wamos_tpw import Filenames, PolarFile  # noqa: E402
+from wamos_tpw.filenames import add_common_arguments, _extract_file_timestamp  # noqa: E402
 from wamos_tpw.logging_config import add_logging_arguments, setup_logging  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+
+def extract_file_timestamp(filepath: str) -> datetime | None:
+    """
+    Extract timestamp from a polar filename and return as datetime.
+
+    Args:
+        filepath: Path to polar file
+
+    Returns:
+        datetime object or None if parsing fails
+    """
+    ts = _extract_file_timestamp(filepath)
+    if ts is None:
+        return None
+    # Convert np.datetime64 to datetime with UTC timezone
+    dt = ts.astype("datetime64[us]").astype("M8[us]").item()
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 @dataclass
@@ -57,7 +78,7 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
-    add_time_range_arguments(parser)
+    add_common_arguments(parser)
     add_logging_arguments(parser)
 
     parser.add_argument(
@@ -192,27 +213,28 @@ def read_gps_from_file(fn: str) -> GPSPoint | None:
         GPSPoint or None if data unavailable
     """
     try:
-        pf = PolarFrame(fn)
-        meta = pf.metadata
+        frame = PolarFile(fn).frame()
+        meta = frame.metadata
 
-        # Get timestamp
-        frame_dt = meta.get("frame_datetime")
-        if frame_dt is None:
+        # Get timestamp - convert from np.datetime64 to datetime
+        ts = frame.timestamp
+        if ts is None:
             return None
 
-        # Ensure timezone-aware UTC
+        # Convert np.datetime64 to datetime with UTC timezone
+        frame_dt = ts.astype("datetime64[us]").astype(datetime)
         if frame_dt.tzinfo is None:
             frame_dt = frame_dt.replace(tzinfo=timezone.utc)
 
         # Get GPS data
-        lat = meta.get("frame_lat") or meta.get("lat")
-        lon = meta.get("frame_lon") or meta.get("lon")
+        lat = meta.latitude
+        lon = meta.longitude
 
         if lat is None or lon is None:
             return None
 
-        speed = meta.get("frame_ships") or meta.get("SHIPS")
-        heading = meta.get("frame_shipr") or meta.get("SHIPR")
+        speed = meta.ship_speed
+        heading = meta.heading
 
         return GPSPoint(
             time=frame_dt,
@@ -255,8 +277,8 @@ def process_block(
                 # Get ship name from first file with valid metadata
                 if ship_name is None:
                     try:
-                        pf = PolarFrame(futures[future])
-                        ship_name = pf.metadata.get("TOWER")
+                        frame = PolarFile(futures[future]).frame()
+                        ship_name = frame.metadata.attrs.get("TOWER")
                     except Exception:
                         pass
 
@@ -539,6 +561,7 @@ def main() -> int:
     # Show initial progress bar
     print_progress(0, n_files, 0, 0)
 
+    t0 = time.perf_counter()
     with NetCDFWriter(args.output, title=args.title, ship_name=args.ship) as writer:
         for block_idx in range(n_blocks):
             # Get files for this block
@@ -566,9 +589,12 @@ def main() -> int:
 
             # Update progress
             print_progress(files_processed, n_files, points_extracted, points_written)
+    elapsed = time.perf_counter() - t0
 
     # Final newline after progress bar
     print()
+    fps = files_processed / elapsed if elapsed > 0 else 0
+    print(f"Processed {files_processed} files in {elapsed:.2f}s ({fps:.1f} files/sec)")
 
     if points_written == 0:
         print("ERROR: No GPS data extracted", flush=True)
@@ -580,6 +606,15 @@ def main() -> int:
         flush=True,
     )
     print(f"Output: {args.output}", flush=True)
+
+    # Report peak memory usage
+    peak_mem = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    # On macOS, ru_maxrss is in bytes; on Linux it's in KB
+    if sys.platform == "darwin":
+        peak_mem_mb = peak_mem / (1024 * 1024)
+    else:
+        peak_mem_mb = peak_mem / 1024
+    print(f"Peak memory: {peak_mem_mb:.1f} MB")
 
     return 0
 

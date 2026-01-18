@@ -18,7 +18,9 @@ Dec-2025, Pat Welch, pat@mousebrains.com
 import argparse
 import logging
 import os
+import resource
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -29,27 +31,97 @@ src_path = Path(__file__).parent.parent / "src"
 if src_path.exists():
     sys.path.insert(0, str(src_path))
 
-from wamos_tpw import Filenames, PolarFrame  # noqa: E402
-from wamos_tpw.args import add_time_range_arguments  # noqa: E402
+from wamos_tpw import Filenames, PolarFile  # noqa: E402
+from wamos_tpw.filenames import add_common_arguments  # noqa: E402
 from wamos_tpw.logging_config import add_logging_arguments, setup_logging  # noqa: E402
-from wamos_tpw.pps import WamosPPS  # noqa: E402
+from wamos_tpw.timestamp import TimingSignalExtractor  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 
-def load_frame_bits(fn: str) -> WamosPPS | None:
+class FramePPSInfo:
+    """Container for PPS timing information extracted from a frame."""
+
+    def __init__(self, frame):
+        """
+        Extract PPS timing information from a frame.
+
+        Args:
+            frame: Frame object containing radar data
+        """
+        self._frame = frame
+        self._timestamp = frame.timestamp
+
+        # Extract PPS signal using TimingSignalExtractor
+        extractor = TimingSignalExtractor(frame.raw)
+
+        # Get 1Hz signal (bit 12, bin 18)
+        pps_signal = extractor.extract_timing_bit(12, 18)
+        if pps_signal is not None:
+            self._pps_indices = np.where(pps_signal)[0]
+        else:
+            self._pps_indices = np.array([], dtype=int)
+
+        # Calculate timing for each radial based on repeat time
+        rpt = frame.metadata.repeat_time or 1.0
+        n_bearings = frame.n_bearings
+
+        # Distribute time evenly across radials, starting from frame timestamp
+        radial_times = np.linspace(0, rpt, n_bearings, endpoint=False)
+        # Convert to nanosecond offsets and add to timestamp
+        base_time_ns = self._timestamp.astype("datetime64[ns]").astype(np.int64)
+        time_offsets_ns = (radial_times * 1e9).astype(np.int64)
+        self._time = (base_time_ns + time_offsets_ns).astype("datetime64[ns]")
+
+        self._n_bearings = n_bearings
+        self._rpt = rpt
+
+    @property
+    def timestamp(self) -> np.datetime64:
+        """Return the frame timestamp."""
+        return self._timestamp
+
+    @property
+    def pps_indices(self) -> np.ndarray:
+        """Return indices where PPS signal is high."""
+        return self._pps_indices
+
+    @property
+    def time(self) -> np.ndarray:
+        """Return estimated times for each radial."""
+        return self._time
+
+    @property
+    def n_bearings(self) -> int:
+        """Return number of bearings in frame."""
+        return self._n_bearings
+
+    def update(self, lhs: "FramePPSInfo | None", rhs: "FramePPSInfo | None") -> None:
+        """
+        Update timing estimates using neighboring frames.
+
+        This is a placeholder for more sophisticated timing refinement
+        that could use PPS pulse positions across frames.
+        """
+        # For now, this is a no-op. More sophisticated timing could:
+        # - Use PPS transitions to anchor exact second boundaries
+        # - Interpolate timing between frames
+        pass
+
+
+def load_frame_bits(fn: str) -> FramePPSInfo | None:
     """
-    Worker function to load a single frame and create WamosPPS object.
+    Worker function to load a single frame and extract PPS info.
 
     Args:
         fn: Filename to load
 
     Returns:
-        WamosPPS object or None on error.
+        FramePPSInfo object or None on error.
     """
     try:
-        frame = PolarFrame(fn)
-        return WamosPPS(frame)
+        frame = PolarFile(fn).frame()
+        return FramePPSInfo(frame)
     except Exception as e:
         logger.warning("Failed to load %s: %s", fn, e)
         return None
@@ -80,7 +152,7 @@ def print_progress(current: int, total: int, width: int = 40, prefix: str = "Pro
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check clocking consistency across polar files")
 
-    add_time_range_arguments(parser)
+    add_common_arguments(parser)
     add_logging_arguments(parser)
 
     grp = parser.add_mutually_exclusive_group(required=False)
@@ -115,8 +187,9 @@ def main() -> int:
         logger.info("Loading %d files with %d workers", n_files, args.workers or os.cpu_count())
 
         # Load frames in parallel using ThreadPoolExecutor
-        pps_dict: dict[np.datetime64, WamosPPS] = {}
+        pps_dict: dict[np.datetime64, FramePPSInfo] = {}
 
+        t0 = time.perf_counter()
         with ThreadPoolExecutor(max_workers=args.workers) as executor:
             futures = {executor.submit(load_frame_bits, fn): fn for fn in files}
 
@@ -126,9 +199,11 @@ def main() -> int:
                 result = future.result()
                 if result is not None:
                     pps_dict[result.timestamp] = result
+        elapsed = time.perf_counter() - t0
 
         n_loaded = len(pps_dict)
-        print(f"Successfully loaded {n_loaded} frames")
+        fps = n_loaded / elapsed if elapsed > 0 else 0
+        print(f"Successfully loaded {n_loaded} frames in {elapsed:.2f}s ({fps:.1f} frames/sec)")
 
         if n_loaded == 0:
             logger.error("No valid frames loaded")
@@ -215,7 +290,14 @@ def main() -> int:
             if large_gaps:
                 print(f"  Large gaps (>100ms): {len(large_gaps)}")
 
-        print()
+        # Report peak memory usage
+        peak_mem = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # On macOS, ru_maxrss is in bytes; on Linux it's in KB
+        if sys.platform == "darwin":
+            peak_mem_mb = peak_mem / (1024 * 1024)
+        else:
+            peak_mem_mb = peak_mem / 1024
+        print(f"\nPeak memory: {peak_mem_mb:.1f} MB")
 
     except (FileNotFoundError, ValueError, OSError):
         logger.exception("Error loading files")

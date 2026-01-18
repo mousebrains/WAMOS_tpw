@@ -13,7 +13,7 @@ from typing import Tuple
 import numpy as np
 
 from wamos_tpw.bearing import Theta, Bearing
-from wamos_tpw.config import WamosConfig
+from wamos_tpw.config import Config
 from wamos_tpw.frame import Frame
 from wamos_tpw.timestamp import Timestamp
 
@@ -33,7 +33,7 @@ class Combine:
     - Origin = ship position at start of first frame
 
     Example:
-        >>> config = WamosConfig('radar_config.yaml')
+        >>> config = Config('radar_config.yaml')
         >>> combine = Combine(frames, config)
         >>> x_earth, y_earth = combine.xy_earth_all()  # (n_total_pixels,), (n_total_pixels,)
         >>> lat, lon = combine.latlon_all()  # (n_total_pixels,), (n_total_pixels,)
@@ -46,7 +46,7 @@ class Combine:
     def __init__(
         self,
         frames: list[Frame],
-        config: WamosConfig | None = None,
+        config: Config | None = None,
         radar_height: float | None = None,
         theta: Theta | None = None,
         cache_coordinates: bool = True,
@@ -56,7 +56,7 @@ class Combine:
 
         Args:
             frames: List of contiguous Frame objects (sorted by time)
-            config: WamosConfig object (uses defaults if None)
+            config: Config object (uses defaults if None)
             radar_height: Radar height above water (m). If None, uses config or metadata.
             theta: Existing Theta object to reuse (avoids duplicate computation).
                    If None, creates a new one.
@@ -67,7 +67,7 @@ class Combine:
             raise ValueError("At least one frame is required")
 
         self._frames = frames
-        self._config = config or WamosConfig()
+        self._config = config or Config()
 
         # Create or reuse Theta/Bearing for coordinate calculation
         if theta is not None:
@@ -95,7 +95,7 @@ class Combine:
         return self._frames
 
     @property
-    def config(self) -> WamosConfig:
+    def config(self) -> Config:
         """Return the configuration."""
         return self._config
 
@@ -1113,7 +1113,7 @@ def run(args) -> None:
     from wamos_tpw.processed import ProcessedFrames
 
     # Load config
-    config = WamosConfig(args.config) if args.config else WamosConfig()
+    config = Config(args.config) if args.config else Config()
 
     # Handle --dry-run: show what would be processed without doing it
     if hasattr(args, "dry_run") and args.dry_run:

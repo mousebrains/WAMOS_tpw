@@ -30,7 +30,9 @@ Dec-2025, Pat Welch, pat@mousebrains.com
 import argparse
 import logging
 import os
+import resource
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -41,67 +43,30 @@ src_path = Path(__file__).parent.parent / "src"
 if src_path.exists():
     sys.path.insert(0, str(src_path))
 
-from wamos_tpw import Filenames, PolarFrame  # noqa: E402
-from wamos_tpw.args import add_time_range_arguments  # noqa: E402
-from wamos_tpw.coordinates import CoordinateTransformer  # noqa: E402
-from wamos_tpw.destreak import DestreakFrame  # noqa: E402
+from wamos_tpw import Filenames, PolarFile  # noqa: E402
+from wamos_tpw.bearing import Theta  # noqa: E402
+from wamos_tpw.combine import Combine  # noqa: E402
+from wamos_tpw.config import Config  # noqa: E402
+from wamos_tpw.destreak import Destreak  # noqa: E402
+from wamos_tpw.filenames import add_common_arguments  # noqa: E402
 from wamos_tpw.logging_config import add_logging_arguments, setup_logging  # noqa: E402
-from wamos_tpw.pps import WamosPPS  # noqa: E402
-from wamos_tpw.shadow import ShadowConfig  # noqa: E402
-from wamos_tpw.theta_calc import WamosTheta  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 
-def load_frame_data(
-    fn: str,
-    destreak_config: dict | None = None,
-    shadow_config: ShadowConfig | None = None,
-) -> dict | None:
+def load_frame(fn: str) -> tuple | None:
     """
-    Load a single frame with all required data.
+    Load a single frame.
 
     Args:
         fn: Filename to load
-        destreak_config: Optional destreak configuration
-        shadow_config: Optional shadow detection configuration
 
     Returns:
-        Dictionary with frame data, or None on error
+        Tuple of (frame, filename) or None on error
     """
     try:
-        polar_frame = PolarFrame(fn)
-        frame = DestreakFrame(polar_frame, destreak_config)
-
-        wpps = WamosPPS(frame)
-        wtheta = WamosTheta(frame, shadow_config=shadow_config)
-
-        metadata = frame.metadata
-
-        return {
-            "filename": fn,
-            "timestamp": wpps.timestamp,
-            "n_bearings": frame.n_bearings,
-            "n_ranges": frame.n_ranges,
-            "intensity": frame.intensity,
-            "wtheta": wtheta,
-            "wpps": wpps,
-            # Range data from frame
-            "slant_ranges": frame.slant_ranges,
-            "horizontal_ranges": frame.horizontal_ranges,
-            "range_resolution": frame.range_resolution,
-            "range_offset": frame.range_offset,
-            "radar_height": frame.radar_height,
-            # Navigation metadata
-            "frame_lat": metadata.get("frame_lat", metadata.get("lat", 0.0)),
-            "frame_lon": metadata.get("frame_lon", metadata.get("lon", 0.0)),
-            "frame_gyroc": metadata.get("frame_gyroc", metadata.get("GYROC", 0.0)),
-            "frame_ships": metadata.get("frame_ships", metadata.get("SHIPS", 0.0)),
-            "frame_winds": metadata.get("frame_winds", metadata.get("WINDS", 0.0)),
-            "frame_windr": metadata.get("frame_windr", metadata.get("WINDR", 0.0)),
-            "frame_rpt": metadata.get("frame_rpt", metadata.get("RPT", 1.5)),
-            "frame_windh": metadata.get("frame_windh", metadata.get("WINDH", 0.0)),
-        }
+        frame = PolarFile(fn).frame()
+        return frame, fn
     except Exception:
         logger.exception("Failed to load %s", fn)
         return None
@@ -183,9 +148,500 @@ def smooth_array(arr: np.ndarray, window: int) -> np.ndarray:
     return result
 
 
+def compute_wind_relative_intensity_new(
+    frames: list,
+    theta: Theta,
+    destreaked_intensities: list[np.ndarray],
+    range_bins: list[tuple[int, int]],
+    angle_bin_size: float = 2.0,
+    range_bin_size: float = 50.0,
+    smooth_window: int = 10,
+) -> dict:
+    """
+    Compute average intensity vs wind-relative angle and vs range.
+
+    Uses the new API with Frame objects and multi-frame Theta.
+
+    Args:
+        frames: List of Frame objects
+        theta: Multi-frame Theta object for bearing calculation
+        destreaked_intensities: List of destreaked intensity arrays
+        range_bins: List of (start_bin, end_bin) tuples for angle plot
+        angle_bin_size: Size of angle bins in degrees
+        range_bin_size: Size of range bins in meters for range plot
+        smooth_window: Window size for smoothing median (in range bins)
+
+    Returns:
+        Dictionary with angle and range data.
+    """
+    # Create angle bins from -180 to 180
+    angle_edges = np.arange(-180, 180 + angle_bin_size, angle_bin_size)
+    angle_centers = (angle_edges[:-1] + angle_edges[1:]) / 2
+    n_angle_bins = len(angle_centers)
+
+    # Determine max slant range across all frames
+    max_range_m = 0.0
+    for frame in frames:
+        slant_ranges = frame.slant_range()
+        frame_max_slant = float(np.max(slant_ranges))
+        max_range_m = max(max_range_m, frame_max_slant)
+
+    # Create range bins for the range plot
+    range_edges = np.arange(0, max_range_m + range_bin_size, range_bin_size)
+    range_centers = (range_edges[:-1] + range_edges[1:]) / 2
+    n_range_bins = len(range_centers)
+
+    # Collect wind and ship statistics
+    all_wind_speeds: list[float] = []
+    all_wind_dirs: list[float] = []
+    all_ship_speeds: list[float] = []
+    all_ship_headings: list[float] = []
+
+    # =========================================================================
+    # FIRST PASS: Collect intensity vs range to compute median per range bin
+    # =========================================================================
+    range_intensities: list[list[float]] = [[] for _ in range(n_range_bins)]
+
+    n_frames = len(frames)
+    for frame_idx in range(n_frames):
+        frame = frames[frame_idx]
+        intensity = destreaked_intensities[frame_idx]
+        slant_ranges = frame.slant_range()
+
+        # Get shadow mask for this frame
+        shadow_mask = theta.in_shadow(frame_idx)
+
+        # Get wind and ship from metadata
+        meta = frame.metadata
+        wind_speed = meta.wind_speed or 0.0
+        wind_dir = meta.wind_direction or 0.0
+        ship_speed = meta.ship_speed or 0.0
+        ship_heading = meta.heading or 0.0
+
+        all_wind_speeds.append(wind_speed)
+        all_wind_dirs.append(wind_dir)
+        all_ship_speeds.append(ship_speed)
+        all_ship_headings.append(ship_heading)
+
+        # Get bearing values for this frame
+        bearing = theta.bearing_for_frame(frame_idx)
+
+        # Process each radial (excluding shadow)
+        for radial_idx in range(len(bearing)):
+            if shadow_mask[radial_idx]:
+                continue
+
+            # Bin intensity by slant range
+            for range_idx in range(intensity.shape[1]):
+                slant_range = slant_ranges[range_idx]
+                range_bin_idx = int(slant_range / range_bin_size)
+                range_bin_idx = min(max(0, range_bin_idx), n_range_bins - 1)
+
+                val = intensity[radial_idx, range_idx]
+                if np.isfinite(val):
+                    range_intensities[range_bin_idx].append(float(val))
+
+    # Compute mean and median per range bin
+    range_means = np.zeros(n_range_bins)
+    range_medians = np.zeros(n_range_bins)
+    range_stds = np.zeros(n_range_bins)
+    range_counts = np.zeros(n_range_bins, dtype=int)
+
+    for i, values in enumerate(range_intensities):
+        if len(values) > 0:
+            range_means[i] = np.mean(values)
+            range_medians[i] = np.median(values)
+            range_stds[i] = np.std(values)
+            range_counts[i] = len(values)
+
+    # Apply smoothing to median
+    range_medians_smoothed = smooth_array(range_medians, smooth_window)
+
+    # =========================================================================
+    # SECOND PASS: Compute range-corrected intensity vs wind-relative angle
+    # =========================================================================
+    combined_angle_intensities: list[list[float]] = [[] for _ in range(n_angle_bins)]
+
+    # Per-range-selection for display
+    first_slant_ranges = frames[0].slant_range()
+    angle_intensities: dict[str, list[list[float]]] = {}
+    for start_bin, end_bin in range_bins:
+        start_m = float(first_slant_ranges[min(start_bin, len(first_slant_ranges) - 1)])
+        end_m = float(first_slant_ranges[min(end_bin - 1, len(first_slant_ranges) - 1)])
+        label = f"{start_m:.0f}-{end_m:.0f}m"
+        angle_intensities[label] = [[] for _ in range(n_angle_bins)]
+
+    for frame_idx in range(n_frames):
+        frame = frames[frame_idx]
+        intensity = destreaked_intensities[frame_idx]
+        slant_ranges = frame.slant_range()
+
+        # Get shadow mask and bearing
+        shadow_mask = theta.in_shadow(frame_idx)
+        bearing = theta.bearing_for_frame(frame_idx)
+
+        # Get wind direction from metadata (per-frame)
+        wind_dir = frame.metadata.wind_direction or 0.0
+
+        # Calculate wind-relative angle
+        wind_relative = wrap_angle_180(bearing - wind_dir)
+
+        # Process each radial (excluding shadow)
+        for radial_idx in range(len(bearing)):
+            if shadow_mask[radial_idx]:
+                continue
+
+            angle = wind_relative[radial_idx]
+            angle_bin_idx = int((angle + 180) / angle_bin_size)
+            angle_bin_idx = min(max(0, angle_bin_idx), n_angle_bins - 1)
+
+            # Collect ALL range bins for combined cosine fit
+            for range_idx in range(intensity.shape[1]):
+                val = intensity[radial_idx, range_idx]
+                if np.isfinite(val):
+                    slant_range = slant_ranges[range_idx]
+                    range_bin_idx_for_correction = int(slant_range / range_bin_size)
+                    range_bin_idx_for_correction = min(
+                        max(0, range_bin_idx_for_correction), n_range_bins - 1
+                    )
+                    median_val = range_medians_smoothed[range_bin_idx_for_correction]
+                    corrected = float(val) - median_val
+                    combined_angle_intensities[angle_bin_idx].append(corrected)
+
+            # For display: also collect per range selection
+            for start_bin, end_bin in range_bins:
+                start_m = float(slant_ranges[min(start_bin, len(slant_ranges) - 1)])
+                end_m = float(slant_ranges[min(end_bin - 1, len(slant_ranges) - 1)])
+                label = f"{start_m:.0f}-{end_m:.0f}m"
+
+                actual_start = max(0, start_bin)
+                actual_end = min(intensity.shape[1], end_bin)
+
+                if actual_start >= actual_end:
+                    continue
+
+                corrected_values: list[float] = []
+                for range_idx in range(actual_start, actual_end):
+                    val = intensity[radial_idx, range_idx]
+                    if np.isfinite(val):
+                        slant_range = slant_ranges[range_idx]
+                        range_bin_idx_for_correction = int(slant_range / range_bin_size)
+                        range_bin_idx_for_correction = min(
+                            max(0, range_bin_idx_for_correction), n_range_bins - 1
+                        )
+                        median_val = range_medians_smoothed[range_bin_idx_for_correction]
+                        corrected_values.append(float(val) - median_val)
+
+                if corrected_values:
+                    mean_corrected = float(np.mean(corrected_values))
+                    angle_intensities[label][angle_bin_idx].append(mean_corrected)
+
+    # Compute combined mean for cosine fit across all ranges
+    combined_means = np.zeros(n_angle_bins)
+    combined_counts = np.zeros(n_angle_bins, dtype=int)
+    for i, values in enumerate(combined_angle_intensities):
+        if len(values) > 0:
+            combined_means[i] = np.mean(values)
+            combined_counts[i] = len(values)
+
+    # Compute statistics for angle plot (per range selection for display)
+    angle_means: dict[str, np.ndarray] = {}
+    angle_stds: dict[str, np.ndarray] = {}
+    angle_counts: dict[str, np.ndarray] = {}
+
+    for label, bin_values in angle_intensities.items():
+        means = np.zeros(n_angle_bins)
+        stds = np.zeros(n_angle_bins)
+        counts = np.zeros(n_angle_bins, dtype=int)
+
+        for i, values in enumerate(bin_values):
+            if len(values) > 0:
+                means[i] = np.mean(values)
+                stds[i] = np.std(values)
+                counts[i] = len(values)
+
+        angle_means[label] = means
+        angle_stds[label] = stds
+        angle_counts[label] = counts
+
+    # Compute wind and ship statistics
+    wind_speed_mean = float(np.mean(all_wind_speeds)) if all_wind_speeds else 0.0
+    wind_speed_std = float(np.std(all_wind_speeds)) if all_wind_speeds else 0.0
+    wind_dir_mean = float(np.mean(all_wind_dirs)) if all_wind_dirs else 0.0
+    wind_dir_std = float(np.std(all_wind_dirs)) if all_wind_dirs else 0.0
+    ship_speed_mean = float(np.mean(all_ship_speeds)) if all_ship_speeds else 0.0
+    ship_speed_std = float(np.std(all_ship_speeds)) if all_ship_speeds else 0.0
+    ship_heading_mean = float(np.mean(all_ship_headings)) if all_ship_headings else 0.0
+    ship_heading_std = float(np.std(all_ship_headings)) if all_ship_headings else 0.0
+
+    # Fit cosine to combined data (all range bins)
+    from scipy.optimize import curve_fit
+
+    def cosine_func(theta_rad: np.ndarray, a: float, phi: float, b: float) -> np.ndarray:
+        return a * np.cos(theta_rad - phi) + b
+
+    valid = np.isfinite(combined_means) & (combined_counts > 0)
+    cosine_params: dict = {"a": 0.0, "b": 0.0, "phi": 0.0, "r_squared": 0.0}
+
+    if np.sum(valid) >= 4:
+        theta_valid = np.deg2rad(angle_centers[valid])
+        y_valid = combined_means[valid]
+
+        try:
+            a0 = (np.max(y_valid) - np.min(y_valid)) / 2
+            b0 = np.mean(y_valid)
+            phi0 = 0.0
+
+            popt, _ = curve_fit(
+                cosine_func,
+                theta_valid,
+                y_valid,
+                p0=[a0, phi0, b0],
+                bounds=([-np.inf, -np.pi, -np.inf], [np.inf, np.pi, np.inf]),
+                maxfev=5000,
+            )
+            a, phi, b = popt
+
+            y_fit = cosine_func(theta_valid, a, phi, b)
+            ss_res = np.sum((y_valid - y_fit) ** 2)
+            ss_tot = np.sum((y_valid - np.mean(y_valid)) ** 2)
+            r_squared = 1 - ss_res / ss_tot if ss_tot > 0 else 0
+
+            cosine_params = {
+                "a": float(a),
+                "b": float(b),
+                "phi": float(np.rad2deg(phi)),
+                "r_squared": float(r_squared),
+            }
+        except Exception:
+            pass
+
+    # =========================================================================
+    # THIRD PASS: Compute per-range std after median and cosine subtraction
+    # =========================================================================
+    range_adjusted_intensities: list[list[float]] = [[] for _ in range(n_range_bins)]
+
+    for frame_idx in range(n_frames):
+        frame = frames[frame_idx]
+        intensity = destreaked_intensities[frame_idx]
+        slant_ranges = frame.slant_range()
+
+        shadow_mask = theta.in_shadow(frame_idx)
+        bearing = theta.bearing_for_frame(frame_idx)
+        wind_dir = frame.metadata.wind_direction or 0.0
+        wind_relative = wrap_angle_180(bearing - wind_dir)
+
+        for radial_idx in range(len(bearing)):
+            if shadow_mask[radial_idx]:
+                continue
+
+            # Compute cosine correction for this radial
+            angle_rad = np.deg2rad(wind_relative[radial_idx])
+            phi_rad = np.deg2rad(cosine_params["phi"])
+            cosine_correction = (
+                cosine_params["a"] * np.cos(angle_rad - phi_rad) + cosine_params["b"]
+            )
+
+            for range_idx in range(intensity.shape[1]):
+                val = intensity[radial_idx, range_idx]
+                if np.isfinite(val):
+                    slant_range = slant_ranges[range_idx]
+                    range_bin_idx_adj = int(slant_range / range_bin_size)
+                    range_bin_idx_adj = min(max(0, range_bin_idx_adj), n_range_bins - 1)
+
+                    median_val = range_medians_smoothed[range_bin_idx_adj]
+                    adjusted = float(val) - median_val - cosine_correction
+                    range_adjusted_intensities[range_bin_idx_adj].append(adjusted)
+
+    # Compute per-range std after adjustment
+    range_adjusted_stds = np.zeros(n_range_bins)
+    for i, values in enumerate(range_adjusted_intensities):
+        if len(values) > 1:
+            range_adjusted_stds[i] = np.std(values)
+
+    # Smooth the adjusted stds
+    range_adjusted_stds_smoothed = smooth_array(range_adjusted_stds, smooth_window)
+
+    return {
+        "angle_centers": angle_centers,
+        "angle_means": angle_means,
+        "angle_stds": angle_stds,
+        "angle_counts": angle_counts,
+        "combined_angle_means": combined_means,
+        "combined_angle_counts": combined_counts,
+        "cosine_params": cosine_params,
+        "range_centers": range_centers,
+        "range_means": range_means,
+        "range_medians": range_medians,
+        "range_medians_smoothed": range_medians_smoothed,
+        "range_stds": range_stds,
+        "range_adjusted_stds": range_adjusted_stds,
+        "range_adjusted_stds_smoothed": range_adjusted_stds_smoothed,
+        "range_counts": range_counts,
+        "smooth_window": smooth_window,
+        # Wind and ship statistics
+        "wind_speed_mean": wind_speed_mean,
+        "wind_speed_std": wind_speed_std,
+        "wind_dir_mean": wind_dir_mean,
+        "wind_dir_std": wind_dir_std,
+        "ship_speed_mean": ship_speed_mean,
+        "ship_speed_std": ship_speed_std,
+        "ship_heading_mean": ship_heading_mean,
+        "ship_heading_std": ship_heading_std,
+        "n_frames": n_frames,
+    }
+
+
+def compute_averaged_earth_intensity_new(
+    frames: list,
+    theta: Theta,
+    combine: Combine,
+    destreaked_intensities: list[np.ndarray],
+    intensity_data: dict,
+    cosine_params: dict,
+    grid_size: int = 200,
+) -> dict:
+    """
+    Compute averaged intensity maps in earth coordinates across all frames.
+
+    Uses the new API with Frame objects, Theta, and Combine.
+
+    Args:
+        frames: List of Frame objects
+        theta: Multi-frame Theta object
+        combine: Combine object for coordinate transformation
+        destreaked_intensities: List of destreaked intensity arrays
+        intensity_data: Output from compute_wind_relative_intensity_new()
+        cosine_params: Cosine fit parameters for wind correction
+        grid_size: Grid resolution for earth coordinate averaging
+
+    Returns:
+        Dictionary with averaged intensity grids
+    """
+    # Get lat/lon bounds from Combine
+    all_lats: list[float] = []
+    all_lons: list[float] = []
+
+    for frame_idx in range(len(frames)):
+        lat, lon = combine.latlon(frame_idx)
+        all_lats.extend(lat.flatten().tolist())
+        all_lons.extend(lon.flatten().tolist())
+
+    lon_min, lon_max = min(all_lons), max(all_lons)
+    lat_min, lat_max = min(all_lats), max(all_lats)
+
+    # Add small margin
+    lon_margin = (lon_max - lon_min) * 0.02
+    lat_margin = (lat_max - lat_min) * 0.02
+    lon_min -= lon_margin
+    lon_max += lon_margin
+    lat_min -= lat_margin
+    lat_max += lat_margin
+
+    # Create grid
+    lon_edges = np.linspace(lon_min, lon_max, grid_size + 1)
+    lat_edges = np.linspace(lat_min, lat_max, grid_size + 1)
+    lon_centers = (lon_edges[:-1] + lon_edges[1:]) / 2
+    lat_centers = (lat_edges[:-1] + lat_edges[1:]) / 2
+
+    # Accumulators for averaging
+    destreak_sum = np.zeros((grid_size, grid_size), dtype=np.float64)
+    adjusted_sum = np.zeros((grid_size, grid_size), dtype=np.float64)
+    count_grid = np.zeros((grid_size, grid_size), dtype=np.int64)
+
+    range_bin_size = intensity_data["range_centers"][1] - intensity_data["range_centers"][0]
+    range_medians_smoothed = intensity_data["range_medians_smoothed"]
+    range_adjusted_stds_smoothed = intensity_data["range_adjusted_stds_smoothed"]
+    range_centers = intensity_data["range_centers"]
+    n_range_bins = len(range_centers)
+
+    # Get cosine parameters
+    a = cosine_params.get("a", 0.0)
+    phi_deg = cosine_params.get("phi", 0.0)
+    b = cosine_params.get("b", 0.0)
+
+    n_frames = len(frames)
+    for frame_idx in range(n_frames):
+        frame = frames[frame_idx]
+        intensity = destreaked_intensities[frame_idx]
+        slant_ranges = frame.slant_range()
+
+        # Get lat/lon for this frame
+        earth_lat, earth_lon = combine.latlon(frame_idx)
+
+        # Get shadow mask and bearing
+        shadow_mask = theta.in_shadow(frame_idx)
+        bearing = theta.bearing_for_frame(frame_idx)
+
+        # Get wind direction
+        wind_dir = frame.metadata.wind_direction or 0.0
+        wind_relative = wrap_angle_180(bearing - wind_dir)
+
+        # Accumulate onto grid (excluding shadow)
+        for bearing_idx in range(len(bearing)):
+            if shadow_mask[bearing_idx]:
+                continue
+
+            # Compute cosine correction for this radial
+            wind_rel_rad = np.deg2rad(wind_relative[bearing_idx])
+            phi_rad = np.deg2rad(phi_deg)
+            cosine_correction = a * np.cos(wind_rel_rad - phi_rad) + b
+
+            for range_idx in range(intensity.shape[1]):
+                lon_val = earth_lon[bearing_idx, range_idx]
+                lat_val = earth_lat[bearing_idx, range_idx]
+
+                # Find grid cell
+                lon_idx = int((lon_val - lon_min) / (lon_max - lon_min) * grid_size)
+                lat_idx = int((lat_val - lat_min) / (lat_max - lat_min) * grid_size)
+
+                # Clamp to grid bounds
+                lon_idx = max(0, min(grid_size - 1, lon_idx))
+                lat_idx = max(0, min(grid_size - 1, lat_idx))
+
+                destreak_val = intensity[bearing_idx, range_idx]
+
+                # Compute adjusted intensity
+                slant_range = slant_ranges[range_idx]
+                range_bin_idx = int(slant_range / range_bin_size)
+                range_bin_idx = min(max(0, range_bin_idx), n_range_bins - 1)
+
+                median_correction = range_medians_smoothed[range_bin_idx]
+                std_val = range_adjusted_stds_smoothed[range_bin_idx]
+
+                corrected = destreak_val - median_correction - cosine_correction
+                adjusted_val = corrected / std_val if std_val > 0 else corrected
+
+                if np.isfinite(destreak_val) and np.isfinite(adjusted_val):
+                    destreak_sum[lat_idx, lon_idx] += destreak_val
+                    adjusted_sum[lat_idx, lon_idx] += adjusted_val
+                    count_grid[lat_idx, lon_idx] += 1
+
+        # Progress indicator
+        if (frame_idx + 1) % 50 == 0 or frame_idx == n_frames - 1:
+            print_progress(frame_idx + 1, n_frames, prefix="Averaging")
+
+    # Compute averages (avoid division by zero)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        avg_destreaked = np.where(count_grid > 0, destreak_sum / count_grid, np.nan)
+        avg_adjusted = np.where(count_grid > 0, adjusted_sum / count_grid, np.nan)
+
+    return {
+        "avg_destreaked": avg_destreaked,
+        "avg_adjusted": avg_adjusted,
+        "lon_edges": lon_edges,
+        "lat_edges": lat_edges,
+        "lon_centers": lon_centers,
+        "lat_centers": lat_centers,
+        "count_grid": count_grid,
+        "n_frames": n_frames,
+    }
+
+
+# Legacy function - kept but not used by main()
 def compute_wind_relative_intensity(
     results: list[dict],
-    transformer: CoordinateTransformer,
+    transformer: "CoordinateTransformer",  # type: ignore[name-defined]  # noqa: F821
     range_bins: list[tuple[int, int]],
     angle_bin_size: float = 2.0,
     range_bin_size: float = 50.0,
@@ -998,9 +1454,10 @@ def compute_adjusted_intensity(
     return adjusted
 
 
+# Legacy function - kept but not used by main()
 def compute_averaged_earth_intensity(
     results: list[dict],
-    transformer: CoordinateTransformer,
+    transformer: "CoordinateTransformer",  # type: ignore[name-defined]  # noqa: F821
     intensity_data: dict,
     cosine_params: dict,
     grid_size: int = 200,
@@ -1157,9 +1614,16 @@ def compute_averaged_earth_intensity(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Plot average intensity vs wind-relative angle")
 
-    add_time_range_arguments(parser)
+    add_common_arguments(parser)
     add_logging_arguments(parser)
 
+    parser.add_argument(
+        "--config",
+        "-c",
+        type=str,
+        default=None,
+        help="YAML configuration file",
+    )
     parser.add_argument(
         "--workers",
         type=int,
@@ -1202,65 +1666,19 @@ def main() -> int:
         default=200,
         help="Grid resolution for earth coordinate averaging (default: 200)",
     )
-
-    # Destreak arguments
     parser.add_argument(
-        "--destreak-min-length",
-        type=int,
-        default=4,
-        help="Minimum consecutive streak length (default: 4)",
-    )
-    parser.add_argument(
-        "--destreak-k-sigma",
-        type=float,
-        default=5.0,
-        help="MAD threshold multiplier (default: 5.0)",
-    )
-    parser.add_argument(
-        "--destreak-neighbor-size",
-        type=int,
-        default=5,
-        help="Number of neighbors for local statistics (default: 5)",
-    )
-
-    # Shadow detection arguments
-    parser.add_argument(
-        "--shadow",
+        "--no-refine",
         action="store_true",
-        help="Enable shadow region detection for theta adjustment",
-    )
-    parser.add_argument(
-        "--shadow-search",
-        type=str,
-        default="140-220",
-        help="Theta range to search for shadow region (default: 140-220)",
-    )
-    parser.add_argument(
-        "--shadow-bin-size",
-        type=float,
-        default=0.5,
-        help="Theta bin size in degrees for shadow detection (default: 0.5)",
-    )
-    parser.add_argument(
-        "--shadow-min-width",
-        type=float,
-        default=50.0,
-        help="Minimum shadow width in degrees to accept (default: 50.0)",
-    )
-
-    # Theta adjustment arguments
-    parser.add_argument(
-        "--adjust",
-        type=str,
-        choices=["none", "shift", "shift_scale"],
-        default="none",
-        help="Theta adjustment mode: none, shift, or shift_scale (default: none)",
+        help="Disable theta refinement using shadow detection",
     )
 
     args = parser.parse_args()
     setup_logging(args)
 
     try:
+        # Load config
+        config = Config(args.config) if args.config else Config()
+
         filenames = Filenames(args.stime, args.etime, str(args.polar_path))
         files = filenames.files
         n_files = len(files)
@@ -1271,132 +1689,51 @@ def main() -> int:
 
         logger.info("Loading %d files with %d workers", n_files, args.workers or os.cpu_count())
 
-        destreak_config = {
-            "min_length": args.destreak_min_length,
-            "k_sigma": args.destreak_k_sigma,
-            "neighbor_size": args.destreak_neighbor_size,
-        }
-
-        # Build shadow config if needed
-        shadow_config: ShadowConfig | None = None
-        if args.shadow or args.adjust != "none":
-            try:
-                lo, hi = args.shadow_search.strip().split("-")
-                search_min = float(lo)
-                search_max = float(hi)
-            except ValueError:
-                logger.error("Invalid shadow-search format: %s", args.shadow_search)
-                return 1
-
-            shadow_config = ShadowConfig(
-                search_min=search_min,
-                search_max=search_max,
-                bin_size=args.shadow_bin_size,
-                min_width=args.shadow_min_width,
-            )
-
         # Load frames in parallel
-        results: list[dict] = []
+        frames: list = []
+        t0 = time.perf_counter()
 
         with ThreadPoolExecutor(max_workers=args.workers) as executor:
-            futures = {
-                executor.submit(load_frame_data, fn, destreak_config, shadow_config): fn
-                for fn in files
-            }
+            futures = {executor.submit(load_frame, fn): fn for fn in files}
 
             for i, future in enumerate(as_completed(futures)):
                 print_progress(i + 1, n_files, prefix="Loading")
                 result = future.result()
                 if result is not None:
-                    results.append(result)
+                    frame, _ = result
+                    frames.append(frame)
 
-        n_loaded = len(results)
-        print(f"Successfully loaded {n_loaded} of {n_files} frames")
+        elapsed = time.perf_counter() - t0
+        n_loaded = len(frames)
+        fps = n_loaded / elapsed if elapsed > 0 else 0
+        print(f"Successfully loaded {n_loaded} of {n_files} frames in {elapsed:.2f}s ({fps:.1f} frames/sec)")
 
         if n_loaded == 0:
             logger.error("No valid frames loaded")
             return 1
 
         # Sort by timestamp
-        def sort_key(x: dict) -> np.datetime64:
-            ts = x["timestamp"]
-            return ts if ts is not None else np.datetime64(0, "ns")
+        frames.sort(key=lambda f: f.timestamp if f.timestamp is not None else np.datetime64(0, "ns"))
 
-        results.sort(key=sort_key)
+        # Create multi-frame Theta for bearing calculation with shadow refinement
+        print("Calculating bearings with shadow refinement...")
+        refine = not args.no_refine
+        theta = Theta(frames, config, refine=refine)
 
-        # Update PPS with adjacent frame context
-        print("Updating timing with multi-frame context...")
-        for i, curr in enumerate(results):
-            prev = results[i - 1] if i > 0 else None
-            nxt = results[i + 1] if i < len(results) - 1 else None
-            curr["wpps"].update(
-                prev["wpps"] if prev else None,
-                nxt["wpps"] if nxt else None,
-            )
+        if theta.shadow_stats:
+            print(f"  Shadow: {theta.shadow_stats}")
+            print(f"  Shadow offset correction: {theta.shadow_offset:.2f}°")
 
-        # Shadow detection and theta adjustment
-        if args.shadow or args.adjust != "none":
-            print("Collecting shadow regions...")
-            leading_edges: list[float] = []
-            trailing_edges: list[float] = []
+        # Apply destreaking to each frame
+        print("Applying destreaking...")
+        destreaked_intensities = []
+        for frame in frames:
+            destreaked = Destreak(frame)
+            destreaked_intensities.append(destreaked.intensity)
 
-            for r in results:
-                wtheta = r["wtheta"]
-                shadow = wtheta.shadow_region
-
-                if shadow.is_valid:
-                    leading_edges.append(shadow.leading)  # type: ignore[arg-type]
-                    trailing_edges.append(shadow.trailing)  # type: ignore[arg-type]
-
-            n_detected = len(leading_edges)
-            print(f"  Detected shadow in {n_detected} of {len(results)} frames")
-
-            if leading_edges:
-                print(
-                    f"  Leading edge: {np.median(leading_edges):.1f}° "
-                    f"(range: {np.min(leading_edges):.1f}° - {np.max(leading_edges):.1f}°)"
-                )
-            if trailing_edges:
-                print(
-                    f"  Trailing edge: {np.median(trailing_edges):.1f}° "
-                    f"(range: {np.min(trailing_edges):.1f}° - {np.max(trailing_edges):.1f}°)"
-                )
-
-            # Apply theta adjustment if requested
-            if args.adjust != "none" and leading_edges and trailing_edges:
-                median_leading = float(np.median(leading_edges))
-                median_trailing = float(np.median(trailing_edges))
-
-                print(f"\nApplying theta adjustment (mode: {args.adjust})...")
-                print(f"  Target leading edge:  {median_leading:.2f}°")
-                print(f"  Target trailing edge: {median_trailing:.2f}°")
-
-                n_adjusted = 0
-                shifts: list[float] = []
-                scales: list[float] = []
-
-                for r in results:
-                    wtheta = r["wtheta"]
-
-                    if wtheta.has_shadow:
-                        wtheta.adjust_to_shadow(
-                            target_leading=median_leading,
-                            target_trailing=median_trailing,
-                            mode=args.adjust,
-                        )
-                        shifts.append(wtheta.shift)
-                        scales.append(wtheta.scale)
-                        n_adjusted += 1
-
-                print(f"  Adjusted {n_adjusted} frames")
-                if shifts:
-                    print(f"  Shift: mean={np.mean(shifts):.3f}°, std={np.std(shifts):.3f}°")
-                if scales and args.adjust == "shift_scale":
-                    print(f"  Scale: mean={np.mean(scales):.6f}, std={np.std(scales):.6f}")
-
-        # Create coordinate transformer for navigation interpolation
+        # Create Combine for coordinate transformation
         print("Creating coordinate transformer...")
-        transformer = CoordinateTransformer(results)
+        combine = Combine(frames, config, theta=theta)
 
         # Parse range bin selections
         range_bin_selections: list[tuple[int, int]] = []
@@ -1410,9 +1747,10 @@ def main() -> int:
 
         # Compute wind-relative intensity (includes cosine fit across all ranges)
         print("Computing wind-relative intensity (excluding shadow regions)...")
-        data = compute_wind_relative_intensity(
-            results=results,
-            transformer=transformer,
+        data = compute_wind_relative_intensity_new(
+            frames=frames,
+            theta=theta,
+            destreaked_intensities=destreaked_intensities,
             range_bins=range_bin_selections,
             angle_bin_size=args.angle_bin_size,
             range_bin_size=args.range_bin_size,
@@ -1428,9 +1766,11 @@ def main() -> int:
 
         # Compute averaged intensity in earth coordinates
         print("Computing averaged intensity in earth coordinates...")
-        earth_data = compute_averaged_earth_intensity(
-            results=results,
-            transformer=transformer,
+        earth_data = compute_averaged_earth_intensity_new(
+            frames=frames,
+            theta=theta,
+            combine=combine,
+            destreaked_intensities=destreaked_intensities,
             intensity_data=data,
             cosine_params=cosine_params,
             grid_size=args.grid_size,
@@ -1438,13 +1778,21 @@ def main() -> int:
 
         # Plot histograms and averaged intensity maps
         print("Plotting results...")
-        title = f"Average Intensity ({len(results)} frames, shadow excluded)"
+        title = f"Average Intensity ({len(frames)} frames, shadow excluded)"
         plot_wind_relative_intensity(
             data=data,
             earth_data=earth_data,
             title=title,
             show_std=not args.no_std,
         )
+
+        # Report peak memory usage
+        peak_mem = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if sys.platform == "darwin":
+            peak_mem_mb = peak_mem / (1024 * 1024)
+        else:
+            peak_mem_mb = peak_mem / 1024
+        print(f"Peak memory: {peak_mem_mb:.1f} MB")
 
         return 0
 

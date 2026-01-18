@@ -21,7 +21,7 @@ import numpy as np
 from tqdm import tqdm
 
 from wamos_tpw import __version__
-from wamos_tpw.config import WamosConfig
+from wamos_tpw.config import Config
 from wamos_tpw.processed import ProcessedFrames
 from wamos_tpw.frame import Frame
 from wamos_tpw.bearing import Theta, Bearing
@@ -55,7 +55,7 @@ class WamosDataset:
         polar_path: str | Path,
         stime: str,
         etime: str,
-        config: WamosConfig | str | Path | None = None,
+        config: Config | str | Path | None = None,
         radar_height: float | None = None,
         groupby: str = "h",
         workers: int | None = None,
@@ -67,7 +67,7 @@ class WamosDataset:
             polar_path: Path to POLAR directory with YYYY/MM/DD/HH structure
             stime: Start time (various formats supported)
             etime: End time (various formats supported)
-            config: WamosConfig instance or path to YAML config file
+            config: Config instance or path to YAML config file
             radar_height: Radar height above water in meters
             groupby: Time grouping frequency (e.g., 'h', '30m', 'D')
             workers: Number of parallel workers (None = auto)
@@ -81,9 +81,9 @@ class WamosDataset:
 
         # Load config
         if config is None:
-            self._config = WamosConfig()
+            self._config = Config()
         elif isinstance(config, (str, Path)):
-            self._config = WamosConfig(str(config))
+            self._config = Config(str(config))
         else:
             self._config = config
 
@@ -129,7 +129,7 @@ class WamosDataset:
         return self._frames
 
     @property
-    def config(self) -> WamosConfig:
+    def config(self) -> Config:
         """Return configuration."""
         return self._config
 

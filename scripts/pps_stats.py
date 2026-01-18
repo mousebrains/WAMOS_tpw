@@ -19,7 +19,9 @@ Dec-2025, Pat Welch, pat@mousebrains.com
 import argparse
 import logging
 import os
+import resource
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -30,8 +32,8 @@ src_path = Path(__file__).parent.parent / "src"
 if src_path.exists():
     sys.path.insert(0, str(src_path))
 
-from wamos_tpw import Filenames, PolarFrame  # noqa: E402
-from wamos_tpw.args import add_time_range_arguments  # noqa: E402
+from wamos_tpw import Filenames, PolarFile  # noqa: E402
+from wamos_tpw.filenames import add_common_arguments  # noqa: E402
 from wamos_tpw.logging_config import add_logging_arguments, setup_logging  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -48,14 +50,10 @@ def load_frame_pps(fn: str) -> dict | None:
         Dictionary with frame info, or None on error.
     """
     try:
-        frame = PolarFrame(fn)
-        frame_dt = frame.metadata.get("frame_datetime")
-        if frame_dt is not None:
-            t0 = np.datetime64(frame_dt).astype("datetime64[ns]")
-        else:
-            t0 = None
+        frame = PolarFile(fn).frame()
+        t0 = frame.timestamp.astype("datetime64[ns]")
 
-        rpt = frame.metadata.get("frame_rpt", 0.0)
+        rpt = frame.metadata.repeat_time or 0.0
         n_bearings = frame.n_bearings
 
         # Extract PPS signal from bit 12 at distance bin 0
@@ -110,7 +108,7 @@ def print_progress(current: int, total: int, width: int = 40, prefix: str = "Pro
 def main() -> int:
     parser = argparse.ArgumentParser(description="Analyze PPS pulse statistics across polar files")
 
-    add_time_range_arguments(parser)
+    add_common_arguments(parser)
     add_logging_arguments(parser)
 
     grp = parser.add_mutually_exclusive_group(required=False)
@@ -153,6 +151,7 @@ def main() -> int:
         # Load frames in parallel
         results: list[dict] = []
 
+        t0 = time.perf_counter()
         with ThreadPoolExecutor(max_workers=args.workers) as executor:
             futures = {executor.submit(load_frame_pps, fn): fn for fn in files}
 
@@ -162,9 +161,11 @@ def main() -> int:
                 result = future.result()
                 if result is not None:
                     results.append(result)
+        elapsed = time.perf_counter() - t0
 
         n_loaded = len(results)
-        print(f"\nSuccessfully loaded {n_loaded} of {n_files} frames")
+        fps = n_loaded / elapsed if elapsed > 0 else 0
+        print(f"\nSuccessfully loaded {n_loaded} of {n_files} frames in {elapsed:.2f}s ({fps:.1f} frames/sec)")
 
         if n_loaded == 0:
             logger.error("No valid frames loaded")
@@ -288,7 +289,15 @@ def main() -> int:
                     f"{r['n_pulses']:7d} {gap_str:>8}"
                 )
 
-        print()
+        # Report peak memory usage
+        peak_mem = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # On macOS, ru_maxrss is in bytes; on Linux it's in KB
+        if sys.platform == "darwin":
+            peak_mem_mb = peak_mem / (1024 * 1024)
+        else:
+            peak_mem_mb = peak_mem / 1024
+        print(f"\nPeak memory: {peak_mem_mb:.1f} MB")
+
         return 0
 
     except (FileNotFoundError, ValueError, OSError):

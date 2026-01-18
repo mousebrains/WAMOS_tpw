@@ -17,6 +17,7 @@ Dec-2025, Pat Welch, pat@mousebrains.com
 import argparse
 import logging
 import os
+import resource
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -29,9 +30,9 @@ src_path = Path(__file__).parent.parent / "src"
 if src_path.exists():
     sys.path.insert(0, str(src_path))
 
-from wamos_tpw import Filenames, PolarFrame  # noqa: E402
-from wamos_tpw.args import add_time_range_arguments  # noqa: E402
+from wamos_tpw import Filenames, PolarFile  # noqa: E402
 from wamos_tpw.destreak import Destreak  # noqa: E402
+from wamos_tpw.filenames import add_common_arguments  # noqa: E402
 from wamos_tpw.logging_config import add_logging_arguments, setup_logging  # noqa: E402
 from wamos_tpw.shadow import Shadow  # noqa: E402
 from wamos_tpw.theta import Theta  # noqa: E402
@@ -51,16 +52,14 @@ def load_frame(fn: str) -> dict | None:
     """
     try:
         t0 = time.perf_counter()
-        frame = PolarFrame(fn)
-        t0a = time.perf_counter()
-        _ = frame.raw  # Force loading (single decompression + reshape)
+        frame = PolarFile(fn).frame()
         t1 = time.perf_counter()
         theta = Theta(frame)  # Calculate radar beam angle
         t2 = time.perf_counter()
-        destreaked = Destreak(frame)  # Take out interference streaks
-        _ = destreaked.intensity  # Force computation (library uses lazy evaluation)
+        destreaked = Destreak(frame, save_mask=True)  # Take out interference streaks
+        _ = destreaked.intensity  # Force computation
         t3 = time.perf_counter()
-        shadow = Shadow(destreaked, theta, ((120, 240),))
+        shadow = Shadow(destreaked.intensity, theta)
         t4 = time.perf_counter()
         return {
             "filename": fn,
@@ -68,10 +67,8 @@ def load_frame(fn: str) -> dict | None:
             "theta": theta,
             "destreak": destreaked,
             "shadow": shadow,
-            "timestamp": frame.metadata.get("frame_datetime"),
+            "timestamp": frame.timestamp,
             "timing": {
-                "polar_init": t0a - t0,
-                "polar_load": t1 - t0a,
                 "polar_total": t1 - t0,
                 "theta": t2 - t1,
                 "destreak": t3 - t2,
@@ -108,7 +105,7 @@ def print_progress(current: int, total: int, width: int = 40, prefix: str = "Pro
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check and visualize destreaking of polar frames")
 
-    add_time_range_arguments(parser)
+    add_common_arguments(parser)
     add_logging_arguments(parser)
 
     grp = parser.add_mutually_exclusive_group(required=False)
@@ -131,24 +128,6 @@ def main() -> int:
         type=int,
         default=None,
         help=f"Number of worker threads (default: CPU count = {os.cpu_count()})",
-    )
-    parser.add_argument(
-        "--min-length",
-        type=int,
-        default=4,
-        help="Minimum consecutive streak length along radial (default: 4)",
-    )
-    parser.add_argument(
-        "--k-sigma",
-        type=float,
-        default=5.0,
-        help="Number of MAD units above median to flag as streak (default: 5.0)",
-    )
-    parser.add_argument(
-        "--neighbor-size",
-        type=int,
-        default=5,
-        help="Number of neighbors above/below for local statistics (default: 5)",
     )
     parser.add_argument(
         "--vmin",
@@ -260,40 +239,25 @@ def main() -> int:
             avg_total_ms = (total_time / n_loaded) * 1000
             print(f"  {'total':12s}: {avg_total_ms:7.1f} ms")
 
-            # Print destreak internal timing breakdown
-            destreak_keys = [
-                "astype_float",
-                "convolve_streak",
-                "convolve_adj",
-                "threshold_mask",
-                "run_length_1",
-                "gap_merge",
-                "run_length_2",
-                "finalize",
-            ]
-            destreak_totals = {
-                k: sum(r["destreak"].timing[k] for r in results) for k in destreak_keys
-            }
-            destreak_total = sum(destreak_totals.values())
-            print("\nDestreak internal breakdown (per-frame averages):")
-            for key in destreak_keys:
-                avg_ms = (destreak_totals[key] / n_loaded) * 1000
-                pct = (destreak_totals[key] / destreak_total) * 100
-                print(f"  {key:16s}: {avg_ms:7.2f} ms ({pct:5.1f}%)")
-            avg_destreak_ms = (destreak_total / n_loaded) * 1000
-            print(f"  {'total':16s}: {avg_destreak_ms:7.2f} ms")
-
         if n_loaded == 0:
             logger.error("No valid frames loaded")
             return 1
 
         if args.no_plot:
+            # Report peak memory usage
+            peak_mem = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            # On macOS, ru_maxrss is in bytes; on Linux it's in KB
+            if sys.platform == "darwin":
+                peak_mem_mb = peak_mem / (1024 * 1024)
+            else:
+                peak_mem_mb = peak_mem / 1024
+            print(f"Peak memory: {peak_mem_mb:.1f} MB")
             return 0
 
         # Sort by timestamp
-        def sort_key(x: dict) -> str:
+        def sort_key(x: dict) -> np.datetime64:
             ts = x.get("timestamp")
-            return ts if ts is not None else ""
+            return ts if ts is not None else np.datetime64(0, "ns")
 
         results.sort(key=sort_key)
 
@@ -381,8 +345,7 @@ def main() -> int:
                 fig.colorbar(pcm2, ax=axes[2], label="Intensity")
 
                 suptitle = f"Frame {i + 1}/{n_loaded}: {timestamp}"
-                suptitle += f"\nShape: {n_bearings} bearings x {n_ranges} ranges"
-                suptitle += f", min_length={args.min_length}"
+                suptitle += f"\nShape: {n_bearings} bearings x {n_ranges} ranges, {streak_pct:.2f}% streaks"
                 fig.suptitle(suptitle)
 
                 fig.tight_layout()
@@ -611,6 +574,16 @@ def main() -> int:
             viewer.show()
 
             print(f"\nViewed {n_loaded} frames")
+
+        # Report peak memory usage
+        peak_mem = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # On macOS, ru_maxrss is in bytes; on Linux it's in KB
+        if sys.platform == "darwin":
+            peak_mem_mb = peak_mem / (1024 * 1024)
+        else:
+            peak_mem_mb = peak_mem / 1024
+        print(f"Peak memory: {peak_mem_mb:.1f} MB")
+
         return 0
 
     except (FileNotFoundError, ValueError, OSError):

@@ -24,7 +24,9 @@ Dec-2025, Pat Welch, pat@mousebrains.com
 import argparse
 import logging
 import os
+import resource
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -36,16 +38,42 @@ src_path = Path(__file__).parent.parent / "src"
 if src_path.exists():
     sys.path.insert(0, str(src_path))
 
-from wamos_tpw import Filenames, PolarFrame  # noqa: E402
-from wamos_tpw.args import add_time_range_arguments  # noqa: E402
+from wamos_tpw import Filenames, PolarFile  # noqa: E402
+from wamos_tpw.filenames import add_common_arguments  # noqa: E402
 from wamos_tpw.logging_config import add_logging_arguments, setup_logging  # noqa: E402
-from wamos_tpw.plotting import (  # noqa: E402
-    parse_distance_bins,
-    plot_frames_bits,
-    plot_frames_bits_by_distance,
-)
 
 logger = logging.getLogger(__name__)
+
+
+def parse_distance_bins(spec: str, n_distances: int) -> list[int]:
+    """
+    Parse a distance bin specification string.
+
+    Supports:
+    - Comma-separated values: "0,18,19,20"
+    - Slice notation: "0:21" (exclusive end)
+    - Mixed: "0,5,10:15,20"
+
+    Args:
+        spec: Distance bin specification string
+        n_distances: Maximum number of range bins (for validation)
+
+    Returns:
+        List of distance bin indices
+    """
+    bins = []
+    for part in spec.split(","):
+        part = part.strip()
+        if ":" in part:
+            start, end = part.split(":", 1)
+            start = int(start) if start else 0
+            end = int(end) if end else n_distances
+            bins.extend(range(start, min(end, n_distances)))
+        else:
+            idx = int(part)
+            if 0 <= idx < n_distances:
+                bins.append(idx)
+    return sorted(set(bins))
 
 
 def load_frame(fn: str) -> tuple:
@@ -56,11 +84,11 @@ def load_frame(fn: str) -> tuple:
         fn: Filename to load
 
     Returns:
-        Tuple of (timestamp, PolarFrame) or (None, None) on error
+        Tuple of (timestamp, Frame) or (None, None) on error
     """
     try:
-        frame = PolarFrame(fn)
-        ts = np.datetime64(frame.metadata.get("frame_datetime") or frame.metadata.get("datetime"))
+        frame = PolarFile(fn).frame()
+        ts = frame.timestamp
         return ts, frame
     except Exception as e:
         logger.warning(f"Failed to load {fn}: {e}")
@@ -203,10 +231,163 @@ def print_stats_by_frequency(distance_bins, stats_dict, min_sigma=5.0):
     print(f"Showing signals with significance >= {min_sigma} sigma")
 
 
+def plot_frames_bits(
+    frames,
+    distance_bins,
+    figsize=(14, 10),
+    title=None,
+    transition_bit=None,
+    transition_bin=0,
+):
+    """
+    Plot bits 12-15 for multiple frames in a 2x2 grid.
+
+    Args:
+        frames: List of Frame objects
+        distance_bins: List of distance bin indices
+        figsize: Figure size as (width, height)
+        title: Plot title
+        transition_bit: Bit to mark transitions for (12-15)
+        transition_bin: Distance bin for transition detection
+
+    Returns:
+        Tuple of (fig, axes)
+    """
+    import matplotlib.pyplot as plt
+
+    # Concatenate data from all frames
+    frame_boundaries = [0]
+    all_data = {12: [], 13: [], 14: [], 15: []}
+
+    for frame in frames:
+        n = frame.n_bearings
+        for bit in [12, 13, 14, 15]:
+            bit_data = getattr(frame, f"bit{bit}")[:, distance_bins]
+            all_data[bit].append(bit_data)
+        frame_boundaries.append(frame_boundaries[-1] + n)
+
+    # Concatenate
+    for bit in [12, 13, 14, 15]:
+        all_data[bit] = np.concatenate(all_data[bit], axis=0)
+
+    total_samples = all_data[12].shape[0]
+    x = np.arange(total_samples)
+
+    fig, axes = plt.subplots(2, 2, figsize=figsize, sharex=True)
+    axes = axes.flatten()
+
+    for ax, bit in zip(axes, [12, 13, 14, 15]):
+        data = all_data[bit]
+        for i, d_bin in enumerate(distance_bins):
+            ax.plot(x, data[:, i] + i * 1.2, linewidth=0.5, label=f"d{d_bin:02d}")
+        ax.set_ylabel(f"Bit {bit}")
+        ax.set_ylim(-0.2, len(distance_bins) * 1.2)
+        ax.set_yticks([])
+
+        # Frame boundaries
+        for boundary in frame_boundaries[1:-1]:
+            ax.axvline(boundary, color="gray", linewidth=0.3, alpha=0.5)
+
+        # Transition lines
+        if transition_bit == bit and transition_bin in distance_bins:
+            d_idx = distance_bins.index(transition_bin)
+            trans = np.where(data[:-1, d_idx] != data[1:, d_idx])[0] + 1
+            for t in trans:
+                ax.axvline(t, color="red", linewidth=0.5, alpha=0.5)
+
+    axes[-1].set_xlabel("Sample index")
+    if title:
+        fig.suptitle(title)
+    fig.tight_layout()
+    return fig, axes
+
+
+def plot_frames_bits_by_distance(
+    frames,
+    distance_bins,
+    figsize=(14, 10),
+    title=None,
+    reverse_bits=False,
+    transition_bit=None,
+    transition_bin=0,
+):
+    """
+    Plot bits grouped by distance bin.
+
+    Args:
+        frames: List of Frame objects
+        distance_bins: List of distance bin indices
+        figsize: Figure size as (width, height)
+        title: Plot title
+        reverse_bits: If True, display bits 15-12 instead of 12-15
+        transition_bit: Bit to mark transitions for (12-15)
+        transition_bin: Distance bin for transition detection
+
+    Returns:
+        Tuple of (fig, axes)
+    """
+    import matplotlib.pyplot as plt
+
+    # Concatenate data from all frames
+    frame_boundaries = [0]
+    all_data = {}
+
+    for d_bin in distance_bins:
+        all_data[d_bin] = {12: [], 13: [], 14: [], 15: []}
+
+    for frame in frames:
+        n = frame.n_bearings
+        for d_bin in distance_bins:
+            for bit in [12, 13, 14, 15]:
+                bit_data = getattr(frame, f"bit{bit}")[:, d_bin]
+                all_data[d_bin][bit].append(bit_data)
+        frame_boundaries.append(frame_boundaries[-1] + n)
+
+    # Concatenate
+    for d_bin in distance_bins:
+        for bit in [12, 13, 14, 15]:
+            all_data[d_bin][bit] = np.concatenate(all_data[d_bin][bit], axis=0)
+
+    total_samples = len(all_data[distance_bins[0]][12])
+    x = np.arange(total_samples)
+
+    n_bins = len(distance_bins)
+    fig, axes = plt.subplots(n_bins, 1, figsize=figsize, sharex=True)
+    if n_bins == 1:
+        axes = [axes]
+
+    bits_order = [15, 14, 13, 12] if reverse_bits else [12, 13, 14, 15]
+
+    for ax, d_bin in zip(axes, distance_bins):
+        for i, bit in enumerate(bits_order):
+            data = all_data[d_bin][bit]
+            ax.plot(x, data + i * 1.2, linewidth=0.5, label=f"b{bit}")
+        ax.set_ylabel(f"d{d_bin:02d}")
+        ax.set_ylim(-0.2, 4 * 1.2)
+        ax.set_yticks([])
+
+        # Frame boundaries
+        for boundary in frame_boundaries[1:-1]:
+            ax.axvline(boundary, color="gray", linewidth=0.3, alpha=0.5)
+
+        # Transition lines
+        if transition_bit is not None and d_bin == transition_bin:
+            data = all_data[d_bin][transition_bit]
+            trans = np.where(data[:-1] != data[1:])[0] + 1
+            for t in trans:
+                ax.axvline(t, color="red", linewidth=0.5, alpha=0.5)
+
+    axes[-1].set_xlabel("Sample index")
+    if title:
+        fig.suptitle(title)
+    fig.tight_layout()
+    return fig, axes
+
+
 def main():
     parser = argparse.ArgumentParser(description="Plot top 4 bits for multiple WAMOS polar frames")
 
-    add_time_range_arguments(parser)
+    add_common_arguments(parser)
     add_logging_arguments(parser)
 
     parser.add_argument(
@@ -301,6 +482,7 @@ def main():
 
         # Load frames in parallel
         frames_dict = {}
+        t0 = time.perf_counter()
         with ThreadPoolExecutor(max_workers=args.workers) as executor:
             futures = {executor.submit(load_frame, fn): fn for fn in files}
 
@@ -310,16 +492,19 @@ def main():
                 ts, frame = future.result()
                 if ts is not None:
                     frames_dict[ts] = frame
+        elapsed = time.perf_counter() - t0
 
         # Sort frames by timestamp
         frames = [frames_dict[ts] for ts in sorted(frames_dict)]
-        print(f"Successfully loaded {len(frames)} frames")
+        n_loaded = len(frames)
+        fps = n_loaded / elapsed if elapsed > 0 else 0
+        print(f"Successfully loaded {n_loaded} frames in {elapsed:.2f}s ({fps:.1f} frames/sec)")
 
         if not frames:
             logger.error("No valid frames loaded")
             return 1
 
-        distance_bins = parse_distance_bins(args.distance_bins, frames[0].n_ranges)
+        distance_bins = parse_distance_bins(args.distance_bins, frames[0].n_distances)
 
         if args.summary:
             # Extract nibble data and timestamps from frames
@@ -359,7 +544,7 @@ def main():
 
             # Print results
             print(f"\nBit Statistics: {args.stime} to {args.etime}")
-            print(f"Frames: {len(frames)}, Total samples: {nibble.shape[0]}")
+            print(f"Frames: {n_loaded}, Total samples: {nibble.shape[0]}")
             print()
             print_stats_table(distance_bins, stats)
             print(f"\nSorted by frequency (>= {args.min_sigma} sigma):")
@@ -397,6 +582,15 @@ def main():
                 print(f"Saved: {args.output}")
             else:
                 plt.show()
+
+        # Report peak memory usage
+        peak_mem = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # On macOS, ru_maxrss is in bytes; on Linux it's in KB
+        if sys.platform == "darwin":
+            peak_mem_mb = peak_mem / (1024 * 1024)
+        else:
+            peak_mem_mb = peak_mem / 1024
+        print(f"Peak memory: {peak_mem_mb:.1f} MB")
 
     except (FileNotFoundError, ValueError, OSError) as e:
         logger.exception(f"Error: {e}")

@@ -12,12 +12,12 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from wamos_tpw.config import WamosConfig
+    from wamos_tpw.config import Config
     from wamos_tpw.frame import Frame
 
 
 def detect_shadow_edges(
-    frame: "Frame", bearing: np.ndarray, config: "WamosConfig"
+    frame: "Frame", bearing: np.ndarray, config: "Config"
 ) -> tuple[float | None, float | None]:
     """
     Detect left and right shadow edges for a single frame.
@@ -28,7 +28,7 @@ def detect_shadow_edges(
     Args:
         frame: Frame object with intensity data
         bearing: Bearing angles for this frame (degrees)
-        config: WamosConfig with shadow settings
+        config: Config with shadow settings
 
     Returns:
         Tuple of (left_edge, right_edge) in degrees, or None if not detected
@@ -93,7 +93,7 @@ def detect_shadow_edges(
 
 
 def compute_chunk_shadow_offset(
-    chunk_frames: list, theta, config: "WamosConfig"
+    chunk_frames: list, theta, config: "Config"
 ) -> tuple[float, float | None, float | None]:
     """
     Compute shadow offset for a chunk of frames.
@@ -104,7 +104,7 @@ def compute_chunk_shadow_offset(
     Args:
         chunk_frames: List of frames in the chunk
         theta: Theta object with bearing calculations
-        config: WamosConfig with shadow settings
+        config: Config with shadow settings
 
     Returns:
         Tuple of (offset, shadow_left_mean, shadow_right_mean)

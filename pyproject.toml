@@ -30,6 +30,7 @@ dependencies = [
     "pyyaml>=6.0",
     "tqdm>=4.65",
     "pandas>=2.0",
+    "zstandard>=0.20",
 ]
 
 [project.urls]
@@ -68,6 +69,7 @@ wamos = "wamos_tpw.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/wamos_tpw"]
+artifacts = ["src/wamos_tpw/data/*.yaml"]
 
 [tool.hatch.build.targets.sdist]
 include = [

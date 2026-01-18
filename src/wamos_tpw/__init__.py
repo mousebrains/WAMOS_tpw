@@ -8,7 +8,7 @@ from wamos_tpw.filenames import Filenames
 from wamos_tpw.files import Files
 from wamos_tpw.bearing import Theta, Bearing
 from wamos_tpw.timestamp import Timestamp
-from wamos_tpw.config import WamosConfig
+from wamos_tpw.config import Config
 from wamos_tpw.processed import ProcessedFrames
 from wamos_tpw.dataset import WamosDataset
 from wamos_tpw.exceptions import (
@@ -31,7 +31,7 @@ __all__ = [
     "Theta",
     "Bearing",
     "Timestamp",
-    "WamosConfig",
+    "Config",
     "ProcessedFrames",
     # Exceptions
     "WamosError",

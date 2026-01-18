@@ -9,16 +9,19 @@ from __future__ import annotations
 
 import bz2
 import gzip
+import io
 import logging
 import lzma
 import re
 from pathlib import Path
-from typing import BinaryIO, Iterator, Any
+from typing import BinaryIO, Iterator, Any, Callable
 
 import numpy as np
+import zstandard as zstd
 
 from wamos_tpw.frame import Frame, FrameMetadata, KNOTS_TO_MS
 from wamos_tpw.filenames import _extract_file_timestamp
+from wamos_tpw.config import Config
 
 
 class PolarFile:
@@ -26,7 +29,7 @@ class PolarFile:
     WAMOS polar file parser.
 
     Parses .pol files (optionally compressed) containing radar scan data.
-    Supports .gz, .bz2, .xz, and .lzma compression.
+    Supports .gz, .bz2, .xz, .lzma, and .zst compression.
 
     File format:
         - ASCII header with key-value pairs until EOH marker
@@ -54,39 +57,71 @@ class PolarFile:
 
     _LENGTH_FIELD_SIZE = 10  # Bytes for ASCII length field
 
-    def __init__(self, filepath: str | Path, metadata_only: bool = False) -> None:
+    def __init__(self, 
+                 filepath: str | Path, 
+                 metadata_only: bool = False, 
+                 config: Config | None = None) -> None:
         """
         Initialize and parse a WAMOS polar file.
 
         Args:
-            filepath: Path to .pol file (supports .gz, .bz2, .xz, .lzma)
+            filepath: Path to .pol file (supports .gz, .bz2, .xz, .lzma, .zst)
             metadata_only: If True, only parse header and frame metadata,
                           skip binary data loading. Useful for computing
                           grid bounds without loading full frame data.
+            config: Optional configuration object
         """
         self._filepath = Path(filepath)
         self._header: dict[str, Any] = {}
         self._frame_metadata: list[FrameMetadata] = []
         self._frames: list[Frame] = []
         self._metadata_only = metadata_only
+        self._config = config or Config()
 
         self._parse()
 
     def _parse(self) -> None:
         """Parse the polar file."""
-        opener = self._get_opener()
+        suffix = self._filepath.suffix.lower()
+        name = self._filepath.name.lower()
 
-        with opener(str(self._filepath), "rb") as fp:
-            # Parse header
-            header_lines, frame_lines = self._read_header(fp)
-            self._header = self._parse_header(header_lines)
-            self._frame_metadata = self._parse_frame_section(frame_lines)
+        # zstd requires special handling - decompress to memory first
+        if suffix == ".zst" or name.endswith(".pol.zst"):
+            with open(self._filepath, "rb") as f:
+                dctx = zstd.ZstdDecompressor()
+                data = dctx.decompress(f.read())
+            fp = io.BytesIO(data)
+            self._parse_from_fp(fp)
+        else:
+            opener = self._get_opener()
+            with opener(str(self._filepath), "rb") as fp:
+                self._parse_from_fp(fp)
 
-            # Parse binary data (skip if metadata_only)
-            if not self._metadata_only:
-                self._parse_data(fp)
+    def _parse_from_fp(self, fp: BinaryIO) -> None:
+        """Parse the polar file from an open file handle."""
+        # Parse header
+        header_lines, frame_lines = self._read_header(fp)
+        self._header = self._parse_header(header_lines)
+        self._frame_metadata = self._parse_frame_section(frame_lines)
 
-    def _get_opener(self):
+        # Extract tower-specific config (must happen before creating Frames)
+        tower = self._header.get("TOWER", "").lower()
+        if tower and self._config and tower in self._config:
+            self._config = self._config[tower]
+        elif tower:
+            logging.warning("Tower '%s' not found in config; using default settings", tower)
+
+        # Set tower.height from WINDH header if not in config
+        if "tower.height" not in self._config:
+            windh = self._header.get("WINDH")
+            if windh is not None:
+                self._config["tower.height"] = float(windh)
+
+        # Parse binary data (skip if metadata_only)
+        if not self._metadata_only:
+            self._parse_data(fp)
+
+    def _get_opener(self) -> Callable[..., BinaryIO]:
         """Get the appropriate file opener based on extension."""
         suffix = self._filepath.suffix.lower()
         name = self._filepath.name.lower()
@@ -97,6 +132,8 @@ class PolarFile:
             return bz2.open
         elif suffix in {".xz", ".lzma"} or name.endswith(".pol.xz"):
             return lzma.open
+        elif suffix == ".zst" or name.endswith(".pol.zst"):
+            return zstd.open
         else:
             return open
 
@@ -221,8 +258,8 @@ class PolarFile:
             if len(parts) >= 12:
                 metadata.wind_direction = float(parts[11])
 
-        except (ValueError, IndexError):
-            pass
+        except (ValueError, IndexError) as e:
+            logging.debug("Failed to parse frame: %s", e)
 
         return metadata
 
@@ -265,20 +302,21 @@ class PolarFile:
             # Read length field
             length_bytes = fp.read(self._LENGTH_FIELD_SIZE)
             if len(length_bytes) != self._LENGTH_FIELD_SIZE:
-                logging.debug(f"End of file at frame {idx}")
+                logging.debug("End of file at frame %s", idx)
                 break
 
             try:
                 length = int(length_bytes.decode("utf-8", errors="ignore").strip())
             except ValueError:
-                logging.warning(f"{self._filepath}: Invalid length field at frame {idx}")
+                logging.warning("%s: Invalid length field at frame %s", self._filepath, idx)
                 break
 
             # Read binary data
             buffer = fp.read(length)
             if len(buffer) != length:
                 logging.warning(
-                    f"{self._filepath}: Frame {idx}: expected {length} bytes, got {len(buffer)}"
+                    "%s: Frame %s: expected %s bytes, got %s",
+                    self._filepath, idx, length, len(buffer)
                 )
                 break
 
@@ -294,11 +332,12 @@ class PolarFile:
                     # Truncate to fit
                     usable = n_radials * n_samples
                     logging.warning(
-                        f"{self._filepath}: Frame {idx}: truncating {data.size - usable} values"
+                        "%s: Frame %s: truncating %s values",
+                        self._filepath, idx, data.size - usable
                     )
                     data = data[:usable].reshape((n_radials, n_samples))
 
-            frame = Frame(data, metadata)
+            frame = Frame(data, metadata, config=self._config)
             self._frames.append(frame)
 
     def _parse_value(self, value: bytes) -> Any:
@@ -356,8 +395,8 @@ class PolarFile:
                 if direction in ("S", "W"):
                     result = -result
                 return result
-        except (ValueError, AttributeError):
-            pass
+        except (ValueError, AttributeError) as e:
+            logging.debug("Failed to parse lat/lon: %s", e)
         return None
 
     # -------------------------------------------------------------------------
@@ -378,6 +417,11 @@ class PolarFile:
     def frame_metadata(self) -> list[FrameMetadata]:
         """Return the parsed frame metadata (available even with metadata_only=True)."""
         return self._frame_metadata
+
+    @property
+    def config(self) -> Config:
+        """Return the configuration object."""
+        return self._config
 
     @property
     def frames(self) -> list[Frame]:
@@ -413,7 +457,7 @@ class PolarFile:
 
     def __bool__(self) -> bool:
         """Return True if any frames were parsed."""
-        return len(self._frames) > 0
+        return bool(self._frames)
 
     def __repr__(self) -> str:
         return f"PolarFile('{self._filepath.name}', frames={len(self)})"
@@ -430,7 +474,7 @@ class PolarFile:
 
 
 # Module-level loader function for multiprocessing compatibility
-def load_polar_file(filepath: str) -> Frame | None:
+def load_polar_file(filepath: str, config: Config | None = None) -> Frame | None:
     """
     Load a polar file and return its first frame.
 
@@ -438,35 +482,37 @@ def load_polar_file(filepath: str) -> Frame | None:
 
     Args:
         filepath: Path to polar file
+        config: Optional configuration object
 
     Returns:
         First Frame from the file, or None on error
     """
     try:
-        pf = PolarFile(filepath)
+        pf = PolarFile(filepath, config=config)
         if pf:
             return pf.frame()
         return None
     except Exception as e:
-        logging.error(f"Error loading {filepath}: {e}")
+        logging.error("Error loading %s: %s", filepath, e)
         return None
 
 
-def load_polar_file_all(filepath: str) -> list[Frame]:
+def load_polar_file_all(filepath: str, config: Config | None = None) -> list[Frame]:
     """
     Load a polar file and return all frames.
 
     Args:
         filepath: Path to polar file
+        config: Optional configuration object
 
     Returns:
         List of Frame objects (empty on error)
     """
     try:
-        pf = PolarFile(filepath)
+        pf = PolarFile(filepath, config=config)
         return pf.frames
     except Exception as e:
-        logging.error(f"Error loading {filepath}: {e}")
+        logging.error("Error loading %s: %s", filepath, e)
         return []
 
 
@@ -474,6 +520,7 @@ def _add_arguments(parser) -> None:
     """Add command arguments to parser."""
     parser.add_argument("filename", nargs="+", help="Polar file(s) to parse")
     parser.add_argument("--show-header", action="store_true", help="Show full header")
+    parser.add_argument("--config", type=str, help="Path to configuration file")
 
 
 def add_subparser(subparsers) -> None:
@@ -490,32 +537,34 @@ def add_subparser(subparsers) -> None:
 def run(args) -> None:
     """Execute the 'parse' command."""
     for filepath in args.filename:
-        logging.info(f"{'=' * 60}")
-        logging.info(f"Parsing: {filepath}")
+        logging.info("=" * 60)
+        logging.info("Parsing: %s", filepath)
         logging.info("=" * 60)
 
         try:
-            pf = PolarFile(filepath)
-            logging.info(f"{pf}")
+            config = Config(args.config) if args.config else Config()
+            pf = PolarFile(filepath, config=config)
+            logging.info("%s", pf)
 
             if args.show_header:
                 logging.info("Header:")
                 for key, value in sorted(pf.header.items()):
-                    logging.info(f"  {key}: {value}")
+                    logging.info("  %s: %s", key, value)
 
             if pf:
                 frame = pf.frame()
                 logging.info("First frame:")
-                logging.info(f"  Timestamp: {frame.timestamp}")
-                logging.info(f"  Shape: {frame.shape}")
+                logging.info("  Timestamp: %s", frame.timestamp)
+                logging.info("  Shape: %s", frame.shape)
                 logging.info(
-                    f"  Intensity range: [{frame.intensity.min()}, {frame.intensity.max()}]"
+                    "  Intensity range: [%s, %s]",
+                    frame.intensity.min(), frame.intensity.max()
                 )
-                logging.info(f"  Bit12 (PPS) any: {frame.bit12.any()}")
-                logging.info(f"  Bit13 (bearing) any: {frame.bit13.any()}")
+                logging.info("  Bit12 (PPS) any: %s", frame.bit12.any())
+                logging.info("  Bit13 (bearing) any: %s", frame.bit13.any())
 
         except Exception as e:
-            logging.error(f"Failed to parse {filepath}: {e}")
+            logging.error("Failed to parse %s: %s", filepath, e)
 
 
 def main() -> None:

@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from wamos_tpw.config import WamosConfig
+    from wamos_tpw.config import Config
 
 
 def load_file_metadata(fpath: str) -> tuple[dict | None, list]:
@@ -39,7 +39,7 @@ def load_file_metadata(fpath: str) -> tuple[dict | None, list]:
 
 def compute_grid_bounds_from_metadata(
     file_list: list[str],
-    config: "WamosConfig",
+    config: "Config",
     radar_height: float | None,
     max_frames: int | None,
     workers: int = 8,
@@ -55,7 +55,7 @@ def compute_grid_bounds_from_metadata(
 
     Args:
         file_list: List of file paths
-        config: WamosConfig
+        config: Config
         radar_height: Radar height override (meters)
         max_frames: Maximum frames to process
         workers: Number of threads for parallel metadata loading
@@ -176,7 +176,7 @@ def process_single_frame(
     frame_idx: int,
     frame,
     theta,
-    config: "WamosConfig",
+    config: "Config",
     offset: float,
     shadow_start: float,
     shadow_end: float,
@@ -191,7 +191,7 @@ def process_single_frame(
         frame_idx: Index of frame within the theta object
         frame: Frame object
         theta: Theta object for bearing calculation
-        config: WamosConfig
+        config: Config
         offset: Bearing offset to apply (degrees)
         shadow_start: Shadow start angle (degrees)
         shadow_end: Shadow end angle (degrees)
@@ -222,7 +222,7 @@ def grid_frame_streaming(
     frame_idx: int,
     theta,
     bearing_obj,
-    config: "WamosConfig",
+    config: "Config",
     x_edges: np.ndarray,
     y_edges: np.ndarray,
     sum_total: np.ndarray,
@@ -241,7 +241,7 @@ def grid_frame_streaming(
         frame_idx: Index of frame within theta/bearing objects
         theta: Theta object for shadow mask
         bearing_obj: Bearing object for coordinate calculation
-        config: WamosConfig
+        config: Config
         x_edges: Grid x bin edges
         y_edges: Grid y bin edges
         sum_total: Accumulator for intensity sum (modified in-place)

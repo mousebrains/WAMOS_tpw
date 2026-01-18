@@ -15,7 +15,7 @@ from typing import Iterator, Callable, Any
 import numpy as np
 
 from wamos_tpw.bearing import Theta, Bearing
-from wamos_tpw.config import WamosConfig
+from wamos_tpw.config import Config
 from wamos_tpw.filenames import Filenames, _parse_timestamp
 from wamos_tpw.frame import Frame
 from wamos_tpw.plotting import BaseViewer, quantile_limits, calc_bin_edges, format_nav_title
@@ -327,7 +327,7 @@ def plot_frame_intensity(
     title: str | None = None,
     colorbar: bool = True,
     radar_height: float | None = None,
-    config: WamosConfig | None = None,
+    config: Config | None = None,
 ):
     """
     Plot frame intensity data using pcolormesh with ground distance axis.
@@ -343,7 +343,7 @@ def plot_frame_intensity(
         radar_height: Height of radar above water in meters.
                      Priority: this arg > config.radar.height > frame.metadata.radar_height
                      Falls back to slant range if not available.
-        config: WamosConfig for radar height fallback.
+        config: Config for radar height fallback.
 
     Returns:
         Tuple of (figure, axes, pcolormesh object)
@@ -420,7 +420,7 @@ class IntensityViewer(BaseViewer):
     Navigation wraps around (first <-> last frame).
 
     Example:
-        >>> config = WamosConfig('radar_config.yaml')
+        >>> config = Config('radar_config.yaml')
         >>> frames = [frame1, frame2, frame3]
         >>> viewer = IntensityViewer(frames, config=config, view='polar')
         >>> viewer.show()
@@ -434,7 +434,7 @@ class IntensityViewer(BaseViewer):
         cmap: str = "viridis",
         figsize: tuple[float, float] = (10, 9),
         radar_height: float | None = None,
-        config: WamosConfig | None = None,
+        config: Config | None = None,
         view: str = "polar",
     ):
         """
@@ -448,7 +448,7 @@ class IntensityViewer(BaseViewer):
             figsize: Figure size
             radar_height: Height of radar above water in meters.
                          Priority: this arg > config.radar.height > frame.metadata.radar_height
-            config: WamosConfig for bearing calculation and other settings.
+            config: Config for bearing calculation and other settings.
             view: Initial view type ('polar', 'ship', or 'earth')
         """
         import matplotlib.pyplot as plt
@@ -470,7 +470,7 @@ class IntensityViewer(BaseViewer):
             self._vmin = vmin
             self._vmax = vmax
 
-        self._config = config or WamosConfig()
+        self._config = config or Config()
 
         # Determine radar height (CLI arg > config > metadata)
         if radar_height is not None:
@@ -980,7 +980,7 @@ def run(args) -> None:
             logging.info(f"Plotting {len(frames_collected)} frames...")
 
             # Load configuration if provided
-            config = WamosConfig(args.config) if args.config else WamosConfig()
+            config = Config(args.config) if args.config else Config()
 
             # Interactive intensity viewer with navigation
             if args.plot_intensity and not args.output_dir:

@@ -13,7 +13,7 @@ from typing import Tuple
 
 import numpy as np
 
-from wamos_tpw.config import WamosConfig
+from wamos_tpw.config import Config
 from wamos_tpw.frame import Frame
 from wamos_tpw.plotting import (
     calc_bin_edges,
@@ -23,7 +23,6 @@ from wamos_tpw.plotting import (
     sort_polar_data,
     get_radar_height,
 )
-
 
 class Theta:
     """
@@ -68,7 +67,7 @@ class Theta:
     All bearing values are wrapped to [0, 360).
 
     Example:
-        >>> config = WamosConfig('radar_config.yaml')
+        >>> config = Config('radar_config.yaml')
         >>> theta = Theta(frames, config)
         >>> bearings = theta.bearing  # Array of bearing angles per radial [0, 360)
         >>> print(f"Shadow offset correction: {theta.shadow_offset:.2f}°")
@@ -84,20 +83,20 @@ class Theta:
     _SHADOW_INTENSITY_BINS = 25  # Number of distance bins for shadow analysis
     _GAUSSIAN_SIGMA = 3  # Sigma for intensity smoothing in edge detection
 
-    def __init__(self, frames: list[Frame], config: WamosConfig | None = None, refine: bool = True):
+    def __init__(self, frames: list[Frame], config: Config | None = None, refine: bool = True):
         """
         Initialize Theta calculator for a set of contiguous frames.
 
         Args:
             frames: List of contiguous Frame objects
-            config: WamosConfig object (uses defaults if None)
+            config: Config object (uses defaults if None)
             refine: Whether to refine bearing using shadow alignment
         """
         if not frames:
             raise ValueError("At least one frame is required")
 
         self._frames = frames
-        self._config = config or WamosConfig()
+        self._config = config or Config()
         self._refine = refine and self._config.theta_refinement.enabled
 
         # Calculated values (computed lazily)
@@ -838,7 +837,7 @@ class Theta:
         plt.show()
 
     @property
-    def config(self) -> WamosConfig:
+    def config(self) -> Config:
         """Return the configuration object."""
         return self._config
 
@@ -911,7 +910,7 @@ class Bearing:
     to free memory if needed.
 
     Example:
-        >>> config = WamosConfig('radar_config.yaml')
+        >>> config = Config('radar_config.yaml')
         >>> theta = Theta(frames, config)
         >>> bearing = Bearing(theta, radar_height=25.0)
         >>> x_ship, y_ship = bearing.xy_ship(frame_idx=0)
@@ -962,7 +961,7 @@ class Bearing:
         return self._theta
 
     @property
-    def config(self) -> WamosConfig:
+    def config(self) -> Config:
         """Return the configuration."""
         return self._config
 
@@ -1407,7 +1406,7 @@ def run(args) -> None:
         return
 
     # Load config
-    config = WamosConfig(args.config) if args.config else WamosConfig()
+    config = Config(args.config) if args.config else Config()
     logging.debug(f"Config: {config}")
 
     # Calculate theta

@@ -1,0 +1,10 @@
+# WAMOS parameters keyed by the tower name, lower case, in the polar file
+
+"roger revelle":
+  shadow: # Shadow regions
+    aft:  # Aft tower
+      - 130 # Left hand side of shadow angle in degrees relative to radar 0
+      - 230 # Right hand side of shadow angle in degrees relative to radar 0
+  bias: # Bias parameters
+    range: -6 # Range bias in meters
+    theta: 10 # Theta bias in degrees

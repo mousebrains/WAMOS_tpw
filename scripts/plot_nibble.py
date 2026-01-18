@@ -24,7 +24,9 @@ import argparse
 import logging
 import os
 import re
+import resource
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -35,8 +37,8 @@ src_path = Path(__file__).parent.parent / "src"
 if src_path.exists():
     sys.path.insert(0, str(src_path))
 
-from wamos_tpw import Filenames, PolarFrame  # noqa: E402
-from wamos_tpw.args import add_time_range_arguments  # noqa: E402
+from wamos_tpw import Filenames, PolarFile  # noqa: E402
+from wamos_tpw.filenames import add_common_arguments  # noqa: E402
 from wamos_tpw.logging_config import add_logging_arguments, setup_logging  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -55,8 +57,8 @@ def load_frame_data(fn: str, bins: list[int]) -> tuple | None:
         where bit_arrays is a dict with keys 12, 13, 14, 15
     """
     try:
-        frame = PolarFrame(fn)
-        ts = np.datetime64(frame.metadata.get("frame_datetime") or frame.metadata.get("datetime"))
+        frame = PolarFile(fn).frame()
+        ts = frame.timestamp
 
         # Extract 12-bit counter from 3 bins
         # Bin 0 (of the 3): bits 8-11
@@ -109,7 +111,7 @@ def main() -> int:
         description="Plot 12-bit counter from top nibbles of 3 distance bins"
     )
 
-    add_time_range_arguments(parser)
+    add_common_arguments(parser)
     add_logging_arguments(parser)
 
     parser.add_argument(
@@ -202,6 +204,7 @@ def main() -> int:
 
         # Load frames in parallel
         results: dict = {}
+        t0 = time.perf_counter()
         with ThreadPoolExecutor(max_workers=args.workers) as executor:
             futures = {executor.submit(load_frame_data, fn, bins): fn for fn in files}
 
@@ -211,9 +214,11 @@ def main() -> int:
                 if result is not None:
                     ts, counter, bit_arrays, n_bearings = result
                     results[ts] = (counter, bit_arrays, n_bearings)
+        elapsed = time.perf_counter() - t0
 
         n_loaded = len(results)
-        print(f"Successfully loaded {n_loaded} of {n_files} frames")
+        fps = n_loaded / elapsed if elapsed > 0 else 0
+        print(f"Successfully loaded {n_loaded} of {n_files} frames in {elapsed:.2f}s ({fps:.1f} frames/sec)")
 
         if n_loaded == 0:
             logger.error("No valid frames loaded")
@@ -280,6 +285,15 @@ def main() -> int:
             print(f"Saved: {args.output}")
         else:
             plt.show()
+
+        # Report peak memory usage
+        peak_mem = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # On macOS, ru_maxrss is in bytes; on Linux it's in KB
+        if sys.platform == "darwin":
+            peak_mem_mb = peak_mem / (1024 * 1024)
+        else:
+            peak_mem_mb = peak_mem / 1024
+        print(f"Peak memory: {peak_mem_mb:.1f} MB")
 
     except (FileNotFoundError, ValueError, OSError) as e:
         logger.exception(f"Error: {e}")

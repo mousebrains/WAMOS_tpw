@@ -22,7 +22,9 @@ import argparse
 import logging
 import os
 import re
+import resource
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -33,8 +35,8 @@ src_path = Path(__file__).parent.parent / "src"
 if src_path.exists():
     sys.path.insert(0, str(src_path))
 
-from wamos_tpw import Filenames, PolarFrame  # noqa: E402
-from wamos_tpw.args import add_time_range_arguments  # noqa: E402
+from wamos_tpw import Filenames, PolarFile  # noqa: E402
+from wamos_tpw.filenames import add_common_arguments  # noqa: E402
 from wamos_tpw.logging_config import add_logging_arguments, setup_logging  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -80,14 +82,14 @@ def load_frame_bits(args: tuple) -> tuple:
     """
     fn, signals = args
     try:
-        frame = PolarFrame(fn)
-        ts = np.datetime64(frame.metadata.get("frame_datetime") or frame.metadata.get("datetime"))
+        frame = PolarFile(fn).frame()
+        ts = frame.timestamp
 
         # Extract each requested signal
         result = {}
         for bit, dist_bin in signals:
-            if dist_bin >= frame.n_ranges:
-                logger.warning(f"Distance bin {dist_bin} >= n_ranges {frame.n_ranges} in {fn}")
+            if dist_bin >= frame.n_distances:
+                logger.warning(f"Distance bin {dist_bin} >= n_distances {frame.n_distances} in {fn}")
                 continue
 
             if bit == 12:
@@ -127,7 +129,7 @@ def main():
         description="Plot multiple bit signals stacked for visual correlation analysis"
     )
 
-    add_time_range_arguments(parser)
+    add_common_arguments(parser)
     add_logging_arguments(parser)
 
     parser.add_argument("signals", nargs="+", help="Signal specifications (e.g., b13_d00 b12_d20)")
@@ -192,6 +194,7 @@ def main():
         frames_data = {}
         work_items = [(fn, signals) for fn in files]
 
+        t0 = time.perf_counter()
         with ThreadPoolExecutor(max_workers=args.workers) as executor:
             futures = {executor.submit(load_frame_bits, item): item[0] for item in work_items}
 
@@ -201,8 +204,11 @@ def main():
                 ts, data, n_bearings = future.result()
                 if ts is not None and data:
                     frames_data[ts] = (data, n_bearings)
+        elapsed = time.perf_counter() - t0
 
-        print(f"Successfully loaded {len(frames_data)} unique frames")
+        n_loaded = len(frames_data)
+        fps = n_loaded / elapsed if elapsed > 0 else 0
+        print(f"Successfully loaded {n_loaded} frames in {elapsed:.2f}s ({fps:.1f} frames/sec)")
 
         if not frames_data:
             logger.error("No valid frames loaded")
@@ -255,7 +261,7 @@ def main():
                     ax.axvline(boundary, color="red", linewidth=0.3, alpha=0.5)
 
         axes[-1].set_xlabel("Sample index")
-        axes[0].set_title(f"Bit signals: {args.stime} to {args.etime} ({len(frames_data)} frames)")
+        axes[0].set_title(f"Bit signals: {args.stime} to {args.etime} ({n_loaded} frames)")
 
         fig.tight_layout()
 
@@ -264,6 +270,15 @@ def main():
             print(f"Saved: {args.output}")
         else:
             plt.show()
+
+        # Report peak memory usage
+        peak_mem = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # On macOS, ru_maxrss is in bytes; on Linux it's in KB
+        if sys.platform == "darwin":
+            peak_mem_mb = peak_mem / (1024 * 1024)
+        else:
+            peak_mem_mb = peak_mem / 1024
+        print(f"Peak memory: {peak_mem_mb:.1f} MB")
 
     except (FileNotFoundError, ValueError, OSError) as e:
         logger.exception(f"Error: {e}")

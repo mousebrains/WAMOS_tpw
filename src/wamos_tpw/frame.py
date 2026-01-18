@@ -8,11 +8,15 @@
 from __future__ import annotations
 
 import logging
-import numpy as np
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from dataclasses import dataclass, field
 
+import numpy as np
+
 from wamos_tpw.exceptions import ValidationError
+
+if TYPE_CHECKING:
+    from wamos_tpw.config import Config
 
 
 logger = logging.getLogger(__name__)
@@ -86,7 +90,12 @@ class Frame:
     _C_AIR = _C_VACUUM / _N_AIR_STANDARD  # ~299,710,639 m/s
 
     def __init__(
-        self, data: np.ndarray, metadata: FrameMetadata, copy: bool = False, validate: bool = True
+        self,
+        data: np.ndarray,
+        metadata: FrameMetadata,
+        config: Config | None = None,
+        copy: bool = False,
+        validate: bool = True,
     ) -> None:
         """
         Initialize a Frame with raw uint16 radar data.
@@ -94,6 +103,7 @@ class Frame:
         Args:
             data: Raw uint16 radar data array, shape (n_bearings, n_distances)
             metadata: FrameMetadata object with frame information
+            config: Configuration object (typically from PolarFile)
             copy: If True, copy the data array; if False, use view (default)
             validate: If True, validate data integrity (default)
         """
@@ -107,6 +117,7 @@ class Frame:
 
         self._raw_data = data.copy() if copy else data
         self._metadata = metadata
+        self._config = config
 
         # Cached extracted arrays (computed lazily)
         self._intensity: np.ndarray | None = None
@@ -119,7 +130,7 @@ class Frame:
         self.deramped_intensity: np.ndarray | None = None
         self.corrected_intensity: np.ndarray | None = None
 
-        logger.debug(f"Frame created: shape={data.shape}, timestamp={metadata.timestamp}")
+        logger.debug("Frame created: shape=%s, timestamp=%s", data.shape, metadata.timestamp)
 
     @staticmethod
     def _validate_data(data: np.ndarray, metadata: FrameMetadata) -> None:
@@ -204,6 +215,11 @@ class Frame:
     def metadata(self) -> FrameMetadata:
         """Return the frame metadata."""
         return self._metadata
+
+    @property
+    def config(self) -> Config | None:
+        """Return the configuration object."""
+        return self._config
 
     @property
     def timestamp(self) -> np.datetime64:

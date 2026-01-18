@@ -12,7 +12,7 @@ from typing import Tuple
 
 import numpy as np
 
-from wamos_tpw.config import WamosConfig
+from wamos_tpw.config import Config
 from wamos_tpw.frame import Frame
 
 
@@ -114,7 +114,7 @@ class Timestamp:
     the frame's recorded position using ship motion.
 
     Example:
-        >>> config = WamosConfig('radar_config.yaml')
+        >>> config = Config('radar_config.yaml')
         >>> timestamp = Timestamp(frames, config)
         >>> times = timestamp.times  # Absolute times for all radials
         >>> lat, lon = timestamp.position_for_frame(0)  # Positions for frame 0
@@ -123,19 +123,19 @@ class Timestamp:
     # Earth radius in meters (WGS84 mean radius)
     _EARTH_RADIUS = 6371000.0
 
-    def __init__(self, frames: list[Frame], config: WamosConfig | None = None):
+    def __init__(self, frames: list[Frame], config: Config | None = None):
         """
         Initialize Timestamp calculator for a set of contiguous frames.
 
         Args:
             frames: List of contiguous Frame objects (sorted by time)
-            config: WamosConfig object (uses defaults if None)
+            config: Config object (uses defaults if None)
         """
         if not frames:
             raise ValueError("At least one frame is required")
 
         self._frames = frames
-        self._config = config or WamosConfig()
+        self._config = config or Config()
 
         # Calculated values
         self._times_per_frame: list[np.ndarray] | None = None
@@ -460,7 +460,7 @@ def run(args) -> None:
         return
 
     # Load config
-    config = WamosConfig(args.config) if args.config else WamosConfig()
+    config = Config(args.config) if args.config else Config()
 
     # Calculate timing
     timestamp = Timestamp(frames, config)

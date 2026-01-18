@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 
 if TYPE_CHECKING:
-    from wamos_tpw.config import WamosConfig
+    from wamos_tpw.config import Config
 
 # Re-export for backward compatibility (noqa: F401)
 from wamos_tpw.combine_shadow import (  # noqa: F401
@@ -241,7 +241,7 @@ def _process_group(
         (period_str, None, elapsed_seconds) on failure
     """
     from wamos_tpw.bearing import Theta, Bearing
-    from wamos_tpw.config import WamosConfig
+    from wamos_tpw.config import Config
     from wamos_tpw.polarfile import PolarFile
     from wamos_tpw.combine_shadow import compute_chunk_shadow_offset
     from wamos_tpw.combine_streaming import (
@@ -254,7 +254,7 @@ def _process_group(
 
     try:
         # Load config
-        config = WamosConfig(config_path) if config_path else WamosConfig()
+        config = Config(config_path) if config_path else Config()
 
         # Step 1: Compute grid bounds from metadata only (parallel loading)
         bounds_result = compute_grid_bounds_from_metadata(
@@ -453,7 +453,7 @@ def _report_memory_profile() -> None:
     logging.info("======================")
 
 
-def generate_movie(args, config: "WamosConfig") -> None:
+def generate_movie(args, config: "Config") -> None:
     """
     Generate an MP4 movie from radar frame sequences.
 
@@ -473,7 +473,7 @@ def generate_movie(args, config: "WamosConfig") -> None:
             - max_frames: Max frames per group
             - process: Whether to apply processing
             - profile_memory: Whether to enable memory profiling
-        config: WamosConfig object
+        config: Config object
     """
     from wamos_tpw.processed import ProcessedFrames
 

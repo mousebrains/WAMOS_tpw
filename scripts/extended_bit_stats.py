@@ -27,7 +27,9 @@ Dec-2025, Pat Welch, pat@mousebrains.com
 import argparse
 import logging
 import os
+import resource
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -41,12 +43,42 @@ src_path = Path(__file__).parent.parent / "src"
 if src_path.exists():
     sys.path.insert(0, str(src_path))
 
-from wamos_tpw import Filenames, PolarFrame  # noqa: E402
-from wamos_tpw.args import add_time_range_arguments  # noqa: E402
+from wamos_tpw import Filenames, PolarFile  # noqa: E402
+from wamos_tpw.filenames import add_common_arguments  # noqa: E402
 from wamos_tpw.logging_config import add_logging_arguments, setup_logging  # noqa: E402
-from wamos_tpw.plotting import parse_distance_bins  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+
+def parse_distance_bins(spec: str, n_ranges: int) -> list[int]:
+    """
+    Parse a distance bin specification string.
+
+    Supports:
+    - Comma-separated values: "0,18,19,20"
+    - Slice notation: "0:21" (exclusive end)
+    - Mixed: "0,5,10:15,20"
+
+    Args:
+        spec: Distance bin specification string
+        n_ranges: Maximum number of range bins (for validation)
+
+    Returns:
+        List of distance bin indices
+    """
+    bins = []
+    for part in spec.split(","):
+        part = part.strip()
+        if ":" in part:
+            start, end = part.split(":", 1)
+            start = int(start) if start else 0
+            end = int(end) if end else n_ranges
+            bins.extend(range(start, min(end, n_ranges)))
+        else:
+            idx = int(part)
+            if 0 <= idx < n_ranges:
+                bins.append(idx)
+    return sorted(set(bins))
 
 
 def load_frame_bits(args: tuple) -> tuple:
@@ -61,10 +93,10 @@ def load_frame_bits(args: tuple) -> tuple:
     """
     fn, distance_bins = args
     try:
-        frame = PolarFrame(fn)
+        frame = PolarFile(fn).frame()
         a = np.bitwise_and(frame.raw[:, distance_bins], 0xF000)
         a = np.right_shift(a, 12).astype(np.uint8)
-        ts = np.datetime64(frame.metadata.get("frame_datetime") or frame.metadata.get("datetime"))
+        ts = frame.timestamp
         return ts, a
     except Exception as e:
         logger.warning(f"Failed to load {fn}: {e}")
@@ -440,7 +472,7 @@ def main():
         description="Generate bit statistics for many frames worth of polar files"
     )
 
-    add_time_range_arguments(parser)
+    add_common_arguments(parser)
     add_logging_arguments(parser)
 
     parser.add_argument(
@@ -508,6 +540,7 @@ def main():
         bits = {}
         work_items = [(fn, distance_bins) for fn in files]
 
+        t0 = time.perf_counter()
         with ThreadPoolExecutor(max_workers=args.workers) as executor:
             futures = {executor.submit(load_frame_bits, item): item[0] for item in work_items}
 
@@ -517,8 +550,11 @@ def main():
                 ts, a = future.result()
                 if ts is not None:
                     bits[ts] = a
+        elapsed = time.perf_counter() - t0
 
-        print(f"Successfully loaded {len(bits)} unique frames")
+        n_loaded = len(bits)
+        fps = n_loaded / elapsed if elapsed > 0 else 0
+        print(f"Successfully loaded {n_loaded} frames in {elapsed:.2f}s ({fps:.1f} frames/sec)")
 
         times = []  # Time sorted timestamps
         nibble = []  # Time sorted bits
@@ -549,7 +585,7 @@ def main():
 
         # Print results
         print(f"\nBit Statistics: {args.stime} to {args.etime}")
-        print(f"Frames: {len(bits)}, Total samples: {nibble.shape[0]}")
+        print(f"Frames: {n_loaded}, Total samples: {nibble.shape[0]}")
         print()
         print_stats_table(distance_bins, stats)
         print(f"\nSorted by frequency (>= {args.min_sigma} sigma):")
@@ -570,6 +606,15 @@ def main():
                 threshold=args.corr_threshold,
                 p_threshold=args.p_threshold,
             )
+
+        # Report peak memory usage
+        peak_mem = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # On macOS, ru_maxrss is in bytes; on Linux it's in KB
+        if sys.platform == "darwin":
+            peak_mem_mb = peak_mem / (1024 * 1024)
+        else:
+            peak_mem_mb = peak_mem / 1024
+        print(f"\nPeak memory: {peak_mem_mb:.1f} MB")
 
     except (FileNotFoundError, ValueError, OSError) as e:
         logger.exception(f"Error: {e}")

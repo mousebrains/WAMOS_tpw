@@ -90,20 +90,25 @@ Examples:
     )
 
     # Register subcommands from each module
-    from wamos_tpw import combine, processed, files, bearing
+    from wamos_tpw import combine, processed, files, bearing, theta
     from wamos_tpw import filenames, polarfile, timestamp, config
-    from wamos_tpw import deramp, destreak
+    from wamos_tpw import deramp, destreak, shadow, dewind
+    from wamos_tpw import range as range_module  # Avoid shadowing builtin
 
     combine.add_subparser(subparsers)  # wamos combine
     processed.add_subparser(subparsers)  # wamos process
     files.add_subparser(subparsers)  # wamos view
     bearing.add_subparser(subparsers)  # wamos bearing
+    theta.add_subparser(subparsers)  # wamos theta
+    range_module.add_subparser(subparsers)  # wamos range
     filenames.add_subparser(subparsers)  # wamos list
     polarfile.add_subparser(subparsers)  # wamos parse
     timestamp.add_subparser(subparsers)  # wamos timestamp
     config.add_subparser(subparsers)  # wamos config
     deramp.add_subparser(subparsers)  # wamos deramp
     destreak.add_subparser(subparsers)  # wamos destreak
+    shadow.add_subparser(subparsers)  # wamos shadow
+    dewind.add_subparser(subparsers)  # wamos dewind
 
     # Parse arguments
     args = parser.parse_args()

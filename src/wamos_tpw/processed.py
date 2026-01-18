@@ -14,7 +14,7 @@ import numpy as np
 from tqdm import tqdm
 
 from wamos_tpw.bearing import Theta, Bearing
-from wamos_tpw.config import WamosConfig
+from wamos_tpw.config import Config
 from wamos_tpw.deramp import Deramp
 from wamos_tpw.destreak import Destreak
 from wamos_tpw.files import Files
@@ -47,7 +47,7 @@ class ProcessedFrames(Files):
         groupby: str = "h",
         workers: int | None = None,
         loader: Callable[[str], Frame | None] | None = None,
-        config: WamosConfig | None = None,
+        config: Config | None = None,
         radar_height: float | None = None,
     ) -> None:
         """
@@ -60,15 +60,15 @@ class ProcessedFrames(Files):
             groupby: Time grouping frequency (e.g., 'h', '30m', 'D')
             workers: Number of parallel workers (None = auto, 1 = sequential)
             loader: Optional custom file loader function
-            config: WamosConfig for processing parameters
+            config: Config for processing parameters
             radar_height: Height of radar above water in meters
         """
         super().__init__(stime, etime, polar_path, groupby, workers, loader)
-        self._config = config or WamosConfig()
+        self._config = config or Config()
         self._radar_height = radar_height
 
     @property
-    def config(self) -> WamosConfig:
+    def config(self) -> Config:
         """Return the configuration."""
         return self._config
 
@@ -526,7 +526,7 @@ class ProcessedViewer(BaseViewer):
 
     Example:
         >>> frames = [frame1, frame2, frame3]
-        >>> config = WamosConfig()
+        >>> config = Config()
         >>> viewer = ProcessedViewer(frames, config=config, view='polar')
         >>> viewer.show()
     """
@@ -539,7 +539,7 @@ class ProcessedViewer(BaseViewer):
         cmap: str = "viridis",
         figsize: tuple[float, float] = (10, 9),
         radar_height: float | None = None,
-        config: WamosConfig | None = None,
+        config: Config | None = None,
         view: str = "polar",
     ):
         """
@@ -552,7 +552,7 @@ class ProcessedViewer(BaseViewer):
             cmap: Colormap name
             figsize: Figure size
             radar_height: Height of radar above water in meters
-            config: WamosConfig for bearing calculation
+            config: Config for bearing calculation
             view: Initial view type ('polar', 'ship', or 'earth')
         """
         import matplotlib.pyplot as plt
@@ -582,7 +582,7 @@ class ProcessedViewer(BaseViewer):
             self._vmin = vmin
             self._vmax = vmax
 
-        self._config = config or WamosConfig()
+        self._config = config or Config()
 
         # Determine radar height (CLI arg > config > metadata)
         if radar_height is not None:
@@ -946,7 +946,7 @@ def run(args) -> None:
     )
 
     # Load config
-    config = WamosConfig(args.config) if args.config else WamosConfig()
+    config = Config(args.config) if args.config else Config()
 
     t0 = time.time()
 

@@ -1,0 +1,23 @@
+# WAMOS parameters keyed by the tower name, lower case, in the polar file
+
+# Theta refinement settings (used by bearing.Theta for multi-frame processing)
+theta_refinement:
+  enabled: true  # Enable shadow-based theta refinement
+  min_frames: 3  # Minimum frames required for refinement
+
+"roger revelle":
+  shadow: # Shadow regions
+    range_fraction: 0.1 # fraction of range bins to use for detecting the shadow region
+    aft:  # Aft tower
+      - 130 # Left hand side of shadow angle in degrees relative to radar 0
+      - 230 # Right hand side of shadow angle in degrees relative to radar 0
+
+  bias: # Bias parameters
+    range: -6 # Range bias in meters
+    theta: 10 # Theta bias in degrees
+
+  deramp: # Deramping parameters
+    order: 4 # Fit to 1 + 1/r + 1/r^2 + ... + 1/r^order
+
+  dewind: # Dewind parameters
+    order: 2 # Fit to polynomial of order
