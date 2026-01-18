@@ -75,11 +75,12 @@ class Theta:
         """
         data = frame.raw
         n_radials = frame.n_bearings
+        col0 = data[:, 0]
 
-        # Step 1: Extract bit 13 transitions
+        # Step 1: Extract bit 13 transitions using XOR (avoids intermediate bool array)
         t0 = _time.perf_counter()
-        bit_13 = (data[:, 0] & self._MASK_BIT13) != 0
-        transitions = self._extract_transitions(bit_13, n_radials)
+        first_bit_odd = bool(col0[0] & self._MASK_BIT13)
+        transitions = self._extract_transitions_fast(col0, n_radials)
         self._timing["extract_transitions"] = _time.perf_counter() - t0
 
         # Step 2: Fix missing transitions
@@ -89,24 +90,24 @@ class Theta:
 
         # Step 3: Interpolate theta values and wrap to [0, 360)
         t0 = _time.perf_counter()
-        theta = self._interpolate_theta(transitions, bit_13[0], n_radials) % 360
+        theta = self._interpolate_theta_vectorized(transitions, first_bit_odd, n_radials)
         self._timing["interpolate"] = _time.perf_counter() - t0
 
         return theta
 
-    def _extract_transitions(self, bit_13: np.ndarray, n_radials: int) -> np.ndarray:
+    def _extract_transitions_fast(self, col0: np.ndarray, n_radials: int) -> np.ndarray:
         """
-        Extract degree transition points from bit 13 pattern.
+        Extract degree transition points using XOR (no intermediate bool array).
 
         Args:
-            bit_13: Boolean array of bit 13 values for each radial
+            col0: First column of raw data (contains bit 13)
             n_radials: Total number of radials
 
         Returns:
             Array of transition indices including boundaries
         """
-        # Find all degree transitions (bit changes)
-        transitions = np.where(np.diff(bit_13))[0] + 1
+        # XOR adjacent values and check bit 13 - avoids creating full boolean array
+        transitions = np.where((col0[:-1] ^ col0[1:]) & self._MASK_BIT13)[0] + 1
 
         # Add boundaries (start and end)
         return np.concatenate([[0], transitions, [n_radials]])
@@ -126,9 +127,15 @@ class Theta:
 
         segment_sizes = np.diff(transitions)
         median_size = np.median(segment_sizes)
+        threshold = median_size * self._SEGMENT_SUSPICIOUS_MULTIPLIER
+
+        # Early exit if no suspicious segments (common case)
+        suspicious_mask = segment_sizes > threshold
+        if not suspicious_mask.any():
+            return transitions
 
         # Find segments that are likely missing a transition
-        suspicious = np.where(segment_sizes > median_size * self._SEGMENT_SUSPICIOUS_MULTIPLIER)[0]
+        suspicious = np.where(suspicious_mask)[0]
 
         new_transitions = []
         for seg_idx in suspicious:
@@ -148,11 +155,11 @@ class Theta:
 
         return transitions
 
-    def _interpolate_theta(
+    def _interpolate_theta_vectorized(
         self, transitions: np.ndarray, first_bit_odd: bool, n_radials: int
     ) -> np.ndarray:
         """
-        Interpolate theta values within each transition segment.
+        Interpolate theta values using vectorized operations (no Python loops).
 
         Args:
             transitions: Array of transition indices
@@ -160,44 +167,47 @@ class Theta:
             n_radials: Total number of radials
 
         Returns:
-            Array of theta angles for each radial
+            Array of theta angles for each radial, wrapped to [0, 360)
         """
-        theta = np.zeros(n_radials, dtype=np.float32)
-
-        # Determine starting degree based on bit 13 parity
-        current_degree = 1.0 if first_bit_odd else 0.0
-
-        # Pre-compute segment sizes
         segment_sizes = np.diff(transitions)
         n_segments = len(segment_sizes)
-        avg_radials_per_degree = n_radials / n_segments if n_segments > 0 else n_radials / 360
 
-        # Process each segment with adaptive width
-        for i in range(n_segments):
-            start_idx = transitions[i]
-            end_idx = transitions[i + 1]
-            n_radials_in_segment = segment_sizes[i]
+        if n_segments == 0:
+            return np.zeros(n_radials, dtype=np.float32)
 
-            # Apply smoothing for interior segments
-            if i > 0 and i < n_segments - 1:
-                prev_size = segment_sizes[i - 1]
-                next_size = segment_sizes[i + 1]
-                w = self._SMOOTHING_WEIGHTS
-                smoothed_size = w[0] * n_radials_in_segment + w[1] * prev_size + w[2] * next_size
-                degree_width = smoothed_size / avg_radials_per_degree
-            else:
-                degree_width = n_radials_in_segment / avg_radials_per_degree
+        avg_radials_per_degree = n_radials / n_segments
+        segment_sizes_f = segment_sizes.astype(np.float32)
 
-            # Distribute theta within segment
-            sub_theta = (
-                current_degree
-                + (np.arange(n_radials_in_segment) + 0.5) / n_radials_in_segment * degree_width
+        # Compute degree widths for all segments
+        degree_widths = segment_sizes_f / avg_radials_per_degree
+
+        # Apply smoothing to interior segments (vectorized)
+        if n_segments > 2:
+            w0, w1, w2 = self._SMOOTHING_WEIGHTS
+            smoothed_sizes = segment_sizes_f.copy()
+            smoothed_sizes[1:-1] = (
+                w0 * segment_sizes_f[1:-1] + w1 * segment_sizes_f[:-2] + w2 * segment_sizes_f[2:]
             )
-            theta[start_idx:end_idx] = sub_theta
+            degree_widths = smoothed_sizes / avg_radials_per_degree
 
-            current_degree += degree_width
+        # Cumulative sum gives starting degree for each segment
+        start_degree = 1.0 if first_bit_odd else 0.0
+        segment_starts_deg = np.empty(n_segments, dtype=np.float32)
+        segment_starts_deg[0] = start_degree
+        if n_segments > 1:
+            np.cumsum(degree_widths[:-1], out=segment_starts_deg[1:])
+            segment_starts_deg[1:] += start_degree
 
-        return theta
+        # Compute local position within each segment
+        segment_starts_idx = transitions[:-1]
+        local_pos = np.arange(n_radials) - np.repeat(segment_starts_idx, segment_sizes)
+
+        # Compute theta: start_degree + (local_pos + 0.5) / segment_size * degree_width
+        theta = np.repeat(segment_starts_deg, segment_sizes) + (local_pos + 0.5) / np.repeat(
+            segment_sizes_f, segment_sizes
+        ) * np.repeat(degree_widths, segment_sizes)
+
+        return (theta % 360).astype(np.float32)
 
     # -------------------------------------------------------------------------
     # Public API
