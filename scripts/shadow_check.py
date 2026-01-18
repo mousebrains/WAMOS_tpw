@@ -292,44 +292,55 @@ def main() -> int:
         if n_with_shadow > 0:
             # Index statistics
             idx_start_mean = shadow_indices_start.mean()
+            idx_start_median = np.median(shadow_indices_start)
             idx_start_std = shadow_indices_start.std()
             idx_start_var = shadow_indices_start.var()
             idx_start_skew = stats.skew(shadow_indices_start)
             idx_start_kurt = stats.kurtosis(shadow_indices_start)
             idx_end_mean = shadow_indices_end.mean()
+            idx_end_median = np.median(shadow_indices_end)
             idx_end_std = shadow_indices_end.std()
             idx_end_var = shadow_indices_end.var()
             idx_end_skew = stats.skew(shadow_indices_end)
             idx_end_kurt = stats.kurtosis(shadow_indices_end)
             idx_width = shadow_indices_end - shadow_indices_start
             idx_width_mean = idx_width.mean()
+            idx_width_median = np.median(idx_width)
             idx_width_std = idx_width.std()
 
             # Theta statistics
             theta_start_mean = shadow_thetas_start.mean()
+            theta_start_median = np.median(shadow_thetas_start)
             theta_start_std = shadow_thetas_start.std()
             theta_start_var = shadow_thetas_start.var()
             theta_start_skew = stats.skew(shadow_thetas_start)
             theta_start_kurt = stats.kurtosis(shadow_thetas_start)
             theta_end_mean = shadow_thetas_end.mean()
+            theta_end_median = np.median(shadow_thetas_end)
             theta_end_std = shadow_thetas_end.std()
             theta_end_var = shadow_thetas_end.var()
             theta_end_skew = stats.skew(shadow_thetas_end)
             theta_end_kurt = stats.kurtosis(shadow_thetas_end)
             theta_width = shadow_thetas_end - shadow_thetas_start
             theta_width_mean = theta_width.mean()
+            theta_width_median = np.median(theta_width)
             theta_width_std = theta_width.std()
 
             print("\n=== Shadow Index Statistics ===")
             print(
-                f"Start index:  mean={idx_start_mean:.1f}, std={idx_start_std:.2f}, "
-                f"var={idx_start_var:.2f}, skew={idx_start_skew:.3f}, kurt={idx_start_kurt:.3f}"
+                f"Start index:  mean={idx_start_mean:.1f}, median={idx_start_median:.1f}, "
+                f"std={idx_start_std:.2f}, var={idx_start_var:.2f}, "
+                f"skew={idx_start_skew:.3f}, kurt={idx_start_kurt:.3f}"
             )
             print(
-                f"End index:    mean={idx_end_mean:.1f}, std={idx_end_std:.2f}, "
-                f"var={idx_end_var:.2f}, skew={idx_end_skew:.3f}, kurt={idx_end_kurt:.3f}"
+                f"End index:    mean={idx_end_mean:.1f}, median={idx_end_median:.1f}, "
+                f"std={idx_end_std:.2f}, var={idx_end_var:.2f}, "
+                f"skew={idx_end_skew:.3f}, kurt={idx_end_kurt:.3f}"
             )
-            print(f"Width:        mean={idx_width_mean:.1f}, std={idx_width_std:.2f}")
+            print(
+                f"Width:        mean={idx_width_mean:.1f}, median={idx_width_median:.1f}, "
+                f"std={idx_width_std:.2f}"
+            )
             print(
                 f"Range:        start=[{shadow_indices_start.min()}, {shadow_indices_start.max()}], "
                 f"end=[{shadow_indices_end.min()}, {shadow_indices_end.max()}]"
@@ -337,14 +348,19 @@ def main() -> int:
 
             print("\n=== Shadow Theta Statistics ===")
             print(
-                f"Start theta:  mean={theta_start_mean:.2f}°, std={theta_start_std:.3f}°, "
-                f"var={theta_start_var:.4f}, skew={theta_start_skew:.3f}, kurt={theta_start_kurt:.3f}"
+                f"Start theta:  mean={theta_start_mean:.2f}°, median={theta_start_median:.2f}°, "
+                f"std={theta_start_std:.3f}°, var={theta_start_var:.4f}, "
+                f"skew={theta_start_skew:.3f}, kurt={theta_start_kurt:.3f}"
             )
             print(
-                f"End theta:    mean={theta_end_mean:.2f}°, std={theta_end_std:.3f}°, "
-                f"var={theta_end_var:.4f}, skew={theta_end_skew:.3f}, kurt={theta_end_kurt:.3f}"
+                f"End theta:    mean={theta_end_mean:.2f}°, median={theta_end_median:.2f}°, "
+                f"std={theta_end_std:.3f}°, var={theta_end_var:.4f}, "
+                f"skew={theta_end_skew:.3f}, kurt={theta_end_kurt:.3f}"
             )
-            print(f"Width:        mean={theta_width_mean:.2f}°, std={theta_width_std:.3f}°")
+            print(
+                f"Width:        mean={theta_width_mean:.2f}°, median={theta_width_median:.2f}°, "
+                f"std={theta_width_std:.3f}°"
+            )
             print(
                 f"Range:        start=[{shadow_thetas_start.min():.2f}°, {shadow_thetas_start.max():.2f}°], "
                 f"end=[{shadow_thetas_end.min():.2f}°, {shadow_thetas_end.max():.2f}°]"
