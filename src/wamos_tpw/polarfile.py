@@ -16,6 +16,8 @@ import re
 from pathlib import Path
 from typing import BinaryIO, Iterator, Any, Callable
 
+import time as _time
+
 import numpy as np
 import zstandard as zstd
 
@@ -76,6 +78,7 @@ class PolarFile:
         self._frames: list[Frame] = []
         self._metadata_only = metadata_only
         self._config = config or Config()
+        self._timing: dict[str, float] = {}
 
         self._parse()
 
@@ -86,24 +89,30 @@ class PolarFile:
 
         # zstd requires special handling - decompress to memory first
         if suffix == ".zst" or name.endswith(".pol.zst"):
+            t0 = _time.perf_counter()
             with open(self._filepath, "rb") as f:
                 dctx = zstd.ZstdDecompressor()
                 # Use stream_reader for files without content size in header
                 with dctx.stream_reader(f) as reader:
                     data = reader.read()
             fp = io.BytesIO(data)
+            self._timing["decompress"] = _time.perf_counter() - t0
             self._parse_from_fp(fp)
         else:
+            t0 = _time.perf_counter()
             opener = self._get_opener()
             with opener(str(self._filepath), "rb") as fp:
+                self._timing["decompress"] = _time.perf_counter() - t0
                 self._parse_from_fp(fp)
 
     def _parse_from_fp(self, fp: BinaryIO) -> None:
         """Parse the polar file from an open file handle."""
         # Parse header
+        t0 = _time.perf_counter()
         header_lines, frame_lines = self._read_header(fp)
         self._header = self._parse_header(header_lines)
         self._frame_metadata = self._parse_frame_section(frame_lines)
+        self._timing["parse_header"] = _time.perf_counter() - t0
 
         # Extract tower-specific config (must happen before creating Frames)
         tower = self._header.get("TOWER", "").lower()
@@ -120,7 +129,9 @@ class PolarFile:
 
         # Parse binary data (skip if metadata_only)
         if not self._metadata_only:
+            t0 = _time.perf_counter()
             self._parse_data(fp)
+            self._timing["parse_data"] = _time.perf_counter() - t0
 
     def _get_opener(self) -> Callable[..., BinaryIO]:
         """Get the appropriate file opener based on extension."""
@@ -428,6 +439,11 @@ class PolarFile:
     def config(self) -> Config:
         """Return the configuration object."""
         return self._config
+
+    @property
+    def timing(self) -> dict[str, float]:
+        """Return timing information for sub-steps (decompress, parse_header, parse_data)."""
+        return self._timing
 
     @property
     def frames(self) -> list[Frame]:

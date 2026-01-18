@@ -69,6 +69,13 @@ _memory_stats = {
     "destreak": [],
     "shadow": [],
 }
+# Sub-step timing accumulators
+_substep_stats: dict[str, dict[str, list[float]]] = {
+    "polarfile": {},
+    "theta": {},
+    "destreak": {},
+    "shadow": {},
+}
 
 
 def load_frame(
@@ -88,6 +95,7 @@ def load_frame(
     try:
         timings = {}
         memories = {}
+        substeps: dict[str, dict[str, float]] = {}
 
         # PolarFile loading
         tracemalloc.start()
@@ -96,6 +104,7 @@ def load_frame(
         timings["polarfile"] = time.perf_counter() - t0
         _, memories["polarfile"] = tracemalloc.get_traced_memory()
         tracemalloc.stop()
+        substeps["polarfile"] = pf.timing
 
         # Frame extraction
         tracemalloc.start()
@@ -112,6 +121,7 @@ def load_frame(
         timings["theta"] = time.perf_counter() - t0
         _, memories["theta"] = tracemalloc.get_traced_memory()
         tracemalloc.stop()
+        substeps["theta"] = theta.timing
 
         # Destreak processing
         tracemalloc.start()
@@ -120,6 +130,7 @@ def load_frame(
         timings["destreak"] = time.perf_counter() - t0
         _, memories["destreak"] = tracemalloc.get_traced_memory()
         tracemalloc.stop()
+        substeps["destreak"] = destreaked.timing
 
         # Shadow detection
         tracemalloc.start()
@@ -128,6 +139,7 @@ def load_frame(
         timings["shadow"] = time.perf_counter() - t0
         _, memories["shadow"] = tracemalloc.get_traced_memory()
         tracemalloc.stop()
+        substeps["shadow"] = shadow.timing
 
         # Accumulate timing stats (thread-safe)
         with _timing_lock:
@@ -135,6 +147,12 @@ def load_frame(
                 _timing_stats[step].append(t)
             for step, m in memories.items():
                 _memory_stats[step].append(m)
+            # Accumulate sub-step timings
+            for step, sub_timings in substeps.items():
+                for sub_step, sub_time in sub_timings.items():
+                    if sub_step not in _substep_stats[step]:
+                        _substep_stats[step][sub_step] = []
+                    _substep_stats[step][sub_step].append(sub_time)
 
         return {
             "filename": fn,
@@ -341,6 +359,20 @@ def main() -> int:
                     print(
                         f"{step:<12} {avg_time_ms:<12.3f} {time_pct:<10.1f} {avg_mem_kb:<14.1f} {mem_pct:<10.1f}"
                     )
+
+            # Print sub-step timing breakdown
+            print("\n=== Sub-Step Timing Breakdown ===")
+            for step in ["polarfile", "theta", "destreak", "shadow"]:
+                substeps = _substep_stats.get(step, {})
+                if substeps:
+                    step_total = sum(_timing_stats[step])
+                    print(f"\n{step}:")
+                    for sub_name, sub_times in sorted(substeps.items()):
+                        if sub_times:
+                            avg_sub_ms = np.mean(sub_times) * 1000
+                            sub_total = sum(sub_times)
+                            sub_pct = (sub_total / step_total * 100) if step_total > 0 else 0
+                            print(f"  {sub_name:<20} {avg_sub_ms:>8.3f} ms  ({sub_pct:>5.1f}%)")
 
         if n_loaded == 0:
             logger.error("No valid frames loaded")

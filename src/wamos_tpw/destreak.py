@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import logging
+import time as _time
+
 import numpy as np
 from scipy.signal import convolve2d
 from scipy import ndimage
@@ -65,6 +67,7 @@ class Destreak:
             raise ValueError("frame is required")
 
         self._config = frame.config
+        self._timing: dict[str, float] = {}
         config = self._config
 
         # Get parameters from config (with class defaults as fallback)
@@ -77,10 +80,13 @@ class Destreak:
         kAdjacent = np.array([[1, 1, 1], [0, 0, 0], [1, 1, 1]], dtype=np.float32)
         kAdjacent = kAdjacent / kAdjacent.sum()  # Normalize
 
+        t0 = _time.perf_counter()
         intensity = frame.intensity.astype(np.float32)  # Signed for calculation
         a = convolve2d(intensity, kernel, mode="same", boundary="wrap")
         b = convolve2d(intensity, kAdjacent, mode="same", boundary="wrap")
+        self._timing["convolve"] = _time.perf_counter() - t0
 
+        t0 = _time.perf_counter()
         sigma = np.std(a)
         thres_center = threshold_sigma * sigma
         thres_adjacent = thres_center / 2
@@ -91,6 +97,7 @@ class Destreak:
         qAdjacent = a <= -thres_adjacent
         qCenter = a >= thres_center
         q = qCenter & np.roll(qAdjacent, +1, axis=0) & np.roll(qAdjacent, -1, axis=0)
+        self._timing["threshold"] = _time.perf_counter() - t0
 
         qAny = np.any(q, axis=1)
 
@@ -99,8 +106,11 @@ class Destreak:
             self._n_streak_pixels = 0
             self._streak_mask = q if save_mask else None
             self._corrected_intensity = intensity
+            self._timing["label"] = 0.0
+            self._timing["replace"] = 0.0
             return
 
+        t0 = _time.perf_counter()
         qStreaks = q[qAny, :]
 
         kernelHorizontal = np.array([[0, 0, 0], [1, 1, 1], [0, 0, 0]], dtype=np.uint8)
@@ -119,13 +129,16 @@ class Destreak:
         qStreaks &= RL >= min_streak_length  # Keep only long enough streaks
 
         q[qAny] = qStreaks  # Update original mask
+        self._timing["label"] = _time.perf_counter() - t0
 
         # Store statistics
         self._n_streak_pixels = int(q.sum())
         self._streak_mask = q if save_mask else None
 
+        t0 = _time.perf_counter()
         destreaked = intensity.copy()
         destreaked[q] = b[q]  # Replace streak pixels with adjacent average
+        self._timing["replace"] = _time.perf_counter() - t0
 
         self._corrected_intensity = destreaked
 
@@ -159,6 +172,11 @@ class Destreak:
     def config(self) -> Config:
         """Return the configuration object."""
         return self._config
+
+    @property
+    def timing(self) -> dict[str, float]:
+        """Return timing information for sub-steps (convolve, threshold, label, replace)."""
+        return self._timing
 
     def __repr__(self) -> str:
         return f"Destreak(streaks={self._n_streak_pixels} ({self.streak_fraction:.2%}))"

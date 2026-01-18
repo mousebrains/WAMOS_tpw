@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import logging
+import time as _time
 from typing import TYPE_CHECKING
+
 from scipy.signal import convolve2d
 
 import numpy as np
@@ -69,6 +71,7 @@ class Shadow:
                    (config is obtained from theta.config)
         """
         self._config = theta.config
+        self._timing: dict[str, float] = {}
         config = self._config.get("shadow", Config())
 
         edges = []
@@ -81,14 +84,17 @@ class Shadow:
             self._indices = np.empty_like(self._thetas, dtype=int)
             return
 
+        t0 = _time.perf_counter()
         edges = np.array(edges)
         indices = theta.index(edges)  # Indices for these thetas
+        self._timing["index_lookup"] = _time.perf_counter() - t0
 
         range_fraction = config.get("range_fraction", self._RANGE_FRACTION_DEFAULT)
         range_slice = int(
             np.clip(np.ceil(range_fraction * intensity.shape[1]), 1, intensity.shape[1])
         )
 
+        t0 = _time.perf_counter()
         intensity = intensity[:, :range_slice]
         kernel = np.ones((5, 5))  # LHS is +1
         kernel[2, :] = 0  # Ignore center
@@ -103,9 +109,12 @@ class Shadow:
             iRHS = np.argmax(bSum)  # high to low
             iLHS = np.argmin(bSum)  # low to high
             regions.append((iLHS + region[0], iRHS + region[0]))
+        self._timing["convolve"] = _time.perf_counter() - t0
 
+        t0 = _time.perf_counter()
         self._indices = np.array(regions)
         self._thetas = theta.theta[self._indices]
+        self._timing["extract"] = _time.perf_counter() - t0
 
     def mask(self, intensity: np.ndarray) -> np.ndarray:
         """Return intensity with shadow regions masked as NaN."""
@@ -130,6 +139,11 @@ class Shadow:
     def config(self) -> Config:
         """Return the configuration object."""
         return self._config
+
+    @property
+    def timing(self) -> dict[str, float]:
+        """Return timing information for sub-steps (index_lookup, convolve, extract)."""
+        return self._timing
 
     def __repr__(self) -> str:
         regions_str = ", ".join(f"[{s:.2f}-{e:.2f}]" for s, e in self._thetas)

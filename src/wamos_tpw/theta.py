@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+import time as _time
 
 import numpy as np
 
@@ -60,6 +61,7 @@ class Theta:
                    (config is obtained from frame.config)
         """
         self._config = frame.config
+        self._timing: dict[str, float] = {}
 
         # Calculate theta
         self._theta = self._calculate(frame)
@@ -75,14 +77,20 @@ class Theta:
         n_radials = frame.n_bearings
 
         # Step 1: Extract bit 13 transitions
+        t0 = _time.perf_counter()
         bit_13 = (data[:, 0] & self._MASK_BIT13) != 0
         transitions = self._extract_transitions(bit_13, n_radials)
+        self._timing["extract_transitions"] = _time.perf_counter() - t0
 
         # Step 2: Fix missing transitions
+        t0 = _time.perf_counter()
         transitions = self._fix_missing_transitions(transitions)
+        self._timing["fix_transitions"] = _time.perf_counter() - t0
 
         # Step 3: Interpolate theta values and wrap to [0, 360)
+        t0 = _time.perf_counter()
         theta = self._interpolate_theta(transitions, bit_13[0], n_radials) % 360
+        self._timing["interpolate"] = _time.perf_counter() - t0
 
         return theta
 
@@ -225,6 +233,11 @@ class Theta:
     def config(self) -> Config:
         """Return the configuration object."""
         return self._config
+
+    @property
+    def timing(self) -> dict[str, float]:
+        """Return timing information for sub-steps."""
+        return self._timing
 
     def __len__(self) -> int:
         """Return number of radials."""
