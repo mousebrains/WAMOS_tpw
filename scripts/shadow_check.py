@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Check theta (beam angle) and shadow region statistics across multiple frames.
+Check shadow region statistics across multiple frames.
 
 This script loads all polar files for a given time range and calculates
 statistics on shadow region detection, including variance in shadow indices
@@ -8,17 +8,17 @@ and theta angles.
 
 Features:
   - Detects shadow regions using intensity-based edge detection
-  - Calculates variance statistics for shadow start/end indices and thetas
-  - Generates 4-panel scatter plots showing shadow parameter relationships
-  - Reports mean, std, variance, and range for all shadow parameters
+  - Calculates variance, skewness, and kurtosis for shadow start/end indices and thetas
+  - Generates 4-panel plots: histograms of distributions relative to means, scatter plots
+  - Reports mean, std, variance, skewness, kurtosis, and range for all shadow parameters
 
 Usage:
-    python theta_check.py 20220405 20220406 /path/to/POLAR
-    python theta_check.py 20220405 20220406 /path/to/POLAR --plot
-    python theta_check.py 20220405 20220406 /path/to/POLAR --plot -o shadow_stats.png
+    python shadow_check.py 20220405 20220406 /path/to/POLAR
+    python shadow_check.py 20220405 20220406 /path/to/POLAR --plot
+    python shadow_check.py 20220405 20220406 /path/to/POLAR --plot -o shadow_stats.png
 
 For best performance with free-threaded Python 3.13+:
-    python3.13t theta_check.py ... --workers 8
+    python3.13t shadow_check.py ... --workers 8
 
 Dec-2025, Pat Welch, pat@mousebrains.com
         in collaboration with Anthropic's Claude Code
@@ -34,6 +34,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
+from scipy import stats
 
 # Add src to path for development
 src_path = Path(__file__).parent.parent / "src"
@@ -293,9 +294,13 @@ def main() -> int:
             idx_start_mean = shadow_indices_start.mean()
             idx_start_std = shadow_indices_start.std()
             idx_start_var = shadow_indices_start.var()
+            idx_start_skew = stats.skew(shadow_indices_start)
+            idx_start_kurt = stats.kurtosis(shadow_indices_start)
             idx_end_mean = shadow_indices_end.mean()
             idx_end_std = shadow_indices_end.std()
             idx_end_var = shadow_indices_end.var()
+            idx_end_skew = stats.skew(shadow_indices_end)
+            idx_end_kurt = stats.kurtosis(shadow_indices_end)
             idx_width = shadow_indices_end - shadow_indices_start
             idx_width_mean = idx_width.mean()
             idx_width_std = idx_width.std()
@@ -304,19 +309,25 @@ def main() -> int:
             theta_start_mean = shadow_thetas_start.mean()
             theta_start_std = shadow_thetas_start.std()
             theta_start_var = shadow_thetas_start.var()
+            theta_start_skew = stats.skew(shadow_thetas_start)
+            theta_start_kurt = stats.kurtosis(shadow_thetas_start)
             theta_end_mean = shadow_thetas_end.mean()
             theta_end_std = shadow_thetas_end.std()
             theta_end_var = shadow_thetas_end.var()
+            theta_end_skew = stats.skew(shadow_thetas_end)
+            theta_end_kurt = stats.kurtosis(shadow_thetas_end)
             theta_width = shadow_thetas_end - shadow_thetas_start
             theta_width_mean = theta_width.mean()
             theta_width_std = theta_width.std()
 
             print("\n=== Shadow Index Statistics ===")
             print(
-                f"Start index:  mean={idx_start_mean:.1f}, std={idx_start_std:.2f}, var={idx_start_var:.2f}"
+                f"Start index:  mean={idx_start_mean:.1f}, std={idx_start_std:.2f}, "
+                f"var={idx_start_var:.2f}, skew={idx_start_skew:.3f}, kurt={idx_start_kurt:.3f}"
             )
             print(
-                f"End index:    mean={idx_end_mean:.1f}, std={idx_end_std:.2f}, var={idx_end_var:.2f}"
+                f"End index:    mean={idx_end_mean:.1f}, std={idx_end_std:.2f}, "
+                f"var={idx_end_var:.2f}, skew={idx_end_skew:.3f}, kurt={idx_end_kurt:.3f}"
             )
             print(f"Width:        mean={idx_width_mean:.1f}, std={idx_width_std:.2f}")
             print(
@@ -326,10 +337,12 @@ def main() -> int:
 
             print("\n=== Shadow Theta Statistics ===")
             print(
-                f"Start theta:  mean={theta_start_mean:.2f}°, std={theta_start_std:.3f}°, var={theta_start_var:.4f}"
+                f"Start theta:  mean={theta_start_mean:.2f}°, std={theta_start_std:.3f}°, "
+                f"var={theta_start_var:.4f}, skew={theta_start_skew:.3f}, kurt={theta_start_kurt:.3f}"
             )
             print(
-                f"End theta:    mean={theta_end_mean:.2f}°, std={theta_end_std:.3f}°, var={theta_end_var:.4f}"
+                f"End theta:    mean={theta_end_mean:.2f}°, std={theta_end_std:.3f}°, "
+                f"var={theta_end_var:.4f}, skew={theta_end_skew:.3f}, kurt={theta_end_kurt:.3f}"
             )
             print(f"Width:        mean={theta_width_mean:.2f}°, std={theta_width_std:.3f}°")
             print(
@@ -348,23 +361,39 @@ def main() -> int:
 
             fig, axes = plt.subplots(2, 2, figsize=figsize)
 
-            # Plot 1: Shadow indices over time (frame number)
+            # Plot 1: Histogram of shadow indices relative to their means (combined start/end)
             ax = axes[0, 0]
-            ax.scatter(frame_numbers, shadow_indices_start, s=3, alpha=0.5, label="Start", c="blue")
-            ax.scatter(frame_numbers, shadow_indices_end, s=3, alpha=0.5, label="End", c="red")
-            ax.set_xlabel("Frame number")
-            ax.set_ylabel("Shadow index")
-            ax.set_title("Shadow Indices vs Frame")
+            idx_start_rel = shadow_indices_start - idx_start_mean
+            idx_end_rel = shadow_indices_end - idx_end_mean
+            bins_idx = np.linspace(
+                min(idx_start_rel.min(), idx_end_rel.min()),
+                max(idx_start_rel.max(), idx_end_rel.max()),
+                50,
+            )
+            ax.hist(idx_start_rel, bins=bins_idx, alpha=0.6, label="Start", color="blue")
+            ax.hist(idx_end_rel, bins=bins_idx, alpha=0.6, label="End", color="red")
+            ax.axvline(0, color="black", linestyle="--", linewidth=1, alpha=0.7)
+            ax.set_xlabel("Index deviation from mean")
+            ax.set_ylabel("Count")
+            ax.set_title("Shadow Index Distributions (relative to mean)")
             ax.legend()
             ax.grid(True, alpha=0.3)
 
-            # Plot 2: Shadow thetas over time (frame number)
+            # Plot 2: Histogram of shadow thetas relative to their means (combined start/end)
             ax = axes[0, 1]
-            ax.scatter(frame_numbers, shadow_thetas_start, s=3, alpha=0.5, label="Start", c="blue")
-            ax.scatter(frame_numbers, shadow_thetas_end, s=3, alpha=0.5, label="End", c="red")
-            ax.set_xlabel("Frame number")
-            ax.set_ylabel("Shadow theta (°)")
-            ax.set_title("Shadow Thetas vs Frame")
+            theta_start_rel = shadow_thetas_start - theta_start_mean
+            theta_end_rel = shadow_thetas_end - theta_end_mean
+            bins_theta = np.linspace(
+                min(theta_start_rel.min(), theta_end_rel.min()),
+                max(theta_start_rel.max(), theta_end_rel.max()),
+                50,
+            )
+            ax.hist(theta_start_rel, bins=bins_theta, alpha=0.6, label="Start", color="blue")
+            ax.hist(theta_end_rel, bins=bins_theta, alpha=0.6, label="End", color="red")
+            ax.axvline(0, color="black", linestyle="--", linewidth=1, alpha=0.7)
+            ax.set_xlabel("Theta deviation from mean (°)")
+            ax.set_ylabel("Count")
+            ax.set_title("Shadow Theta Distributions (relative to mean)")
             ax.legend()
             ax.grid(True, alpha=0.3)
 
