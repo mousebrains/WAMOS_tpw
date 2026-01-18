@@ -33,13 +33,14 @@ class Theta:
     - Bin 19, bits 12-15 → bits 4-7 of the counter
     - Bin 20, bits 12-15 → bits 0-3 of the counter
 
-    The 12-bit value directly represents the whole degree (0-359). Within each
-    run of consecutive radials with the same degree value, fractional degrees
+    The 12-bit counter starts at an initial value and increments by 1-2 degrees
+    per step as the radar rotates. The counter value can exceed 359. Within each
+    run of consecutive radials with the same counter value, fractional degrees
     are distributed proportionally based on position within the run.
 
     For a run of N radials at degree D, radial i gets theta = D + (i + 0.5) / N
 
-    All bearing values are wrapped to [0, 360).
+    Final bearing values are wrapped to [0, 360).
 
     Example:
         >>> from wamos_tpw.polarfile import PolarFile
@@ -105,11 +106,14 @@ class Theta:
         - Bin 19: bits 4-7 of counter
         - Bin 20: bits 0-3 of counter
 
+        The counter starts at some initial value and increments by 1-2 degrees per step.
+        Values can exceed 359 - wrapping to [0, 360) happens during interpolation.
+
         Args:
             data: Raw frame data array (n_bearings, n_distances)
 
         Returns:
-            Array of whole degree values (0-359) for each radial
+            Array of whole degree counter values for each radial
         """
         b18, b19, b20 = self._COUNTER_BINS
 
@@ -121,8 +125,7 @@ class Theta:
         # Bin 20: shift right 12 to get bits 0-3 of result
         counter += np.right_shift(data[:, b20] & self._NIBBLE_MASK, 12).astype(np.uint16)
 
-        # Counter is whole degrees (0-359), wrap to handle any overflow
-        return counter % 360
+        return counter
 
     def _find_transitions(self, degrees: np.ndarray, n_radials: int) -> np.ndarray:
         """
