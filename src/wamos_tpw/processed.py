@@ -108,9 +108,6 @@ class ProcessedFrames(Files):
         frames: list[Frame],
         diagnostics: bool = False,
         show_progress: bool = True,
-        shadow_start: float | None = None,
-        shadow_end: float | None = None,
-        theta: Theta | None = None,
         parallel: bool = True,
     ) -> None:
         """
@@ -124,45 +121,32 @@ class ProcessedFrames(Files):
             frames: List of Frame objects to deramp
             diagnostics: If True, show diagnostic plots for each frame
             show_progress: If True, show progress bar
-            shadow_start: Detected shadow start angle (degrees). If None, uses config.
-            shadow_end: Detected shadow end angle (degrees). If None, uses config.
-            theta: Theta object with bearing arrays for each frame (optional)
             parallel: If True, process frames in parallel using threads
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
         import os
+
+        from wamos_tpw.range import Range
 
         n_frames = len(frames)
 
         # Diagnostics require sequential processing
         if diagnostics or not parallel or n_frames < 4:
             frame_iter = tqdm(frames, desc="Deramping", disable=not show_progress)
-            for i, frame in enumerate(frame_iter):
-                bearing = theta.bearing_for_frame(i) if theta is not None else None
-                deramp = Deramp(
-                    frame,
-                    self._config,
-                    bearing=bearing,
-                    shadow_start=shadow_start,
-                    shadow_end=shadow_end,
-                )
-                frame.deramped_intensity = deramp.corrected_intensity
-                if diagnostics:
-                    deramp.plot_diagnostics()
+            for frame in frame_iter:
+                intensity = frame.intensity.astype(np.float32)
+                rng = Range(frame)
+                deramp = Deramp(intensity, rng)
+                frame.deramped_intensity = deramp.intensity
             return
 
         # Parallel processing using threads (numpy/scipy release GIL)
         def process_frame(args):
             i, frame = args
-            bearing = theta.bearing_for_frame(i) if theta is not None else None
-            deramp = Deramp(
-                frame,
-                self._config,
-                bearing=bearing,
-                shadow_start=shadow_start,
-                shadow_end=shadow_end,
-            )
-            return i, deramp.corrected_intensity
+            intensity = frame.intensity.astype(np.float32)
+            rng = Range(frame)
+            deramp = Deramp(intensity, rng)
+            return i, deramp.intensity
 
         n_workers = min(os.cpu_count() or 4, n_frames)
         results = [None] * n_frames
@@ -190,13 +174,6 @@ class ProcessedFrames(Files):
         """
         Remove radial streak artifacts from a list of frames.
 
-        Each frame is destreaked using its temporal neighbors (previous and next
-        frames in the list) to enable edge detection at the first and last
-        bearing bins.
-
-        If frames have deramped_intensity attribute (from deramp_frames),
-        that will be used instead of the original intensity.
-
         Args:
             frames: List of Frame objects to destreak
             diagnostics: If True, show diagnostic plots for each frame
@@ -217,33 +194,22 @@ class ProcessedFrames(Files):
             frame_iter = tqdm(
                 enumerate(frames), total=n_frames, desc="Destreaking", disable=not show_progress
             )
-            for i, center in frame_iter:
-                prev_frame = frames[i - 1] if i > 0 else None
-                next_frame = frames[i + 1] if i < n_frames - 1 else None
-                ds = Destreak(prev_frame, center, next_frame, self._config)
-                corrected.append(ds.corrected_intensity)
-                if diagnostics:
-                    ds.plot_diagnostics()
+            for i, frame in frame_iter:
+                ds = Destreak(frame)
+                corrected.append(ds.intensity)
             return corrected
 
         # Parallel processing using threads (numpy/scipy release GIL)
         def process_frame(args):
-            i, prev_frame, center, next_frame = args
-            ds = Destreak(prev_frame, center, next_frame, self._config)
-            return i, ds.corrected_intensity
-
-        # Prepare work items with prev/next frame references
-        work_items = []
-        for i, center in enumerate(frames):
-            prev_frame = frames[i - 1] if i > 0 else None
-            next_frame = frames[i + 1] if i < n_frames - 1 else None
-            work_items.append((i, prev_frame, center, next_frame))
+            i, frame = args
+            ds = Destreak(frame)
+            return i, ds.intensity
 
         n_workers = min(os.cpu_count() or 4, n_frames)
         results = [None] * n_frames
 
         with ThreadPoolExecutor(max_workers=n_workers) as executor:
-            futures = {executor.submit(process_frame, item): item[0] for item in work_items}
+            futures = {executor.submit(process_frame, (i, f)): i for i, f in enumerate(frames)}
 
             with tqdm(total=n_frames, desc="Destreaking", disable=not show_progress) as pbar:
                 for future in as_completed(futures):
@@ -410,13 +376,10 @@ class ProcessedFrames(Files):
         else:
             logging.info("Using config-based shadow region (detection failed)")
 
-        # Deramp frames using detected shadow edges and bearing arrays
+        # Deramp frames
         self.deramp_frames(
             frames,
             diagnostics=deramp_diagnostics,
-            shadow_start=shadow_start,
-            shadow_end=shadow_end,
-            theta=theta,
         )
 
         # Destreak frames (uses deramped_intensity if available)

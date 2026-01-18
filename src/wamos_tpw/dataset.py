@@ -212,15 +212,12 @@ class WamosDataset:
         else:
             logger.info("Using config-based shadow region (detection failed)")
 
-        # Deramp using detected shadow edges and bearing arrays
+        # Deramp frames
         logger.info("Deramping frames...")
         self._pframes.deramp_frames(
             self._frames,
             diagnostics=deramp_diagnostics,
             show_progress=show_progress,
-            shadow_start=shadow_start,
-            shadow_end=shadow_end,
-            theta=theta,
         )
 
         # Destreak

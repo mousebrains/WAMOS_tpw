@@ -196,24 +196,21 @@ def process_single_frame(
         shadow_start: Shadow start angle (degrees)
         shadow_end: Shadow end angle (degrees)
     """
+    import numpy as np
+
     from wamos_tpw.deramp import Deramp
     from wamos_tpw.destreak import Destreak
+    from wamos_tpw.range import Range
 
-    # Deramp with refined bearing
-    bearing_arr = theta.bearing_for_frame(frame_idx)
-    bearing_arr_refined = (bearing_arr - offset) % 360
-    deramp = Deramp(
-        frame,
-        config,
-        bearing=bearing_arr_refined,
-        shadow_start=shadow_start,
-        shadow_end=shadow_end,
-    )
-    frame.deramped_intensity = deramp.corrected_intensity
+    # Deramp
+    intensity = frame.intensity.astype(np.float32)
+    rng = Range(frame)
+    deramp = Deramp(intensity, rng)
+    frame.deramped_intensity = deramp.intensity
 
-    # Destreak (circular theta, no neighbors needed)
-    ds = Destreak(None, frame, None, config)
-    frame.corrected_intensity = ds.corrected_intensity
+    # Destreak
+    ds = Destreak(frame)
+    frame.corrected_intensity = ds.intensity
     frame.deramped_intensity = None  # Free memory
 
 
