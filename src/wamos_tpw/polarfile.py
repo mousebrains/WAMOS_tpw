@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import bz2
 import gzip
-import io
 import logging
 import lzma
 import re
@@ -60,7 +59,11 @@ class PolarFile:
     _LENGTH_FIELD_SIZE = 10  # Bytes for ASCII length field
 
     def __init__(
-        self, filepath: str | Path, metadata_only: bool = False, config: Config | None = None
+        self,
+        filepath: str | Path,
+        metadata_only: bool = False,
+        config: Config | None = None,
+        max_frames: int | None = 1,
     ) -> None:
         """
         Initialize and parse a WAMOS polar file.
@@ -71,12 +74,15 @@ class PolarFile:
                           skip binary data loading. Useful for computing
                           grid bounds without loading full frame data.
             config: Optional configuration object
+            max_frames: Maximum number of frames to parse (default: 1).
+                       Set to None to parse all frames.
         """
         self._filepath = Path(filepath)
         self._header: dict[str, Any] = {}
         self._frame_metadata: list[FrameMetadata] = []
         self._frames: list[Frame] = []
         self._metadata_only = metadata_only
+        self._max_frames = max_frames
         self._config = config or Config()
         self._timing: dict[str, float] = {}
 
@@ -87,17 +93,15 @@ class PolarFile:
         suffix = self._filepath.suffix.lower()
         name = self._filepath.name.lower()
 
-        # zstd requires special handling - decompress to memory first
+        # zstd: decompress to bytes, parse directly without BytesIO wrapper
         if suffix == ".zst" or name.endswith(".pol.zst"):
             t0 = _time.perf_counter()
             with open(self._filepath, "rb") as f:
                 dctx = zstd.ZstdDecompressor()
-                # Use stream_reader for files without content size in header
                 with dctx.stream_reader(f) as reader:
                     data = reader.read()
-            fp = io.BytesIO(data)
             self._timing["decompress"] = _time.perf_counter() - t0
-            self._parse_from_fp(fp)
+            self._parse_from_bytes(data)
         else:
             t0 = _time.perf_counter()
             opener = self._get_opener()
@@ -105,16 +109,122 @@ class PolarFile:
                 self._timing["decompress"] = _time.perf_counter() - t0
                 self._parse_from_fp(fp)
 
-    def _parse_from_fp(self, fp: BinaryIO) -> None:
-        """Parse the polar file from an open file handle."""
-        # Parse header
+    def _parse_from_bytes(self, data: bytes) -> None:
+        """Parse the polar file from decompressed bytes (optimized for zstd)."""
+        # Find EOH marker to split header from data
         t0 = _time.perf_counter()
-        header_lines, frame_lines = self._read_header(fp)
+        eoh_idx = data.find(b"\nEOH")
+        if eoh_idx == -1:
+            eoh_idx = data.find(b"\rEOH")
+        if eoh_idx == -1:
+            raise ValueError(f"No EOH marker found in {self._filepath}")
+
+        # Find the newline after EOH
+        data_start = data.find(b"\n", eoh_idx + 1)
+        if data_start == -1:
+            data_start = len(data)
+        else:
+            data_start += 1  # Skip the newline
+
+        header_bytes = data[:eoh_idx]
+        header_lines, frame_lines = self._parse_header_bytes(header_bytes)
         self._header = self._parse_header(header_lines)
         self._frame_metadata = self._parse_frame_section(frame_lines)
         self._timing["parse_header"] = _time.perf_counter() - t0
 
-        # Extract tower-specific config (must happen before creating Frames)
+        self._apply_tower_config()
+
+        # Parse binary data (skip if metadata_only)
+        if not self._metadata_only:
+            t0 = _time.perf_counter()
+            self._parse_data_from_bytes(data, data_start)
+            self._timing["parse_data"] = _time.perf_counter() - t0
+
+    def _parse_header_bytes(self, header_bytes: bytes) -> tuple[list[bytes], list[bytes]]:
+        """Parse header from bytes, separating frame section."""
+        header_lines = []
+        frame_lines = []
+        in_frame_section = False
+
+        for line in header_bytes.split(b"\n"):
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            if self._RE_FRAME_START.match(stripped):
+                in_frame_section = True
+                continue
+            if self._RE_FRAME_STOP.match(stripped):
+                in_frame_section = False
+                continue
+
+            if in_frame_section:
+                frame_lines.append(stripped)
+            else:
+                header_lines.append(stripped)
+
+        return header_lines, frame_lines
+
+    def _parse_data_from_bytes(self, data: bytes, offset: int) -> None:
+        """Parse binary data blocks from bytes (optimized, no file I/O)."""
+        n_samples = self._header.get("FIFO", 0)
+        max_frames = self._max_frames
+        n_to_parse = len(self._frame_metadata)
+        if max_frames is not None:
+            n_to_parse = min(n_to_parse, max_frames)
+
+        for idx in range(n_to_parse):
+            metadata = self._frame_metadata[idx]
+
+            # Read length field
+            if offset + self._LENGTH_FIELD_SIZE > len(data):
+                logging.debug("End of data at frame %s", idx)
+                break
+
+            length_bytes = data[offset : offset + self._LENGTH_FIELD_SIZE]
+            offset += self._LENGTH_FIELD_SIZE
+
+            try:
+                length = int(length_bytes.decode("utf-8", errors="ignore").strip())
+            except ValueError:
+                logging.warning("%s: Invalid length field at frame %s", self._filepath, idx)
+                break
+
+            # Check bounds
+            if offset + length > len(data):
+                logging.warning(
+                    "%s: Frame %s: expected %s bytes, got %s",
+                    self._filepath,
+                    idx,
+                    length,
+                    len(data) - offset,
+                )
+                break
+
+            # Parse directly from bytes using offset (no copy until reshape)
+            frame_data = np.frombuffer(data, dtype="<H", count=length // 2, offset=offset)
+            offset += length
+
+            # Reshape if we know samples_in_range
+            if n_samples > 0:
+                n_radials = frame_data.size // n_samples
+                if n_radials * n_samples == frame_data.size:
+                    frame_data = frame_data.reshape((n_radials, n_samples))
+                else:
+                    usable = n_radials * n_samples
+                    logging.warning(
+                        "%s: Frame %s: truncating %s values",
+                        self._filepath,
+                        idx,
+                        frame_data.size - usable,
+                    )
+                    frame_data = frame_data[:usable].reshape((n_radials, n_samples))
+
+            frame = Frame(frame_data, metadata, config=self._config)
+            self._frames.append(frame)
+
+    def _apply_tower_config(self) -> None:
+        """Extract tower-specific config from header."""
         tower = self._header.get("TOWER", "").lower()
         if tower and self._config and tower in self._config:
             self._config = self._config[tower]
@@ -126,6 +236,17 @@ class PolarFile:
             windh = self._header.get("WINDH")
             if windh is not None:
                 self._config["tower.height"] = float(windh)
+
+    def _parse_from_fp(self, fp: BinaryIO) -> None:
+        """Parse the polar file from an open file handle."""
+        # Parse header
+        t0 = _time.perf_counter()
+        header_lines, frame_lines = self._read_header(fp)
+        self._header = self._parse_header(header_lines)
+        self._frame_metadata = self._parse_frame_section(frame_lines)
+        self._timing["parse_header"] = _time.perf_counter() - t0
+
+        self._apply_tower_config()
 
         # Parse binary data (skip if metadata_only)
         if not self._metadata_only:
@@ -309,8 +430,14 @@ class PolarFile:
     def _parse_data(self, fp: BinaryIO) -> None:
         """Parse binary data blocks into Frame objects."""
         n_samples = self._header.get("FIFO", 0)
+        max_frames = self._max_frames
+        n_to_parse = len(self._frame_metadata)
+        if max_frames is not None:
+            n_to_parse = min(n_to_parse, max_frames)
 
-        for idx, metadata in enumerate(self._frame_metadata):
+        for idx in range(n_to_parse):
+            metadata = self._frame_metadata[idx]
+
             # Read length field
             length_bytes = fp.read(self._LENGTH_FIELD_SIZE)
             if len(length_bytes) != self._LENGTH_FIELD_SIZE:
