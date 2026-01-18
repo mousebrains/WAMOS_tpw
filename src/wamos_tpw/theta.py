@@ -85,14 +85,10 @@ class Theta:
         degrees = self._extract_degrees(data)
         self._timing["extract_degrees"] = _time.perf_counter() - t0
 
-        # Step 2: Find run boundaries (where degree changes)
+        # Step 2: Interpolate fractional degrees within each run
         t0 = _time.perf_counter()
-        transitions = self._find_transitions(degrees, n_radials)
-        self._timing["find_transitions"] = _time.perf_counter() - t0
+        theta = self._interpolate_theta(degrees)
 
-        # Step 3: Interpolate fractional degrees within each run
-        t0 = _time.perf_counter()
-        theta = self._interpolate_theta(degrees, transitions, n_radials)
         self._timing["interpolate"] = _time.perf_counter() - t0
 
         return theta
@@ -115,71 +111,40 @@ class Theta:
         Returns:
             Array of whole degree counter values for each radial
         """
-        b18, b19, b20 = self._COUNTER_BINS
+        nibbles = data[:, self._COUNTER_BINS] & self._NIBBLE_MASK
+        nibbles = np.right_shift(nibbles, [4, 8, 12]).astype(np.uint16)
+        return nibbles[:, 0] | nibbles[:, 1] | nibbles[:, 2]
 
-        # Extract top nibble from each bin and shift to correct position
-        # Bin 18: shift right 4 to get bits 8-11 of result
-        counter = np.right_shift(data[:, b18] & self._NIBBLE_MASK, 4).astype(np.uint16)
-        # Bin 19: shift right 8 to get bits 4-7 of result
-        counter += np.right_shift(data[:, b19] & self._NIBBLE_MASK, 8).astype(np.uint16)
-        # Bin 20: shift right 12 to get bits 0-3 of result
-        counter += np.right_shift(data[:, b20] & self._NIBBLE_MASK, 12).astype(np.uint16)
-
-        return counter
-
-    def _find_transitions(self, degrees: np.ndarray, n_radials: int) -> np.ndarray:
+    def _interpolate_theta(self, degrees: np.ndarray) -> np.ndarray:
         """
-        Find indices where the degree value changes.
-
-        Args:
-            degrees: Array of whole degree values for each radial
-            n_radials: Total number of radials
-
-        Returns:
-            Array of transition indices including boundaries [0, ..., n_radials]
-        """
-        # Find where degree changes
-        transitions = np.where(degrees[:-1] != degrees[1:])[0] + 1
-
-        # Add boundaries (start and end)
-        return np.concatenate([[0], transitions, [n_radials]])
-
-    def _interpolate_theta(
-        self, degrees: np.ndarray, transitions: np.ndarray, n_radials: int
-    ) -> np.ndarray:
-        """
-        Interpolate fractional degrees within each run.
+        Disperse degrees within each run of degrees.
 
         For a run of N radials at degree D, radial i gets theta = D + (i + 0.5) / N
         This places radial values at the center of their fractional range.
 
         Args:
-            degrees: Array of whole degree values for each radial
-            transitions: Array of transition indices
-            n_radials: Total number of radials
+            degrees: Array of whole degree values for each radial (monotonic)
 
         Returns:
             Array of theta angles for each radial, wrapped to [0, 360)
         """
-        segment_sizes = np.diff(transitions)
-        n_segments = len(segment_sizes)
 
-        if n_segments == 0:
-            return np.zeros(n_radials, dtype=np.float32)
+        [val, inverse, cnt] = np.unique(degrees, 
+                                        return_inverse=True, 
+                                        return_counts=True)
 
-        # Get the degree value for each segment (from first radial in segment)
-        segment_degrees = degrees[transitions[:-1]].astype(np.float32)
+        mu = np.mean(cnt) # Average run length
 
-        # Compute local position within each segment
-        segment_starts_idx = transitions[:-1]
-        local_pos = np.arange(n_radials) - np.repeat(segment_starts_idx, segment_sizes)
+        cnt = cnt.astype(np.float32) # Convert to float for mu insertion, if needed
+        cnt0 = cnt[0] # Copy for later
+        cnt[ 0] = max(cnt[ 0], mu) # Extend first run if too short
+        cnt[-1] = max(cnt[-1], mu) # Extend last run if too short
 
-        # Compute theta: degree + (local_pos + 0.5) / segment_size
-        theta = np.repeat(segment_degrees, segment_sizes) + (local_pos + 0.5) / np.repeat(
-            segment_sizes.astype(np.float32), segment_sizes
-        )
-
-        return (theta % 360).astype(np.float32)
+        dVal = np.diff(val, append=val[-1]+1) # Degree differences between runs
+        step = dVal / cnt # Step size per radial in each run
+        delta = step[inverse] # Map back to original radial order
+        delta[0] += (cnt[0] - cnt0) * delta[0] # Adjust first run if extended
+        return ((val[0] + np.cumsum(delta) - (delta / 2)) % 360).astype(np.float32)
 
     # -------------------------------------------------------------------------
     # Public API
