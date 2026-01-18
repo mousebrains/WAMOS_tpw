@@ -386,8 +386,17 @@ def main() -> int:
                 max(idx_start_rel.max(), idx_end_rel.max()),
                 50,
             )
-            ax.hist(idx_start_rel, bins=bins_idx, histtype="step", label="Start", color="blue", linewidth=1.5)
-            ax.hist(idx_end_rel, bins=bins_idx, histtype="step", label="End", color="red", linewidth=1.5)
+            ax.hist(
+                idx_start_rel,
+                bins=bins_idx,
+                histtype="step",
+                label="Start",
+                color="blue",
+                linewidth=1.5,
+            )
+            ax.hist(
+                idx_end_rel, bins=bins_idx, histtype="step", label="End", color="red", linewidth=1.5
+            )
             ax.axvline(0, color="black", linestyle="--", linewidth=1, alpha=0.7)
             ax.set_xlabel("Index deviation from mean")
             ax.set_ylabel("Count")
@@ -404,8 +413,22 @@ def main() -> int:
                 max(theta_start_rel.max(), theta_end_rel.max()),
                 50,
             )
-            ax.hist(theta_start_rel, bins=bins_theta, histtype="step", label="Start", color="blue", linewidth=1.5)
-            ax.hist(theta_end_rel, bins=bins_theta, histtype="step", label="End", color="red", linewidth=1.5)
+            ax.hist(
+                theta_start_rel,
+                bins=bins_theta,
+                histtype="step",
+                label="Start",
+                color="blue",
+                linewidth=1.5,
+            )
+            ax.hist(
+                theta_end_rel,
+                bins=bins_theta,
+                histtype="step",
+                label="End",
+                color="red",
+                linewidth=1.5,
+            )
             ax.axvline(0, color="black", linestyle="--", linewidth=1, alpha=0.7)
             ax.set_xlabel("Theta deviation from mean (°)")
             ax.set_ylabel("Count")
