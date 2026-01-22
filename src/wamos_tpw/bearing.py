@@ -99,7 +99,11 @@ class Theta:
         self._frames = frames
         self._config = config or Config()
         theta_refine_cfg = self._config.get("theta_refinement", {})
-        refine_enabled = theta_refine_cfg.get("enabled", False) if isinstance(theta_refine_cfg, dict) else getattr(theta_refine_cfg, "enabled", False)
+        refine_enabled = (
+            theta_refine_cfg.get("enabled", False)
+            if isinstance(theta_refine_cfg, dict)
+            else getattr(theta_refine_cfg, "enabled", False)
+        )
         self._refine = refine and refine_enabled
 
         # Calculated values (computed lazily)
@@ -137,7 +141,11 @@ class Theta:
         # Refine using shadow region if enabled
         if self._refine:
             theta_refine_cfg = self._config.get("theta_refinement", {})
-            min_frames = theta_refine_cfg.get("min_frames", 3) if isinstance(theta_refine_cfg, dict) else getattr(theta_refine_cfg, "min_frames", 3)
+            min_frames = (
+                theta_refine_cfg.get("min_frames", 3)
+                if isinstance(theta_refine_cfg, dict)
+                else getattr(theta_refine_cfg, "min_frames", 3)
+            )
             if len(self._frames) >= min_frames:
                 self._refine_with_shadow()
 
@@ -296,8 +304,16 @@ class Theta:
         right_edges = []
 
         shadow_cfg = self._config.get("shadow", {})
-        expected_center = shadow_cfg.get("center", 180.0) if isinstance(shadow_cfg, dict) else getattr(shadow_cfg, "center", 180.0)
-        search_range = shadow_cfg.get("width", 90.0) if isinstance(shadow_cfg, dict) else getattr(shadow_cfg, "width", 90.0)
+        expected_center = (
+            shadow_cfg.get("center", 180.0)
+            if isinstance(shadow_cfg, dict)
+            else getattr(shadow_cfg, "center", 180.0)
+        )
+        search_range = (
+            shadow_cfg.get("width", 90.0)
+            if isinstance(shadow_cfg, dict)
+            else getattr(shadow_cfg, "width", 90.0)
+        )
 
         for frame_idx, frame in enumerate(self._frames):
             bearing = self._bearing_per_frame[frame_idx]
@@ -470,9 +486,17 @@ class Theta:
             right_edges: List of detected right edge angles
         """
         theta_refine_cfg = self._config.get("theta_refinement", {})
-        min_frames = theta_refine_cfg.get("min_frames", 3) if isinstance(theta_refine_cfg, dict) else getattr(theta_refine_cfg, "min_frames", 3)
+        min_frames = (
+            theta_refine_cfg.get("min_frames", 3)
+            if isinstance(theta_refine_cfg, dict)
+            else getattr(theta_refine_cfg, "min_frames", 3)
+        )
         shadow_cfg = self._config.get("shadow", {})
-        expected_center = shadow_cfg.get("center", 180.0) if isinstance(shadow_cfg, dict) else getattr(shadow_cfg, "center", 180.0)
+        expected_center = (
+            shadow_cfg.get("center", 180.0)
+            if isinstance(shadow_cfg, dict)
+            else getattr(shadow_cfg, "center", 180.0)
+        )
 
         if len(left_edges) < min_frames or len(right_edges) < min_frames:
             logging.warning(
@@ -650,8 +674,16 @@ class Theta:
             return
 
         shadow_cfg = self._config.get("shadow", {})
-        expected_center = shadow_cfg.get("center", 180.0) if isinstance(shadow_cfg, dict) else getattr(shadow_cfg, "center", 180.0)
-        expected_width = shadow_cfg.get("width", 90.0) if isinstance(shadow_cfg, dict) else getattr(shadow_cfg, "width", 90.0)
+        expected_center = (
+            shadow_cfg.get("center", 180.0)
+            if isinstance(shadow_cfg, dict)
+            else getattr(shadow_cfg, "center", 180.0)
+        )
+        expected_width = (
+            shadow_cfg.get("width", 90.0)
+            if isinstance(shadow_cfg, dict)
+            else getattr(shadow_cfg, "width", 90.0)
+        )
         search_range = expected_width
 
         # Create figure with subplots

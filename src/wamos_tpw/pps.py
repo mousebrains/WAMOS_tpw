@@ -12,15 +12,16 @@ import numpy as np
 from wamos_tpw.frame import Frame
 from wamos_tpw.config import Config
 
+
 class PPS:
     """
     Extract indices of PPS pulses in a frame.
     """
 
-    _PPS_RANGE_INDEX = 0 # First range bin is PPS bit 12
+    _PPS_RANGE_INDEX = 0  # First range bin is PPS bit 12
 
     def __init__(self, frame: Frame) -> None:
-        """ Find the index of each PPS pulse in the frame. """
+        """Find the index of each PPS pulse in the frame."""
 
         bit12 = frame.bit12[:, self._PPS_RANGE_INDEX]
         self._indices = np.where(bit12 != 0)[0]
@@ -37,10 +38,12 @@ class PPS:
     def __repr__(self) -> str:
         return f"PPS indices({self._indices})"
 
+
 def _add_arguments(parser) -> None:
     """Add command arguments to parser."""
     parser.add_argument("filename", nargs="+", type=str, help="Polar file to process")
     parser.add_argument("--config", "-c", type=str, help="Config YAML filename to read")
+
 
 def add_subparser(subparsers) -> None:
     """Register the 'PPS' subcommand."""
@@ -64,10 +67,8 @@ def run(args) -> None:
             continue
         for index, frame in enumerate(pf.frames):
             pps = PPS(frame)
-            logging.info("%s Frame(%d): PPS indices: %s",
-                         fn,
-                         index,
-                         pps.indices)
+            logging.info("%s Frame(%d): PPS indices: %s", fn, index, pps.indices)
+
 
 def main() -> None:
     """Standalone CLI entry point."""

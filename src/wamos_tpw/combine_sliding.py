@@ -274,10 +274,7 @@ def _grid_single_frame(
     y_idx = np.searchsorted(y_edges, y_valid) - 1
 
     # Clip to valid range
-    in_bounds = (
-        (x_idx >= 0) & (x_idx < n_cross) &
-        (y_idx >= 0) & (y_idx < n_along)
-    )
+    in_bounds = (x_idx >= 0) & (x_idx < n_cross) & (y_idx >= 0) & (y_idx < n_along)
 
     x_idx = x_idx[in_bounds]
     y_idx = y_idx[in_bounds]
@@ -313,6 +310,7 @@ def _save_sliding_frame(
 ) -> None:
     """Save a sliding window combined frame as PNG."""
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.ticker import FuncFormatter
@@ -355,8 +353,7 @@ def _save_sliding_frame(
 
     # Main plot
     im = ax_main.pcolormesh(
-        lon_grid, lat_grid, gridded,
-        cmap="viridis", vmin=vmin, vmax=vmax, shading="flat"
+        lon_grid, lat_grid, gridded, cmap="viridis", vmin=vmin, vmax=vmax, shading="flat"
     )
     plt.colorbar(im, ax=ax_main, label="Intensity")
 
@@ -416,7 +413,9 @@ def _save_sliding_frame(
         ax_ship.set_facecolor("white")
         ax_ship.patch.set_alpha(0.8)
         ax_ship.grid(True, linewidth=0.3, alpha=0.5)
-        ax_main.text(0.87, 0.99, "Ship", transform=ax_main.transAxes, fontsize=7, ha="right", va="top")
+        ax_main.text(
+            0.87, 0.99, "Ship", transform=ax_main.transAxes, fontsize=7, ha="right", va="top"
+        )
 
     # Wind polar inset
     if wind_speeds and wind_dirs:
@@ -432,7 +431,9 @@ def _save_sliding_frame(
         ax_wind.set_facecolor("white")
         ax_wind.patch.set_alpha(0.8)
         ax_wind.grid(True, linewidth=0.3, alpha=0.5)
-        ax_main.text(0.87, 0.01, "Wind", transform=ax_main.transAxes, fontsize=7, ha="right", va="bottom")
+        ax_main.text(
+            0.87, 0.01, "Wind", transform=ax_main.transAxes, fontsize=7, ha="right", va="bottom"
+        )
 
     # Info panel
     ax_info.axis("off")
@@ -443,9 +444,14 @@ def _save_sliding_frame(
 
     info_text = f"{start_str} - {end_str}  |  {n_frames} frames  |  Duration: {duration_str}  |  Frame {frame_number}"
     ax_info.text(
-        0.5, 0.5, info_text,
-        transform=ax_info.transAxes, ha="center", va="center",
-        fontfamily="monospace", fontsize=9,
+        0.5,
+        0.5,
+        info_text,
+        transform=ax_info.transAxes,
+        ha="center",
+        va="center",
+        fontfamily="monospace",
+        fontsize=9,
     )
 
     fig.savefig(output_path, dpi=100, bbox_inches="tight", facecolor="white", edgecolor="none")
@@ -511,9 +517,18 @@ def generate_sliding_movie(args, config: "Config") -> None:
         return
 
     (
-        all_metadata, x_min, x_max, y_min, y_max, max_range,
-        ship_x_meta, ship_y_meta, ship_speeds_meta, ship_headings_meta,
-        wind_speeds_meta, wind_dirs_meta,
+        all_metadata,
+        x_min,
+        x_max,
+        y_min,
+        y_max,
+        max_range,
+        ship_x_meta,
+        ship_y_meta,
+        ship_speeds_meta,
+        ship_headings_meta,
+        wind_speeds_meta,
+        wind_dirs_meta,
     ) = bounds_result
 
     logging.info(f"Grid bounds: x=[{x_min:.0f}, {x_max:.0f}], y=[{y_min:.0f}, {y_max:.0f}]")
@@ -577,7 +592,9 @@ def generate_sliding_movie(args, config: "Config") -> None:
 
                 # Compute theta and bearing for chunk (for earth coordinate mapping)
                 chunk_theta = BearingTheta(chunk_frames, config, refine=False)
-                bearing_obj = Bearing(chunk_theta, radar_height=args.radar_height, cache_coordinates=False)
+                bearing_obj = Bearing(
+                    chunk_theta, radar_height=args.radar_height, cache_coordinates=False
+                )
 
                 # Process and grid each frame
                 for j, frame in enumerate(chunk_frames):
@@ -595,24 +612,42 @@ def generate_sliding_movie(args, config: "Config") -> None:
 
                     # Grid this frame
                     frame_sum, frame_count, ship_x, ship_y = _grid_single_frame(
-                        frame, j, chunk_theta, bearing_obj, config,
-                        x_edges, y_edges, ref_lat, ref_lon,
+                        frame,
+                        j,
+                        chunk_theta,
+                        bearing_obj,
+                        config,
+                        x_edges,
+                        y_edges,
+                        ref_lat,
+                        ref_lon,
                     )
 
                     # Get ship/wind data
                     meta = frame.metadata
                     ship_speed = meta.speed if meta.speed else None
                     ship_heading = meta.heading if meta.heading else None
-                    wind_speed = meta.wind_speed if hasattr(meta, 'wind_speed') and meta.wind_speed else None
-                    wind_dir = meta.wind_direction if hasattr(meta, 'wind_direction') and meta.wind_direction else None
+                    wind_speed = (
+                        meta.wind_speed if hasattr(meta, "wind_speed") and meta.wind_speed else None
+                    )
+                    wind_dir = (
+                        meta.wind_direction
+                        if hasattr(meta, "wind_direction") and meta.wind_direction
+                        else None
+                    )
 
                     # Slide window
                     timestamp = pd.Timestamp(frame.timestamp)
                     combined, start_time, end_time = slider.slide(
-                        timestamp, frame_sum, frame_count,
-                        ship_x=ship_x, ship_y=ship_y,
-                        ship_speed=ship_speed, ship_heading=ship_heading,
-                        wind_speed=wind_speed, wind_dir=wind_dir,
+                        timestamp,
+                        frame_sum,
+                        frame_count,
+                        ship_x=ship_x,
+                        ship_y=ship_y,
+                        ship_speed=ship_speed,
+                        ship_heading=ship_heading,
+                        wind_speed=wind_speed,
+                        wind_dir=wind_dir,
                     )
 
                     # Output frame if ready
@@ -624,12 +659,22 @@ def generate_sliding_movie(args, config: "Config") -> None:
                         ship_x_arr, ship_y_arr = slider.get_recent_ship_track()
 
                         _save_sliding_frame(
-                            combined, x_edges, y_edges, output_path,
-                            ref_lat, ref_lon, start_time, end_time,
-                            slider.n_frames_in_window, output_frame_num,
-                            ship_x_arr, ship_y_arr,
-                            slider.ship_speeds_all, slider.ship_headings_all,
-                            slider.wind_speeds_all, slider.wind_dirs_all,
+                            combined,
+                            x_edges,
+                            y_edges,
+                            output_path,
+                            ref_lat,
+                            ref_lon,
+                            start_time,
+                            end_time,
+                            slider.n_frames_in_window,
+                            output_frame_num,
+                            ship_x_arr,
+                            ship_y_arr,
+                            slider.ship_speeds_all,
+                            slider.ship_headings_all,
+                            slider.wind_speeds_all,
+                            slider.wind_dirs_all,
                         )
                         frame_paths.append(output_path)
 
@@ -682,15 +727,24 @@ def generate_sliding_movie(args, config: "Config") -> None:
                 ffmpeg_cmd = [
                     ffmpeg_path,
                     "-y",
-                    "-framerate", str(args.fps),
-                    "-pattern_type", "glob",
-                    "-i", f"{frames_dir}/frame_*.png",
-                    "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-                    "-c:v", "libx264",
-                    "-preset", "medium",
-                    "-crf", "23",
-                    "-pix_fmt", "yuv420p",
-                    "-movflags", "+faststart",
+                    "-framerate",
+                    str(args.fps),
+                    "-pattern_type",
+                    "glob",
+                    "-i",
+                    f"{frames_dir}/frame_*.png",
+                    "-vf",
+                    "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "medium",
+                    "-crf",
+                    "23",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-movflags",
+                    "+faststart",
                     args.movie,
                 ]
 
@@ -711,27 +765,34 @@ def add_subparser(subparsers) -> None:
         "sliding-movie",
         help="Generate smooth movie with sliding window combine",
         epilog="Timestamp formats: YYYY, YYYYMM, YYYYMMDD, YYYYMMDDHH, YYYYMMDDHHmm, "
-               "YYYYMMDDTHHmm, YYYY-MM-DD, YYYY-MM-DDTHH:mm:ss",
+        "YYYYMMDDTHHmm, YYYY-MM-DD, YYYY-MM-DDTHH:mm:ss",
     )
     parser.add_argument("stime", type=_timestamp_type, help="Start time")
     parser.add_argument("etime", type=_timestamp_type, help="End time")
     parser.add_argument("polar_path", type=_directory_type, help="Path to polar data directory")
 
     parser.add_argument("--movie", "-m", help="Output movie path (e.g., output.mp4)")
-    parser.add_argument("--window", "-w", type=float, default=42,
-                        help="Window duration in seconds (default: 42)")
-    parser.add_argument("--output-every", "-e", type=int, default=5,
-                        help="Output frame every N input frames (default: 5)")
-    parser.add_argument("--fps", type=int, default=10,
-                        help="Movie frames per second (default: 10)")
+    parser.add_argument(
+        "--window", "-w", type=float, default=42, help="Window duration in seconds (default: 42)"
+    )
+    parser.add_argument(
+        "--output-every",
+        "-e",
+        type=int,
+        default=5,
+        help="Output frame every N input frames (default: 5)",
+    )
+    parser.add_argument("--fps", type=int, default=10, help="Movie frames per second (default: 10)")
     parser.add_argument("--frames-dir", "-f", help="Directory to save frame images")
     parser.add_argument("--config", "-c", help="Path to YAML config file")
     parser.add_argument("--radar-height", type=float, help="Radar height above water (m)")
     parser.add_argument("--max-frames", type=int, help="Maximum frames to process")
-    parser.add_argument("--process", action="store_true", default=True,
-                        help="Apply processing (deramp + destreak)")
-    parser.add_argument("--no-process", dest="process", action="store_false",
-                        help="Skip processing")
+    parser.add_argument(
+        "--process", action="store_true", default=True, help="Apply processing (deramp + destreak)"
+    )
+    parser.add_argument(
+        "--no-process", dest="process", action="store_false", help="Skip processing"
+    )
 
     parser.set_defaults(func=_run_sliding_movie)
 

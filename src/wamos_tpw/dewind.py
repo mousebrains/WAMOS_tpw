@@ -73,7 +73,7 @@ class Dewind:
         self._config = theta.config
 
         with warnings.catch_warnings():
-            warnings.filterwarnings('ignore', 'Mean of empty slice')
+            warnings.filterwarnings("ignore", "Mean of empty slice")
             mu = np.nanmean(intensity, axis=1)  # Mean over distances
         q = ~np.isnan(mu)
 

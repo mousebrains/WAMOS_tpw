@@ -246,9 +246,7 @@ class FilesPipeline:
                 raise
 
         self._n_primary_frames = (
-            self._total_frames
-            - self._n_overlap_frames_before
-            - self._n_overlap_frames_after
+            self._total_frames - self._n_overlap_frames_before - self._n_overlap_frames_after
         )
 
         # Second pass: create interpolators for primary frames and collect spatial data
@@ -489,8 +487,13 @@ class FilesPipeline:
         logger.debug(
             "Created earth grid: %dx%d cells, %.2fm spacing, "
             "extent: [%.1f, %.1f] x [%.1f, %.1f] m (%.3fs)",
-            n_x, n_y, grid_spacing,
-            x_edges[0], x_edges[-1], y_edges[0], y_edges[-1],
+            n_x,
+            n_y,
+            grid_spacing,
+            x_edges[0],
+            x_edges[-1],
+            y_edges[0],
+            y_edges[-1],
             elapsed,
         )
 
@@ -619,8 +622,8 @@ class FilesPipeline:
             y_buf *= inv_spacing
 
             # Convert to int32 indices
-            np.copyto(x_idx_buf, x_buf, casting='unsafe')
-            np.copyto(y_idx_buf, y_buf, casting='unsafe')
+            np.copyto(x_idx_buf, x_buf, casting="unsafe")
+            np.copyto(y_idx_buf, y_buf, casting="unsafe")
 
             # Flatten arrays (views, no allocation)
             x_flat = x_idx_buf.ravel()
@@ -629,9 +632,11 @@ class FilesPipeline:
 
             # Filter valid indices (within grid bounds and non-NaN intensity)
             valid = (
-                (x_flat >= 0) & (x_flat < n_x) &
-                (y_flat >= 0) & (y_flat < n_y) &
-                ~np.isnan(values_flat)
+                (x_flat >= 0)
+                & (x_flat < n_x)
+                & (y_flat >= 0)
+                & (y_flat < n_y)
+                & ~np.isnan(values_flat)
             )
 
             if np.any(valid):
@@ -651,7 +656,10 @@ class FilesPipeline:
         self._projection_timings["Project"] = elapsed
         logger.info(
             "Projected %d frames, %d values in %.2fs (%.0f values/s)",
-            len(primary_frames), n_projected, elapsed, n_projected / elapsed,
+            len(primary_frames),
+            n_projected,
+            elapsed,
+            n_projected / elapsed,
         )
 
     def finalize_projection(self) -> ProjectionResult:
@@ -675,33 +683,23 @@ class FilesPipeline:
         n_frames = len(primary_frames)
 
         # Collect ship navigation data per frame
-        ship_speeds = np.array([
-            f.metadata.ship_speed or 0.0 for f in primary_frames
-        ])
-        ship_headings = np.array([
-            np.mean(self._all_headings[i]) for i in range(n_frames)
-        ])
+        ship_speeds = np.array([f.metadata.ship_speed or 0.0 for f in primary_frames])
+        ship_headings = np.array([np.mean(self._all_headings[i]) for i in range(n_frames)])
 
         # Collect wind data per frame
-        wind_speeds = np.array([
-            f.metadata.wind_speed or 0.0 for f in primary_frames
-        ])
-        wind_directions = np.array([
-            f.metadata.wind_direction or 0.0 for f in primary_frames
-        ])
+        wind_speeds = np.array([f.metadata.wind_speed or 0.0 for f in primary_frames])
+        wind_directions = np.array([f.metadata.wind_direction or 0.0 for f in primary_frames])
 
         # Collect timing data
-        frame_start_times = np.array([
-            interp.times[0] for interp in self._interpolators
-        ], dtype='datetime64[ns]')
-        frame_end_times = np.array([
-            interp.times[-1] for interp in self._interpolators
-        ], dtype='datetime64[ns]')
+        frame_start_times = np.array(
+            [interp.times[0] for interp in self._interpolators], dtype="datetime64[ns]"
+        )
+        frame_end_times = np.array(
+            [interp.times[-1] for interp in self._interpolators], dtype="datetime64[ns]"
+        )
 
         # Count total radials
-        n_radials_total = sum(
-            len(self._all_latitudes[i]) for i in range(n_frames)
-        )
+        n_radials_total = sum(len(self._all_latitudes[i]) for i in range(n_frames))
 
         self._projection_result = ProjectionResult(
             earth_grid=self._earth_grid,
@@ -830,19 +828,18 @@ class ProjectionDiagnostics:
 
         # Create figure with custom layout
         fig = plt.figure(figsize=figsize)
-        gs = GridSpec(2, 3, width_ratios=[2, 1, 1], height_ratios=[1, 1],
-                      wspace=0.3, hspace=0.3)
+        gs = GridSpec(2, 3, width_ratios=[2, 1, 1], height_ratios=[1, 1], wspace=0.3, hspace=0.3)
 
         # Main intensity plot (spans left 2 columns)
         ax_main = fig.add_subplot(gs[:, 0])
         self._plot_intensity(ax_main, intensity, cmap, vmin, vmax)
 
         # Ship speed/heading polar plot (top-right)
-        ax_ship = fig.add_subplot(gs[0, 1], projection='polar')
+        ax_ship = fig.add_subplot(gs[0, 1], projection="polar")
         self._plot_ship_polar(ax_ship)
 
         # Wind speed/direction polar plot (bottom-right)
-        ax_wind = fig.add_subplot(gs[1, 1], projection='polar')
+        ax_wind = fig.add_subplot(gs[1, 1], projection="polar")
         self._plot_wind_polar(ax_wind)
 
         # Time series plot (right column, spans both rows)
@@ -850,8 +847,8 @@ class ProjectionDiagnostics:
         self._plot_time_series(ax_time)
 
         # Title
-        start_time = np.datetime_as_string(result.frame_start_times[0], unit='s')
-        end_time = np.datetime_as_string(result.frame_end_times[-1], unit='s')
+        start_time = np.datetime_as_string(result.frame_start_times[0], unit="s")
+        end_time = np.datetime_as_string(result.frame_end_times[-1], unit="s")
         fig.suptitle(
             f"Earth Projection: {result.n_frames} frames, {result.n_radials_total} radials\n"
             f"{start_time} to {end_time}",
@@ -873,27 +870,26 @@ class ProjectionDiagnostics:
         grid = self._grid
 
         im = ax.pcolormesh(
-            grid.x_edges, grid.y_edges, intensity,
-            cmap=cmap, vmin=vmin, vmax=vmax, shading='flat'
+            grid.x_edges, grid.y_edges, intensity, cmap=cmap, vmin=vmin, vmax=vmax, shading="flat"
         )
 
         ax.set_xlabel("East (m)")
         ax.set_ylabel("North (m)")
         ax.set_title("Projected Intensity")
-        ax.set_aspect('equal')
+        ax.set_aspect("equal")
 
         # Add colorbar
         ax.figure.colorbar(im, ax=ax, label="Intensity", shrink=0.8)
 
         # Add grid info
         ax.text(
-            0.02, 0.98,
-            f"Grid: {grid.n_x}x{grid.n_y}\n"
-            f"Spacing: {grid.grid_spacing:.1f}m",
+            0.02,
+            0.98,
+            f"Grid: {grid.n_x}x{grid.n_y}\nSpacing: {grid.grid_spacing:.1f}m",
             transform=ax.transAxes,
-            verticalalignment='top',
+            verticalalignment="top",
             fontsize=9,
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
+            bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
         )
 
     def _plot_ship_polar(self, ax) -> None:
@@ -914,10 +910,10 @@ class ProjectionDiagnostics:
         # Color by frame index for temporal information
         colors = np.arange(len(speeds))
 
-        ax.scatter(headings_rad, speeds, c=colors, cmap='viridis', s=20, alpha=0.7)
+        ax.scatter(headings_rad, speeds, c=colors, cmap="viridis", s=20, alpha=0.7)
 
         # Configure polar plot
-        ax.set_theta_zero_location('N')  # 0 degrees at top
+        ax.set_theta_zero_location("N")  # 0 degrees at top
         ax.set_theta_direction(-1)  # Clockwise
 
         ax.set_title("Ship Speed/Heading", pad=10)
@@ -927,10 +923,11 @@ class ProjectionDiagnostics:
         mean_speed = np.mean(speeds)
         mean_heading = self._circular_mean(result.ship_headings)
         ax.text(
-            0.5, -0.15,
+            0.5,
+            -0.15,
             f"Mean: {mean_speed:.1f} m/s @ {mean_heading:.0f}°",
             transform=ax.transAxes,
-            ha='center',
+            ha="center",
             fontsize=9,
         )
 
@@ -952,10 +949,10 @@ class ProjectionDiagnostics:
         # Color by frame index
         colors = np.arange(len(speeds))
 
-        ax.scatter(directions_rad, speeds, c=colors, cmap='coolwarm', s=20, alpha=0.7)
+        ax.scatter(directions_rad, speeds, c=colors, cmap="coolwarm", s=20, alpha=0.7)
 
         # Configure polar plot
-        ax.set_theta_zero_location('N')
+        ax.set_theta_zero_location("N")
         ax.set_theta_direction(-1)
 
         ax.set_title("Wind Speed/Direction", pad=10)
@@ -964,10 +961,11 @@ class ProjectionDiagnostics:
         mean_speed = np.mean(speeds)
         mean_dir = self._circular_mean(result.wind_directions)
         ax.text(
-            0.5, -0.15,
+            0.5,
+            -0.15,
             f"Mean: {mean_speed:.1f} m/s from {mean_dir:.0f}°",
             transform=ax.transAxes,
-            ha='center',
+            ha="center",
             fontsize=9,
         )
 
@@ -977,26 +975,26 @@ class ProjectionDiagnostics:
 
         # Convert times to relative seconds from start
         t0 = result.frame_start_times[0]
-        times = (result.frame_start_times - t0) / np.timedelta64(1, 's')
+        times = (result.frame_start_times - t0) / np.timedelta64(1, "s")
 
         # Create twin axis for speeds
         ax2 = ax.twinx()
 
         # Plot headings on primary axis
-        ax.plot(times, result.ship_headings, 'b-', label='Ship heading', alpha=0.7)
-        ax.plot(times, result.wind_directions, 'r-', label='Wind direction', alpha=0.7)
-        ax.set_ylabel('Direction (degrees)')
+        ax.plot(times, result.ship_headings, "b-", label="Ship heading", alpha=0.7)
+        ax.plot(times, result.wind_directions, "r-", label="Wind direction", alpha=0.7)
+        ax.set_ylabel("Direction (degrees)")
         ax.set_ylim(0, 360)
-        ax.legend(loc='upper left', fontsize=8)
+        ax.legend(loc="upper left", fontsize=8)
 
         # Plot speeds on secondary axis
-        ax2.plot(times, result.ship_speeds, 'b--', label='Ship speed', alpha=0.7)
-        ax2.plot(times, result.wind_speeds, 'r--', label='Wind speed', alpha=0.7)
-        ax2.set_ylabel('Speed (m/s)')
-        ax2.legend(loc='upper right', fontsize=8)
+        ax2.plot(times, result.ship_speeds, "b--", label="Ship speed", alpha=0.7)
+        ax2.plot(times, result.wind_speeds, "r--", label="Wind speed", alpha=0.7)
+        ax2.set_ylabel("Speed (m/s)")
+        ax2.legend(loc="upper right", fontsize=8)
 
-        ax.set_xlabel('Time (s)')
-        ax.set_title('Time Series')
+        ax.set_xlabel("Time (s)")
+        ax.set_title("Time Series")
         ax.grid(True, alpha=0.3)
 
     def _circular_mean(self, angles: np.ndarray) -> float:
@@ -1036,22 +1034,18 @@ class ProjectionDiagnostics:
         fig, ax = plt.subplots(figsize=figsize)
 
         im = ax.pcolormesh(
-            grid.x_edges, grid.y_edges, intensity,
-            cmap=cmap, vmin=vmin, vmax=vmax, shading='flat'
+            grid.x_edges, grid.y_edges, intensity, cmap=cmap, vmin=vmin, vmax=vmax, shading="flat"
         )
 
         ax.set_xlabel("East (m)")
         ax.set_ylabel("North (m)")
-        ax.set_aspect('equal')
+        ax.set_aspect("equal")
 
         fig.colorbar(im, ax=ax, label="Intensity", shrink=0.8)
 
-        start_time = np.datetime_as_string(result.frame_start_times[0], unit='s')
-        end_time = np.datetime_as_string(result.frame_end_times[-1], unit='s')
-        ax.set_title(
-            f"Projected Intensity\n"
-            f"{result.n_frames} frames, {start_time} to {end_time}"
-        )
+        start_time = np.datetime_as_string(result.frame_start_times[0], unit="s")
+        end_time = np.datetime_as_string(result.frame_end_times[-1], unit="s")
+        ax.set_title(f"Projected Intensity\n{result.n_frames} frames, {start_time} to {end_time}")
 
         # Add statistics
         stats_text = (
@@ -1060,11 +1054,13 @@ class ProjectionDiagnostics:
             f"[{grid.y_edges[0]:.0f}, {grid.y_edges[-1]:.0f}] m"
         )
         ax.text(
-            0.02, 0.98, stats_text,
+            0.02,
+            0.98,
+            stats_text,
             transform=ax.transAxes,
-            verticalalignment='top',
+            verticalalignment="top",
             fontsize=9,
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
+            bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
         )
 
         plt.tight_layout()
@@ -1104,25 +1100,21 @@ class ProjectionDiagnostics:
         fig, ax = plt.subplots(figsize=figsize)
 
         im = ax.pcolormesh(
-            grid.x_edges, grid.y_edges, intensity,
-            cmap=cmap, vmin=vmin, vmax=vmax, shading='flat'
+            grid.x_edges, grid.y_edges, intensity, cmap=cmap, vmin=vmin, vmax=vmax, shading="flat"
         )
 
         ax.set_xlabel("East (m)")
         ax.set_ylabel("North (m)")
-        ax.set_aspect('equal')
+        ax.set_aspect("equal")
 
         fig.colorbar(im, ax=ax, label="Intensity", shrink=0.8)
 
-        start_time = np.datetime_as_string(result.frame_start_times[0], unit='s')
-        end_time = np.datetime_as_string(result.frame_end_times[-1], unit='s')
-        ax.set_title(
-            f"Projected Intensity: {result.n_frames} frames\n"
-            f"{start_time} to {end_time}"
-        )
+        start_time = np.datetime_as_string(result.frame_start_times[0], unit="s")
+        end_time = np.datetime_as_string(result.frame_end_times[-1], unit="s")
+        ax.set_title(f"Projected Intensity: {result.n_frames} frames\n{start_time} to {end_time}")
 
         plt.tight_layout()
-        fig.savefig(output_path, dpi=dpi, bbox_inches='tight')
+        fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
         plt.close(fig)
         logger.info("Saved intensity plot to %s", output_path)
 
@@ -1164,7 +1156,7 @@ class ProjectionViewer:
             raise ValueError("No results to display")
 
         self._results = results
-        self._labels = labels or [f"Result {i+1}" for i in range(len(results))]
+        self._labels = labels or [f"Result {i + 1}" for i in range(len(results))]
         self._current_idx = 0
         self._playing = False
         self._play_interval = 1000  # milliseconds
@@ -1247,14 +1239,23 @@ class ProjectionViewer:
         self._fig = plt.figure(figsize=figsize)
 
         # Plot area grid
-        gs_plots = GridSpec(2, 3, width_ratios=[2, 1, 1], height_ratios=[1, 1],
-                           wspace=0.3, hspace=0.3,
-                           top=0.92, bottom=0.12, left=0.06, right=0.98)
+        gs_plots = GridSpec(
+            2,
+            3,
+            width_ratios=[2, 1, 1],
+            height_ratios=[1, 1],
+            wspace=0.3,
+            hspace=0.3,
+            top=0.92,
+            bottom=0.12,
+            left=0.06,
+            right=0.98,
+        )
 
         # Create plot axes
         self._ax_main = self._fig.add_subplot(gs_plots[:, 0])
-        self._ax_ship = self._fig.add_subplot(gs_plots[0, 1], projection='polar')
-        self._ax_wind = self._fig.add_subplot(gs_plots[1, 1], projection='polar')
+        self._ax_ship = self._fig.add_subplot(gs_plots[0, 1], projection="polar")
+        self._ax_wind = self._fig.add_subplot(gs_plots[1, 1], projection="polar")
         self._ax_time = self._fig.add_subplot(gs_plots[:, 2])
 
         # Create navigation buttons
@@ -1267,17 +1268,17 @@ class ProjectionViewer:
         ax_play = self._fig.add_axes([center_x - btn_width * 0.5, btn_y, btn_width, btn_height])
         ax_next = self._fig.add_axes([center_x + btn_width * 0.6, btn_y, btn_width, btn_height])
 
-        self._btn_back = Button(ax_back, '< Back')
-        self._btn_play = Button(ax_play, 'Play')
-        self._btn_next = Button(ax_next, 'Next >')
+        self._btn_back = Button(ax_back, "< Back")
+        self._btn_play = Button(ax_play, "Play")
+        self._btn_next = Button(ax_next, "Next >")
 
         self._btn_back.on_clicked(self._on_back)
         self._btn_play.on_clicked(self._on_play)
         self._btn_next.on_clicked(self._on_next)
 
         # Connect keyboard events
-        self._fig.canvas.mpl_connect('key_press_event', self._on_key)
-        self._fig.canvas.mpl_connect('close_event', self._on_close)
+        self._fig.canvas.mpl_connect("key_press_event", self._on_key)
+        self._fig.canvas.mpl_connect("close_event", self._on_close)
 
         # Initial plot
         self._update_plot()
@@ -1298,31 +1299,37 @@ class ProjectionViewer:
 
         # Main intensity plot
         self._im = self._ax_main.pcolormesh(
-            grid.x_edges, grid.y_edges, intensity,
-            cmap=self._cmap, vmin=self._vmin, vmax=self._vmax, shading='flat'
+            grid.x_edges,
+            grid.y_edges,
+            intensity,
+            cmap=self._cmap,
+            vmin=self._vmin,
+            vmax=self._vmax,
+            shading="flat",
         )
 
         self._ax_main.set_xlabel("East (m)")
         self._ax_main.set_ylabel("North (m)")
         self._ax_main.set_title("Dewinded Intensity")
-        self._ax_main.set_aspect('equal')
+        self._ax_main.set_aspect("equal")
 
         # Add colorbar (only on first update, then reuse)
         if self._colorbar is None:
-            self._colorbar = self._fig.colorbar(self._im, ax=self._ax_main,
-                                                 label="Intensity", shrink=0.8)
+            self._colorbar = self._fig.colorbar(
+                self._im, ax=self._ax_main, label="Intensity", shrink=0.8
+            )
         else:
             self._colorbar.update_normal(self._im)
 
         # Grid info
         self._ax_main.text(
-            0.02, 0.98,
-            f"Grid: {grid.n_x}x{grid.n_y}\n"
-            f"Spacing: {grid.grid_spacing:.1f}m",
+            0.02,
+            0.98,
+            f"Grid: {grid.n_x}x{grid.n_y}\nSpacing: {grid.grid_spacing:.1f}m",
             transform=self._ax_main.transAxes,
-            verticalalignment='top',
+            verticalalignment="top",
             fontsize=9,
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
+            bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
         )
 
         # Ship polar plot
@@ -1335,8 +1342,8 @@ class ProjectionViewer:
         self._plot_time_series(self._ax_time, result)
 
         # Title with navigation info
-        start_time = np.datetime_as_string(result.frame_start_times[0], unit='s')
-        end_time = np.datetime_as_string(result.frame_end_times[-1], unit='s')
+        start_time = np.datetime_as_string(result.frame_start_times[0], unit="s")
+        end_time = np.datetime_as_string(result.frame_end_times[-1], unit="s")
         play_status = " [Playing]" if self._playing else ""
         self._fig.suptitle(
             f"{self.current_label} ({self._current_idx + 1}/{self.n_results}){play_status}\n"
@@ -1353,18 +1360,19 @@ class ProjectionViewer:
         speeds = result.ship_speeds
         colors = np.arange(len(speeds))
 
-        ax.scatter(headings_rad, speeds, c=colors, cmap='viridis', s=20, alpha=0.7)
-        ax.set_theta_zero_location('N')
+        ax.scatter(headings_rad, speeds, c=colors, cmap="viridis", s=20, alpha=0.7)
+        ax.set_theta_zero_location("N")
         ax.set_theta_direction(-1)
         ax.set_title("Ship Speed/Heading", pad=10)
 
         mean_speed = np.mean(speeds)
         mean_heading = self._circular_mean(result.ship_headings)
         ax.text(
-            0.5, -0.15,
+            0.5,
+            -0.15,
             f"Mean: {mean_speed:.1f} m/s @ {mean_heading:.0f}\u00b0",
             transform=ax.transAxes,
-            ha='center',
+            ha="center",
             fontsize=9,
         )
 
@@ -1374,41 +1382,42 @@ class ProjectionViewer:
         speeds = result.wind_speeds
         colors = np.arange(len(speeds))
 
-        ax.scatter(directions_rad, speeds, c=colors, cmap='coolwarm', s=20, alpha=0.7)
-        ax.set_theta_zero_location('N')
+        ax.scatter(directions_rad, speeds, c=colors, cmap="coolwarm", s=20, alpha=0.7)
+        ax.set_theta_zero_location("N")
         ax.set_theta_direction(-1)
         ax.set_title("Wind Speed/Direction", pad=10)
 
         mean_speed = np.mean(speeds)
         mean_dir = self._circular_mean(result.wind_directions)
         ax.text(
-            0.5, -0.15,
+            0.5,
+            -0.15,
             f"Mean: {mean_speed:.1f} m/s from {mean_dir:.0f}\u00b0",
             transform=ax.transAxes,
-            ha='center',
+            ha="center",
             fontsize=9,
         )
 
     def _plot_time_series(self, ax, result: ProjectionResult) -> None:
         """Plot time series of ship and wind data."""
         t0 = result.frame_start_times[0]
-        times = (result.frame_start_times - t0) / np.timedelta64(1, 's')
+        times = (result.frame_start_times - t0) / np.timedelta64(1, "s")
 
         ax2 = ax.twinx()
 
-        ax.plot(times, result.ship_headings, 'b-', label='Ship heading', alpha=0.7)
-        ax.plot(times, result.wind_directions, 'r-', label='Wind direction', alpha=0.7)
-        ax.set_ylabel('Direction (degrees)')
+        ax.plot(times, result.ship_headings, "b-", label="Ship heading", alpha=0.7)
+        ax.plot(times, result.wind_directions, "r-", label="Wind direction", alpha=0.7)
+        ax.set_ylabel("Direction (degrees)")
         ax.set_ylim(0, 360)
-        ax.legend(loc='upper left', fontsize=8)
+        ax.legend(loc="upper left", fontsize=8)
 
-        ax2.plot(times, result.ship_speeds, 'b--', label='Ship speed', alpha=0.7)
-        ax2.plot(times, result.wind_speeds, 'r--', label='Wind speed', alpha=0.7)
-        ax2.set_ylabel('Speed (m/s)')
-        ax2.legend(loc='upper right', fontsize=8)
+        ax2.plot(times, result.ship_speeds, "b--", label="Ship speed", alpha=0.7)
+        ax2.plot(times, result.wind_speeds, "r--", label="Wind speed", alpha=0.7)
+        ax2.set_ylabel("Speed (m/s)")
+        ax2.legend(loc="upper right", fontsize=8)
 
-        ax.set_xlabel('Time (s)')
-        ax.set_title('Time Series')
+        ax.set_xlabel("Time (s)")
+        ax.set_title("Time Series")
         ax.grid(True, alpha=0.3)
 
     def _circular_mean(self, angles: np.ndarray) -> float:
@@ -1432,15 +1441,16 @@ class ProjectionViewer:
 
     def _on_key(self, event) -> None:
         """Handle keyboard events."""
-        if event.key == 'left':
+        if event.key == "left":
             self._go_back()
-        elif event.key == 'right':
+        elif event.key == "right":
             self._go_next()
-        elif event.key == ' ':
+        elif event.key == " ":
             self._toggle_play()
-        elif event.key in ('q', 'escape'):
+        elif event.key in ("q", "escape"):
             self._stop_play()
             import matplotlib.pyplot as plt
+
             plt.close(self._fig)
 
     def _on_close(self, event) -> None:
@@ -1472,7 +1482,7 @@ class ProjectionViewer:
             return
 
         self._playing = True
-        self._btn_play.label.set_text('Pause')
+        self._btn_play.label.set_text("Pause")
 
         # Use matplotlib timer for animation
         self._timer = self._fig.canvas.new_timer(interval=self._play_interval)
@@ -1487,7 +1497,7 @@ class ProjectionViewer:
             return
 
         self._playing = False
-        self._btn_play.label.set_text('Play')
+        self._btn_play.label.set_text("Play")
 
         if self._timer is not None:
             self._timer.stop()
@@ -1562,38 +1572,62 @@ def _add_arguments(parser) -> None:
     add_common_arguments(parser)
     parser.add_argument("--config", "-c", type=str, help="Config YAML filename")
     parser.add_argument("--timing", "-t", action="store_true", help="Show timing statistics")
-    parser.add_argument("--groupby", "-g", type=str, default=None,
-                        help="Group files by time frequency (e.g., 'h', '30m')")
-    parser.add_argument("--overlap", type=int, default=1,
-                        help="Number of overlap files between groups (default: 1)")
-    parser.add_argument("--tolerance", type=float, default=1.2,
-                        help="Time tolerance multiplier for interpolation (default: 1.2)")
-    parser.add_argument("--workers", "-w", type=int, default=None,
-                        help="Number of parallel workers (default: auto)")
+    parser.add_argument(
+        "--groupby",
+        "-g",
+        type=str,
+        default=None,
+        help="Group files by time frequency (e.g., 'h', '30m')",
+    )
+    parser.add_argument(
+        "--overlap", type=int, default=1, help="Number of overlap files between groups (default: 1)"
+    )
+    parser.add_argument(
+        "--tolerance",
+        type=float,
+        default=1.2,
+        help="Time tolerance multiplier for interpolation (default: 1.2)",
+    )
+    parser.add_argument(
+        "--workers", "-w", type=int, default=None, help="Number of parallel workers (default: auto)"
+    )
 
     # Pool type selection (mutually exclusive)
     pool_group = parser.add_mutually_exclusive_group()
-    pool_group.add_argument("--threadpool", action="store_true",
-                           help="Use only ThreadPoolExecutor")
-    pool_group.add_argument("--processpool", action="store_true",
-                           help="Use only ProcessPoolExecutor")
-    pool_group.add_argument("--bothpools", action="store_true",
-                           help="Run both ThreadPool and ProcessPool (default)")
+    pool_group.add_argument("--threadpool", action="store_true", help="Use only ThreadPoolExecutor")
+    pool_group.add_argument(
+        "--processpool", action="store_true", help="Use only ProcessPoolExecutor"
+    )
+    pool_group.add_argument(
+        "--bothpools", action="store_true", help="Run both ThreadPool and ProcessPool (default)"
+    )
 
-    parser.add_argument("--project", "-p", action="store_true",
-                        help="Project frames to earth grid")
-    parser.add_argument("--plot", action="store_true",
-                        help="Show diagnostic plots (implies --project)")
-    parser.add_argument("--save-plot", type=str, default=None, metavar="FILE",
-                        help="Save intensity plot to file (implies --project)")
-    parser.add_argument("--cmap", type=str, default="viridis",
-                        help="Colormap for intensity plot (default: viridis)")
-    parser.add_argument("--vmin", type=float, default=None,
-                        help="Minimum intensity value for colormap")
-    parser.add_argument("--vmax", type=float, default=None,
-                        help="Maximum intensity value for colormap")
-    parser.add_argument("--play-interval", type=int, default=1000,
-                        help="Interval between frames in play mode (milliseconds, default: 1000)")
+    parser.add_argument("--project", "-p", action="store_true", help="Project frames to earth grid")
+    parser.add_argument(
+        "--plot", action="store_true", help="Show diagnostic plots (implies --project)"
+    )
+    parser.add_argument(
+        "--save-plot",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="Save intensity plot to file (implies --project)",
+    )
+    parser.add_argument(
+        "--cmap", type=str, default="viridis", help="Colormap for intensity plot (default: viridis)"
+    )
+    parser.add_argument(
+        "--vmin", type=float, default=None, help="Minimum intensity value for colormap"
+    )
+    parser.add_argument(
+        "--vmax", type=float, default=None, help="Maximum intensity value for colormap"
+    )
+    parser.add_argument(
+        "--play-interval",
+        type=int,
+        default=1000,
+        help="Interval between frames in play mode (milliseconds, default: 1000)",
+    )
 
 
 def add_subparser(subparsers) -> None:
@@ -1619,8 +1653,13 @@ def _display_projection_stats(
         logging.info("  %s:", label)
 
     logging.info("    Grid: %dx%d cells (%.1fm spacing)", grid.n_x, grid.n_y, grid.grid_spacing)
-    logging.info("    Extent: [%.0f, %.0f] x [%.0f, %.0f] m",
-                grid.x_edges[0], grid.x_edges[-1], grid.y_edges[0], grid.y_edges[-1])
+    logging.info(
+        "    Extent: [%.0f, %.0f] x [%.0f, %.0f] m",
+        grid.x_edges[0],
+        grid.x_edges[-1],
+        grid.y_edges[0],
+        grid.y_edges[-1],
+    )
     logging.info("    Frames: %d, Radials: %d", result.n_frames, result.n_radials_total)
 
 
@@ -1667,8 +1706,9 @@ def run(args) -> None:
     files = list(filenames)
 
     if not files:
-        logging.warning("No files found in %s for time range %s to %s",
-                        args.polar_path, args.stime, args.etime)
+        logging.warning(
+            "No files found in %s for time range %s to %s", args.polar_path, args.stime, args.etime
+        )
         return
 
     logging.info("Found %d files", len(files))
@@ -1689,7 +1729,9 @@ def run(args) -> None:
         logging.info("Processed %d files, %d frames", len(files), fp.total_frames)
         logging.info(
             "Interpolation: %d interpolated, %d extrapolated, %d skipped",
-            fp.n_interpolated, fp.n_extrapolated, fp.n_skipped,
+            fp.n_interpolated,
+            fp.n_extrapolated,
+            fp.n_skipped,
         )
 
         if args.timing and fp.frame_timings:
@@ -1732,7 +1774,9 @@ def run(args) -> None:
 
     # Grouped mode with parallel processing
     groups = create_overlapping_groups(filenames, args.groupby, overlap=args.overlap)
-    logging.info("Created %d groups with %d overlap file(s) on each side", len(groups), args.overlap)
+    logging.info(
+        "Created %d groups with %d overlap file(s) on each side", len(groups), args.overlap
+    )
 
     process_func = partial(
         _process_group,
@@ -1834,7 +1878,11 @@ def run(args) -> None:
                 for i, (proj_result, r) in enumerate(zip(proj_results, bench.results)):
                     diag = ProjectionDiagnostics(proj_result)
                     # Generate unique filename for each group
-                    base, ext = args.save_plot.rsplit(".", 1) if "." in args.save_plot else (args.save_plot, "png")
+                    base, ext = (
+                        args.save_plot.rsplit(".", 1)
+                        if "." in args.save_plot
+                        else (args.save_plot, "png")
+                    )
                     group_file = f"{base}_{r['period'].replace(':', '-')}.{ext}"
                     diag.save_intensity(
                         group_file,

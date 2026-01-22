@@ -75,7 +75,9 @@ class FrameInterpolator:
         # Try forward interpolation first (current + next)
         can_interpolate = False
         if next_frame is not None:
-            dt_forward = self._time_delta_seconds(meta_curr.timestamp, next_frame.metadata.timestamp)
+            dt_forward = self._time_delta_seconds(
+                meta_curr.timestamp, next_frame.metadata.timestamp
+            )
             if dt_forward > 0 and dt_forward <= max_dt:
                 can_interpolate = True
                 self._dt = dt_forward
@@ -107,7 +109,7 @@ class FrameInterpolator:
 
     def _time_delta_seconds(self, t0: np.datetime64, t1: np.datetime64) -> float:
         """Return time difference in seconds."""
-        return (t1 - t0) / np.timedelta64(1, 's')
+        return (t1 - t0) / np.timedelta64(1, "s")
 
     def _get_pps_anchors(self, frame: FramePipeline) -> list[tuple[int, np.datetime64]]:
         """
@@ -135,15 +137,15 @@ class FrameInterpolator:
         for idx in pps_indices:
             # Estimate time at this radial using linear model
             fraction = idx / n_radials
-            estimated_ns = start_time + np.timedelta64(int(fraction * repeat_time * 1e9), 'ns')
+            estimated_ns = start_time + np.timedelta64(int(fraction * repeat_time * 1e9), "ns")
 
             # Round to nearest whole second (PPS occurs at whole seconds)
             # Convert to seconds since epoch, round, convert back
-            estimated_s = estimated_ns.astype('datetime64[s]')
+            estimated_s = estimated_ns.astype("datetime64[s]")
             # Check if we should round up or down
-            remainder_ns = (estimated_ns - estimated_s) / np.timedelta64(1, 'ns')
+            remainder_ns = (estimated_ns - estimated_s) / np.timedelta64(1, "ns")
             if remainder_ns >= 0.5e9:
-                whole_second = estimated_s + np.timedelta64(1, 's')
+                whole_second = estimated_s + np.timedelta64(1, "s")
             else:
                 whole_second = estimated_s
 
@@ -189,7 +191,7 @@ class FrameInterpolator:
             rate_ns = self._repeat_time * 1e9 / n_radials
             radial_indices = np.arange(n_radials)
             offsets_ns = (radial_indices - idx) * rate_ns
-            self._times = ts + offsets_ns.astype('timedelta64[ns]')
+            self._times = ts + offsets_ns.astype("timedelta64[ns]")
         else:
             # No PPS anchors - fall back to linear model
             self._timing_method = "linear"
@@ -208,24 +210,25 @@ class FrameInterpolator:
 
         # Convert to arrays for interpolation
         anchor_indices = np.array([a[0] for a in anchors])
-        anchor_times_ns = np.array([
-            (a[1] - np.datetime64(0, 'ns')) / np.timedelta64(1, 'ns')
-            for a in anchors
-        ])
+        anchor_times_ns = np.array(
+            [(a[1] - np.datetime64(0, "ns")) / np.timedelta64(1, "ns") for a in anchors]
+        )
 
         # Interpolate for all radial indices
         radial_indices = np.arange(n_radials)
         interpolated_ns = np.interp(radial_indices, anchor_indices, anchor_times_ns)
 
         # Convert back to datetime64
-        return np.datetime64(0, 'ns') + interpolated_ns.astype('timedelta64[ns]')
+        return np.datetime64(0, "ns") + interpolated_ns.astype("timedelta64[ns]")
 
     def _compute_linear_timestamps(self) -> np.ndarray:
         """Compute timestamps using linear model from start_time and repeat_time."""
         meta = self._current.metadata
         n_radials = self._n_radials
         radial_fractions = np.linspace(0, 1, n_radials, endpoint=False)
-        return meta.timestamp + (radial_fractions * self._repeat_time * 1e9).astype('timedelta64[ns]')
+        return meta.timestamp + (radial_fractions * self._repeat_time * 1e9).astype(
+            "timedelta64[ns]"
+        )
 
     def _compute_interpolated_positions(self) -> None:
         """Compute interpolated positions and headings using current and next frames."""
@@ -374,8 +377,13 @@ def _add_arguments(parser) -> None:
     """Add command arguments to parser."""
     parser.add_argument("filename", nargs="+", help="Polar file(s) to process")
     parser.add_argument("--config", "-c", type=str, help="Config YAML filename")
-    parser.add_argument("--tolerance", "-t", type=float, default=1.2,
-                        help="Time tolerance multiplier (default: 1.2)")
+    parser.add_argument(
+        "--tolerance",
+        "-t",
+        type=float,
+        default=1.2,
+        help="Time tolerance multiplier (default: 1.2)",
+    )
 
 
 def add_subparser(subparsers) -> None:
@@ -423,7 +431,9 @@ def run(args) -> None:
 
         try:
             interp = FrameInterpolator(
-                prev_frame, current_frame, next_frame,
+                prev_frame,
+                current_frame,
+                next_frame,
                 tolerance=args.tolerance,
             )
             if interp.method == "interpolate":
@@ -442,9 +452,12 @@ def run(args) -> None:
                 t1 = interp.times[-1]
                 logging.info(
                     "Frame %d: pos=%s timing=%s dt=%.2fs times=[%s..%s]",
-                    i, interp.method, interp.timing_method, interp.time_delta,
-                    np.datetime_as_string(t0, unit='ms'),
-                    np.datetime_as_string(t1, unit='ms'),
+                    i,
+                    interp.method,
+                    interp.timing_method,
+                    interp.time_delta,
+                    np.datetime_as_string(t0, unit="ms"),
+                    np.datetime_as_string(t1, unit="ms"),
                 )
         except ValueError as e:
             n_skipped += 1
@@ -453,7 +466,11 @@ def run(args) -> None:
     logging.info(
         "Summary: position: %d interpolated, %d extrapolated; "
         "timing: %d pps, %d linear; %d skipped",
-        n_interpolated, n_extrapolated, n_pps, n_linear, n_skipped,
+        n_interpolated,
+        n_extrapolated,
+        n_pps,
+        n_linear,
+        n_skipped,
     )
 
 

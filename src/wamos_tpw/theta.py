@@ -236,7 +236,9 @@ class Theta:
         return len(self._theta)
 
     def __repr__(self) -> str:
-        return f"Theta(radials={len(self)}, range=[{self._theta.min():.1f}, {self._theta.max():.1f}])"
+        return (
+            f"Theta(radials={len(self)}, range=[{self._theta.min():.1f}, {self._theta.max():.1f}])"
+        )
 
 
 class ThetaDiag:

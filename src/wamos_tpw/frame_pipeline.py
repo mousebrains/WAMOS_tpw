@@ -287,8 +287,9 @@ def _add_arguments(parser) -> None:
     parser.add_argument("--frame", "-f", type=int, default=0, help="Frame index to process")
     parser.add_argument("--timing", "-t", action="store_true", help="Show timing statistics")
     parser.add_argument("--save", "-s", action="store_true", help="Save intermediate results")
-    parser.add_argument("--workers", "-w", type=int, default=None,
-                        help="Number of parallel workers (default: auto)")
+    parser.add_argument(
+        "--workers", "-w", type=int, default=None, help="Number of parallel workers (default: auto)"
+    )
 
 
 def add_subparser(subparsers) -> None:
@@ -322,8 +323,9 @@ def run(args) -> None:
     files = list(filenames)
 
     if not files:
-        logging.warning("No files found in %s for time range %s to %s",
-                        args.polar_path, args.stime, args.etime)
+        logging.warning(
+            "No files found in %s for time range %s to %s", args.polar_path, args.stime, args.etime
+        )
         return
 
     logging.info("Found %d files to process", len(files))

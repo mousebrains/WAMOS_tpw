@@ -54,12 +54,9 @@ class Shadow:
 
     # Constants
     _RANGE_FRACTION_DEFAULT = 0.05  # Default fraction of range for shadow detection
-    _ANGLE_RANGE_DEFAULT = 10.0      # Default angle range around shadow region
-    _THETA_REFINE_DEFAULT = True    # Default to refine theta based on expected edges
-    _KNOWN_IGNORES = [
-            "range_fraction",
-            "angle_range",
-            "theta_refinement"] # Skip non-region keys
+    _ANGLE_RANGE_DEFAULT = 10.0  # Default angle range around shadow region
+    _THETA_REFINE_DEFAULT = True  # Default to refine theta based on expected edges
+    _KNOWN_IGNORES = ["range_fraction", "angle_range", "theta_refinement"]  # Skip non-region keys
 
     def __init__(
         self,
@@ -92,7 +89,7 @@ class Shadow:
         centroids = []
 
         for key in config:
-            if key in self._KNOWN_IGNORES: # Skip non-region keys
+            if key in self._KNOWN_IGNORES:  # Skip non-region keys
                 continue
             region = config[key]
             if "LHS" in region:
@@ -126,9 +123,9 @@ class Shadow:
         index = []
 
         for row in range(indices.shape[0]):
-            ii = indices[row,:]
+            ii = indices[row, :]
             sgn = signs[row]
-            aLocal = intensity[ii[0]: (ii[1] + 1), :range_slice]
+            aLocal = intensity[ii[0] : (ii[1] + 1), :range_slice]
             row_sums = aLocal.sum(axis=1)
             row_padded = np.pad(row_sums, 2, mode="reflect")
             b = np.convolve(row_padded, kernel_1d, mode="same")[2:-2]
