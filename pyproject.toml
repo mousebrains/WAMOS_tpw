@@ -46,7 +46,7 @@ dev = [
     "pytest-benchmark",
     "mypy>=1.0",
     "types-PyYAML",
-    "ruff>=0.1",
+    "ruff>=0.14",
     "pre-commit>=3.0",
 ]
 docs = [
