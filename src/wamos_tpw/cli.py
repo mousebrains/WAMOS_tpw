@@ -92,8 +92,10 @@ Examples:
     # Register subcommands from each module
     from wamos_tpw import combine, processed, files, bearing, theta
     from wamos_tpw import filenames, polarfile, timestamp, config
-    from wamos_tpw import deramp, destreak, shadow, dewind
+    from wamos_tpw import deramp, destreak, shadow, dewind, pps
+    from wamos_tpw import frame_pipeline, file_pipeline, files_pipeline, interpolator
     from wamos_tpw import range as range_module  # Avoid shadowing builtin
+    from wamos_tpw import combine_sliding
 
     combine.add_subparser(subparsers)  # wamos combine
     processed.add_subparser(subparsers)  # wamos process
@@ -109,6 +111,12 @@ Examples:
     destreak.add_subparser(subparsers)  # wamos destreak
     shadow.add_subparser(subparsers)  # wamos shadow
     dewind.add_subparser(subparsers)  # wamos dewind
+    pps.add_subparser(subparsers)  # wamos PPS
+    frame_pipeline.add_subparser(subparsers)  # wamos frame-pipeline
+    file_pipeline.add_subparser(subparsers)  # wamos file-pipeline
+    files_pipeline.add_subparser(subparsers)  # wamos files-pipeline
+    interpolator.add_subparser(subparsers)  # wamos interpolator
+    combine_sliding.add_subparser(subparsers)  # wamos sliding-movie
 
     # Parse arguments
     args = parser.parse_args()

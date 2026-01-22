@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import warnings
 
 import numpy as np
 from scipy.optimize import curve_fit
@@ -57,6 +58,7 @@ class Dewind:
         self,
         intensity: np.ndarray,
         theta: Theta,
+        copy: bool = False,
     ) -> None:
         """
         Dewind a single frame.
@@ -65,9 +67,14 @@ class Dewind:
             intensity: Deramped intensity array (n_bearings, n_distances)
             theta: Theta object for bearing angles
                    (config is obtained from theta.config)
+            copy: If True, copy the input array before modifying.
+                  If False (default), modify in-place for memory efficiency.
         """
         self._config = theta.config
-        mu = np.nanmean(intensity, axis=1)  # Mean over distances
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', 'Mean of empty slice')
+            mu = np.nanmean(intensity, axis=1)  # Mean over distances
         q = ~np.isnan(mu)
 
         theta_values = theta.theta
@@ -93,6 +100,8 @@ class Dewind:
 
         # Compute fitted values and subtract
         fit_values = _sin_model(theta_values, self._amplitude, self._phi)
+        if copy:
+            intensity = intensity.copy()
         intensity -= fit_values[:, np.newaxis]
         self._intensity = intensity
 

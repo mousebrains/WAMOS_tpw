@@ -39,8 +39,9 @@ def detect_shadow_edges(
     GAUSSIAN_SIGMA = 3
     GRADIENT_THRESHOLD = 0.01
 
-    expected_center = config.shadow.center
-    search_range = config.shadow.width
+    shadow_cfg = config.get("shadow", {})
+    expected_center = shadow_cfg.get("center", 180.0) if isinstance(shadow_cfg, dict) else getattr(shadow_cfg, "center", 180.0)
+    search_range = shadow_cfg.get("width", 90.0) if isinstance(shadow_cfg, dict) else getattr(shadow_cfg, "width", 90.0)
 
     # Get intensity at first few distance bins (shadow is most visible there)
     intensity = frame.intensity[:, :SHADOW_INTENSITY_BINS].mean(axis=1).astype(float)
@@ -112,7 +113,8 @@ def compute_chunk_shadow_offset(
         - shadow_left_mean: mean left edge angle (degrees)
         - shadow_right_mean: mean right edge angle (degrees)
     """
-    expected_center = config.shadow.center
+    shadow_cfg = config.get("shadow", {})
+    expected_center = shadow_cfg.get("center", 180.0) if isinstance(shadow_cfg, dict) else getattr(shadow_cfg, "center", 180.0)
 
     left_edges = []
     right_edges = []

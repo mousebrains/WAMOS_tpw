@@ -2,9 +2,14 @@
 
 "roger revelle":
   shadow: # Shadow regions
+    range_fraction: 0.1 # fraction of range bins to use for detecting the shadow region
+    theta_refinement: none # Theta adjustment method: none, shift, or scale
     aft:  # Aft tower
-      - 130 # Left hand side of shadow angle in degrees relative to radar 0
-      - 230 # Right hand side of shadow angle in degrees relative to radar 0
+      LHS: 130 # Left hand side of shadow angle in degrees relative to radar 0
+      RHS: 230 # Right hand side of shadow angle in degrees relative to radar 0
+      expected_LHS: 145.36 # Expected LHS angle in degrees based on sample
+      expected_RHS: 215.36 # Expected RHS angle in degrees based on sample
+
   bias: # Bias parameters
     range: -6 # Range bias in meters
     theta: 10 # Theta bias in degrees

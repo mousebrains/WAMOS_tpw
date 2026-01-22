@@ -20,7 +20,7 @@ import os
 import resource
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -31,51 +31,57 @@ if src_path.exists():
     sys.path.insert(0, str(src_path))
 
 from wamos_tpw import Filenames, PolarFile  # noqa: E402
+from wamos_tpw.config import Config  # noqa: E402
 from wamos_tpw.destreak import Destreak  # noqa: E402
 from wamos_tpw.filenames import add_common_arguments  # noqa: E402
 from wamos_tpw.logging_config import add_logging_arguments, setup_logging  # noqa: E402
-from wamos_tpw.shadow import Shadow  # noqa: E402
-from wamos_tpw.theta import Theta  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 
-def load_frame(fn: str) -> dict | None:
+def load_frame(fn: str, config: Config, save_mask: bool = True, stats_only: bool = False) -> dict | None:
     """
     Worker function to load a single frame.
 
     Args:
         fn: Filename to load
+        config: Configuration object
+        save_mask: Whether to save the streak mask (needed for plotting)
+        stats_only: If True, return only timing stats (reduces memory)
 
     Returns:
         Dictionary with frame info, or None on error.
     """
     try:
         t0 = time.perf_counter()
-        frame = PolarFile(fn).frame()
+        pf = PolarFile(fn, config=config)
         t1 = time.perf_counter()
-        theta = Theta(frame)  # Calculate radar beam angle
+        frame = pf.frame()
         t2 = time.perf_counter()
-        destreaked = Destreak(frame, save_mask=True)  # Take out interference streaks
-        _ = destreaked.intensity  # Force computation
+        destreaked = Destreak(frame, save_mask=save_mask)
         t3 = time.perf_counter()
-        shadow = Shadow(destreaked.intensity, theta)
-        t4 = time.perf_counter()
-        return {
+
+        result = {
             "filename": fn,
-            "frame": frame,
-            "theta": theta,
-            "destreak": destreaked,
-            "shadow": shadow,
             "timestamp": frame.timestamp,
             "timing": {
-                "polar_total": t1 - t0,
-                "theta": t2 - t1,
+                "polarfile": t1 - t0,
+                "frame": t2 - t1,
                 "destreak": t3 - t2,
-                "shadow": t4 - t3,
-                "total": t4 - t0,
+                "total": t3 - t0,
+            },
+            "substeps": {
+                "polarfile": pf.timing,
+                "destreak": destreaked.timing,
             },
         }
+
+        # Only store large objects if needed for plotting
+        if not stats_only:
+            result["frame"] = frame
+            result["destreak"] = destreaked
+
+        return result
     except Exception:
         logger.exception("Failed to load %s", fn)
         return None
@@ -108,6 +114,8 @@ def main() -> int:
     add_common_arguments(parser)
     add_logging_arguments(parser)
 
+    parser.add_argument("--config", type=str, default=None, help="Path to config file")
+
     grp = parser.add_mutually_exclusive_group(required=False)
     grp.add_argument(
         "--progress",
@@ -127,7 +135,12 @@ def main() -> int:
         "--workers",
         type=int,
         default=None,
-        help=f"Number of worker threads (default: CPU count = {os.cpu_count()})",
+        help=f"Number of workers (default: CPU count = {os.cpu_count()})",
+    )
+    parser.add_argument(
+        "--processes",
+        action="store_true",
+        help="Use ProcessPoolExecutor instead of ThreadPoolExecutor (avoids GIL)",
     )
     parser.add_argument(
         "--vmin",
@@ -180,9 +193,9 @@ def main() -> int:
     )
 
     parser.add_argument(
-        "--no-plot",
+        "--plot",
         action="store_true",
-        help="Load and destreak frames without plotting",
+        help="Show interactive plot viewer",
     )
 
     args = parser.parse_args()
@@ -197,18 +210,27 @@ def main() -> int:
             logger.error("No files found in specified time range")
             return 1
 
+        executor_type = "processes" if args.processes else "threads"
         logger.info(
-            "Loading %d files with %d workers",
+            "Loading %d files with %d %s",
             n_files,
             args.workers or os.cpu_count(),
+            executor_type,
         )
 
         # Load frames in parallel
         results: list[dict] = []
+        config = Config(args.config)
+        needs_plot_data = args.plot or args.output
+        save_mask = needs_plot_data  # Only save mask if we're plotting
+        stats_only = not needs_plot_data  # Don't store frames if just collecting stats
 
-        stime = time.time()
-        with ThreadPoolExecutor(max_workers=args.workers) as executor:
-            futures = {executor.submit(load_frame, fn): fn for fn in files}
+        t0 = time.perf_counter()
+        ExecutorClass = ProcessPoolExecutor if args.processes else ThreadPoolExecutor
+        with ExecutorClass(max_workers=args.workers) as executor:
+            futures = {
+                executor.submit(load_frame, fn, config, save_mask, stats_only): fn for fn in files
+            }
 
             for i, future in enumerate(as_completed(futures)):
                 if args.progress_flag:
@@ -217,34 +239,55 @@ def main() -> int:
                 if result is not None:
                     results.append(result)
 
+        elapsed = time.perf_counter() - t0
         n_loaded = len(results)
-        dt = time.time() - stime
-        dtPerFrame = dt / n_loaded if n_loaded > 0 else None
+        fps = n_loaded / elapsed if elapsed > 0 else 0
         print(
-            f"Successfully loaded {n_loaded} of {n_files} frames",
-            f"in {dt:.3f} seconds",
-            f"{1 / dtPerFrame:.1f} frames/second" if dtPerFrame else "",
+            f"Successfully loaded {n_loaded} of {n_files} frames "
+            f"in {elapsed:.2f}s ({fps:.1f} frames/sec)"
         )
 
         # Print timing breakdown
         if n_loaded > 0:
-            timing_keys = ["polar_total", "theta", "destreak", "shadow"]
+            timing_keys = ["polarfile", "frame", "destreak"]
             totals = {k: sum(r["timing"][k] for r in results) for k in timing_keys}
             total_time = sum(totals.values())
-            print("\nTiming breakdown (per-frame averages):")
+            print("\n=== Per-Step Processing Statistics ===")
+            print(f"{'Step':<12} {'Time (ms)':<12} {'Time %':<10}")
+            print("-" * 34)
             for key in timing_keys:
                 avg_ms = (totals[key] / n_loaded) * 1000
                 pct = (totals[key] / total_time) * 100 if total_time > 0 else 0
-                print(f"  {key:12s}: {avg_ms:7.1f} ms ({pct:5.1f}%)")
-            avg_total_ms = (total_time / n_loaded) * 1000
-            print(f"  {'total':12s}: {avg_total_ms:7.1f} ms")
+                print(f"{key:<12} {avg_ms:<12.3f} {pct:<10.1f}")
+
+            # Print sub-step timing breakdown
+            print("\n=== Sub-Step Timing Breakdown ===")
+            for step in ["polarfile", "destreak"]:
+                # Aggregate substeps across all results
+                substep_totals: dict[str, list[float]] = {}
+                for r in results:
+                    substeps = r.get("substeps", {}).get(step, {})
+                    for sub_name, sub_time in substeps.items():
+                        if sub_name not in substep_totals:
+                            substep_totals[sub_name] = []
+                        substep_totals[sub_name].append(sub_time)
+
+                if substep_totals:
+                    step_total = totals[step]
+                    print(f"\n{step}:")
+                    for sub_name, sub_times in sorted(substep_totals.items()):
+                        if sub_times:
+                            avg_sub_ms = np.mean(sub_times) * 1000
+                            sub_total = sum(sub_times)
+                            sub_pct = (sub_total / step_total * 100) if step_total > 0 else 0
+                            print(f"  {sub_name:<20} {avg_sub_ms:>8.3f} ms  ({sub_pct:>5.1f}%)")
 
         if n_loaded == 0:
             logger.error("No valid frames loaded")
             return 1
 
-        if args.no_plot:
-            # Report peak memory usage
+        if not args.plot and not args.output:
+            # Report peak memory usage and exit (no plotting requested)
             peak_mem = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
             # On macOS, ru_maxrss is in bytes; on Linux it's in KB
             if sys.platform == "darwin":
@@ -363,15 +406,14 @@ def main() -> int:
 
             print(f"\nSaved {n_loaded} frames")
 
-        else:
+        elif args.plot:
             # Interactive mode with navigation buttons
             class FrameViewer:
-                """Interactive viewer for stepping through frames."""
+                """Interactive viewer for stepping through destreaked frames."""
 
                 def __init__(
                     self,
                     results: list[dict],
-                    destreak: bool,
                     range_start: int,
                     range_end: int | None,
                     cmap: str,
@@ -382,7 +424,6 @@ def main() -> int:
                     self.results = results
                     self.n_frames = len(results)
                     self.current_idx = 0
-                    self.destreak = destreak
                     self.range_start = range_start
                     self.range_end = range_end
                     self.cmap = cmap
@@ -392,18 +433,14 @@ def main() -> int:
                     self.playing = False
                     self.timer: object | None = None
 
-                    # Create figure
-                    if self.destreak:
-                        self.fig, self.axes = plt.subplots(
-                            1,
-                            3,
-                            figsize=(figsize[0] * 1.3, figsize[1] * 0.7),
-                            sharex=True,
-                            sharey=True,
-                        )
-                    else:
-                        self.fig, ax = plt.subplots(figsize=figsize)
-                        self.axes = [ax]
+                    # Create figure with 3 panels: original, mask, destreaked
+                    self.fig, self.axes = plt.subplots(
+                        1,
+                        3,
+                        figsize=(figsize[0] * 1.3, figsize[1] * 0.7),
+                        sharex=True,
+                        sharey=True,
+                    )
 
                     # Add navigation buttons
                     plt.subplots_adjust(bottom=0.15)
@@ -449,77 +486,59 @@ def main() -> int:
                     range_bins = np.arange(self.range_start, self.range_start + n_ranges + 1)
                     bearing_bins = np.arange(n_bearings + 1)
 
-                    if self.destreak:
-                        destreaker = r["destreak"]
-                        destreaked_slice = destreaker.intensity[:, self.range_start : rng_end]
-                        streak_mask_slice = destreaker.streak_mask[:, self.range_start : rng_end]
-                        n_streaks = destreaker.n_streak_pixels
-                        streak_pct = destreaker.streak_fraction * 100
+                    destreaker = r["destreak"]
+                    destreaked_slice = destreaker.intensity[:, self.range_start : rng_end]
+                    streak_mask_slice = destreaker.streak_mask[:, self.range_start : rng_end]
+                    n_streaks = destreaker.n_streak_pixels
+                    streak_pct = destreaker.streak_fraction * 100
 
-                        pcm0 = self.axes[0].pcolormesh(
-                            range_bins,
-                            bearing_bins,
-                            original_slice,
-                            shading="flat",
-                            cmap=self.cmap,
-                            vmin=self.vmin,
-                            vmax=self.vmax,
-                        )
-                        self.axes[0].set_xlabel("Range Bin")
-                        self.axes[0].set_ylabel("Bearing Index")
-                        self.axes[0].set_title("Original")
-                        self.colorbars.append(self.fig.colorbar(pcm0, ax=self.axes[0]))
+                    pcm0 = self.axes[0].pcolormesh(
+                        range_bins,
+                        bearing_bins,
+                        original_slice,
+                        shading="flat",
+                        cmap=self.cmap,
+                        vmin=self.vmin,
+                        vmax=self.vmax,
+                    )
+                    self.axes[0].set_xlabel("Range Bin")
+                    self.axes[0].set_ylabel("Bearing Index")
+                    self.axes[0].set_title("Original")
+                    self.colorbars.append(self.fig.colorbar(pcm0, ax=self.axes[0]))
 
-                        pcm1 = self.axes[1].pcolormesh(
-                            range_bins,
-                            bearing_bins,
-                            streak_mask_slice.astype(float),
-                            shading="flat",
-                            cmap="Reds",
-                            vmin=0,
-                            vmax=1,
-                        )
-                        self.axes[1].set_xlabel("Range Bin")
-                        self.axes[1].set_ylabel("Bearing Index")
-                        self.axes[1].set_title(
-                            f"Streak Mask ({n_streaks} pixels, {streak_pct:.2f}%)"
-                        )
-                        self.colorbars.append(self.fig.colorbar(pcm1, ax=self.axes[1]))
+                    pcm1 = self.axes[1].pcolormesh(
+                        range_bins,
+                        bearing_bins,
+                        streak_mask_slice.astype(float),
+                        shading="flat",
+                        cmap="Reds",
+                        vmin=0,
+                        vmax=1,
+                    )
+                    self.axes[1].set_xlabel("Range Bin")
+                    self.axes[1].set_ylabel("Bearing Index")
+                    self.axes[1].set_title(
+                        f"Streak Mask ({n_streaks} pixels, {streak_pct:.2f}%)"
+                    )
+                    self.colorbars.append(self.fig.colorbar(pcm1, ax=self.axes[1]))
 
-                        pcm2 = self.axes[2].pcolormesh(
-                            range_bins,
-                            bearing_bins,
-                            destreaked_slice,
-                            shading="flat",
-                            cmap=self.cmap,
-                            vmin=self.vmin,
-                            vmax=self.vmax,
-                        )
-                        self.axes[2].set_xlabel("Range Bin")
-                        self.axes[2].set_ylabel("Bearing Index")
-                        self.axes[2].set_title("Destreaked")
-                        self.colorbars.append(self.fig.colorbar(pcm2, ax=self.axes[2]))
+                    pcm2 = self.axes[2].pcolormesh(
+                        range_bins,
+                        bearing_bins,
+                        destreaked_slice,
+                        shading="flat",
+                        cmap=self.cmap,
+                        vmin=self.vmin,
+                        vmax=self.vmax,
+                    )
+                    self.axes[2].set_xlabel("Range Bin")
+                    self.axes[2].set_ylabel("Bearing Index")
+                    self.axes[2].set_title("Destreaked")
+                    self.colorbars.append(self.fig.colorbar(pcm2, ax=self.axes[2]))
 
-                        suptitle = f"Frame {self.current_idx + 1}/{self.n_frames}: {timestamp}"
-                        suptitle += f"\nShape: {n_bearings} x {n_ranges}"
-                        self.fig.suptitle(suptitle)
-                    else:
-                        pcm = self.axes[0].pcolormesh(
-                            range_bins,
-                            bearing_bins,
-                            original_slice,
-                            shading="flat",
-                            cmap=self.cmap,
-                            vmin=self.vmin,
-                            vmax=self.vmax,
-                        )
-                        self.axes[0].set_xlabel("Range Bin")
-                        self.axes[0].set_ylabel("Bearing Index")
-                        self.colorbars.append(self.fig.colorbar(pcm, ax=self.axes[0]))
-
-                        title = f"Frame {self.current_idx + 1}/{self.n_frames}: {timestamp}"
-                        title += f"\nShape: {n_bearings} x {n_ranges}"
-                        self.axes[0].set_title(title)
+                    suptitle = f"Frame {self.current_idx + 1}/{self.n_frames}: {timestamp}"
+                    suptitle += f"\nShape: {n_bearings} x {n_ranges}"
+                    self.fig.suptitle(suptitle)
 
                     self.fig.canvas.draw_idle()
 
@@ -565,7 +584,6 @@ def main() -> int:
             # Create and show the viewer
             viewer = FrameViewer(
                 results=results,
-                destreak=True,
                 range_start=args.range_start,
                 range_end=args.range_end,
                 cmap=args.cmap,

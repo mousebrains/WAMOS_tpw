@@ -10,7 +10,6 @@ import logging
 import time as _time
 
 import numpy as np
-from scipy.signal import convolve2d
 from scipy import ndimage
 
 from wamos_tpw.config import Config
@@ -82,8 +81,9 @@ class Destreak:
 
         t0 = _time.perf_counter()
         intensity = frame.intensity.astype(np.float32)  # Signed for calculation
-        a = convolve2d(intensity, kernel, mode="same", boundary="wrap")
-        b = convolve2d(intensity, kAdjacent, mode="same", boundary="wrap")
+        # scipy.ndimage.convolve supports mode='wrap' directly
+        a = ndimage.convolve(intensity, kernel, mode="wrap")
+        b = ndimage.convolve(intensity, kAdjacent, mode="wrap")
         self._timing["convolve"] = _time.perf_counter() - t0
 
         t0 = _time.perf_counter()

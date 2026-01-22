@@ -48,6 +48,7 @@ class Deramp:
         self,
         intensity: np.ndarray,
         rng: Range,
+        copy: bool = False,
     ) -> None:
         """
         Deramp a single frame.
@@ -56,6 +57,8 @@ class Deramp:
             intensity: Shadow-masked intensity array (n_bearings, n_distances)
             rng: Range object for slant range values
                  (config is obtained from rng.config)
+            copy: If True, copy the input array before modifying.
+                  If False (default), modify in-place for memory efficiency.
         """
         self._config = rng.config
         order = int(self._config.get("deramp.order", self._DERAMP_ORDER_DEFAULT))
@@ -69,6 +72,8 @@ class Deramp:
         p = Polynomial.fit(x[~q], mu[~q], deg=order)
         py = p(x)
 
+        if copy:
+            intensity = intensity.copy()
         intensity -= py[np.newaxis, :]
         self._intensity = intensity
         self._polynomial = p

@@ -153,7 +153,6 @@ class FrameInterpolator:
 
     def _compute_timestamps(self) -> None:
         """Compute per-radial timestamps using PPS anchors or linear fallback."""
-        meta_curr = self._current.metadata
         n_radials = self._n_radials
 
         # Collect PPS anchors from all available frames

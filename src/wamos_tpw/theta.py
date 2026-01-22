@@ -78,7 +78,6 @@ class Theta:
             Array of theta angles in degrees [0, 360)
         """
         data = frame.raw
-        n_radials = frame.n_bearings
 
         # Step 1: Extract 12-bit counter from bins 18, 19, 20
         t0 = _time.perf_counter()
@@ -88,8 +87,13 @@ class Theta:
         # Step 2: Interpolate fractional degrees within each run
         t0 = _time.perf_counter()
         theta = self._interpolate_theta(degrees)
-
         self._timing["interpolate"] = _time.perf_counter() - t0
+
+        # Step 3: Build sorted index for fast lookups
+        t0 = _time.perf_counter()
+        self._sorted_indices = np.argsort(theta)
+        self._sorted_theta = theta[self._sorted_indices]
+        self._timing["sort"] = _time.perf_counter() - t0
 
         return theta
 
@@ -128,23 +132,31 @@ class Theta:
         Returns:
             Array of theta angles for each radial, wrapped to [0, 360)
         """
+        unique_degrees, degree_indices, run_counts = np.unique(
+            degrees, return_inverse=True, return_counts=True
+        )
 
-        [val, inverse, cnt] = np.unique(degrees, 
-                                        return_inverse=True, 
-                                        return_counts=True)
+        mean_run_length = np.mean(run_counts)
 
-        mu = np.mean(cnt) # Average run length
+        # Convert to float for fractional calculations
+        run_counts = run_counts.astype(np.float32)
+        first_run_count = run_counts[0]
 
-        cnt = cnt.astype(np.float32) # Convert to float for mu insertion, if needed
-        cnt0 = cnt[0] # Copy for later
-        cnt[ 0] = max(cnt[ 0], mu) # Extend first run if too short
-        cnt[-1] = max(cnt[-1], mu) # Extend last run if too short
+        # Extend first/last runs if too short (partial rotations at edges)
+        run_counts[0] = max(run_counts[0], mean_run_length)
+        run_counts[-1] = max(run_counts[-1], mean_run_length)
 
-        dVal = np.diff(val, append=val[-1]+1) # Degree differences between runs
-        step = dVal / cnt # Step size per radial in each run
-        delta = step[inverse] # Map back to original radial order
-        delta[0] += (cnt[0] - cnt0) * delta[0] # Adjust first run if extended
-        return ((val[0] + np.cumsum(delta) - (delta / 2)) % 360).astype(np.float32)
+        # Calculate step size per radial in each run
+        degree_diffs = np.diff(unique_degrees, append=unique_degrees[-1] + 1)
+        step_sizes = degree_diffs / run_counts
+        delta = step_sizes[degree_indices]
+
+        # Adjust first radial's delta to account for extended first run.
+        # When first run is extended, cumsum starts too early, so we add
+        # the extra steps that would have occurred before the actual start.
+        delta[0] += (run_counts[0] - first_run_count) * delta[0]
+
+        return ((unique_degrees[0] + np.cumsum(delta) - (delta / 2)) % 360).astype(np.float32)
 
     # -------------------------------------------------------------------------
     # Public API
@@ -154,17 +166,50 @@ class Theta:
         """
         Get radial indices for given theta angles.
 
+        Uses binary search on sorted theta for O(m log n) performance.
+
         Args:
             thetas: Array of theta angles in degrees
 
         Returns:
             Array of radial indices corresponding to input theta angles
         """
-        thetas = np.asarray(thetas) % 360  # Map onto [0, 360)
-        # Claude I really do want axis=1 here
-        indices = np.argmin(np.abs(self._theta[:, np.newaxis] - thetas[np.newaxis, :]), axis=1)
-        indices = np.clip(indices, 0, self._theta.size - 1)
-        return indices
+        input_shape = thetas.shape
+        thetas = np.asarray(thetas).ravel() % 360  # Map onto [0, 360)
+
+        # Binary search in sorted theta array
+        n = len(self._sorted_theta)
+        insert_pos = np.searchsorted(self._sorted_theta, thetas)
+
+        # Clamp to valid range and get candidates (position and position-1)
+        insert_pos = np.clip(insert_pos, 0, n - 1)
+        prev_pos = np.clip(insert_pos - 1, 0, n - 1)
+
+        # Compare distances to find closest
+        dist_curr = np.abs(self._sorted_theta[insert_pos] - thetas)
+        dist_prev = np.abs(self._sorted_theta[prev_pos] - thetas)
+
+        # Use previous position where it's closer
+        best_pos = np.where(dist_prev < dist_curr, prev_pos, insert_pos)
+
+        # Map back to original (unsorted) indices
+        indices = self._sorted_indices[best_pos]
+
+        return indices.reshape(input_shape)
+
+    def set_bias(self, bias: float) -> None:
+        """
+        Apply a bias offset to all theta angles.
+
+        Also updates the sorted index arrays used by index() for lookups.
+
+        Args:
+            bias: Bias angle in degrees to add to all theta values
+        """
+        self._theta = (self._theta + bias) % 360
+        # Re-sort after bias adjustment to maintain correct index() behavior
+        self._sorted_indices = np.argsort(self._theta)
+        self._sorted_theta = self._theta[self._sorted_indices]
 
     @property
     def theta(self) -> np.ndarray:
@@ -191,7 +236,7 @@ class Theta:
         return len(self._theta)
 
     def __repr__(self) -> str:
-        return f"radials={len(self)}, range=[{self._theta.min():.1f}, {self._theta.max():.1f}])"
+        return f"Theta(radials={len(self)}, range=[{self._theta.min():.1f}, {self._theta.max():.1f}])"
 
 
 class ThetaDiag:

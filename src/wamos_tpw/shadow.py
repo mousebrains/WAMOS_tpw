@@ -11,8 +11,6 @@ import logging
 import time as _time
 from typing import TYPE_CHECKING
 
-from scipy.signal import convolve2d
-
 import numpy as np
 
 from wamos_tpw.config import Config
@@ -35,12 +33,12 @@ class Shadow:
 
     Config structure:
         shadow:
-          aft:           # Name of shadow region
-            - 130        # Start angle (degrees)
-            - 230        # End angle (degrees)
-          forward:       # Another shadow region (optional)
-            - 350
-            - 10         # Handles wrap-around (350° to 10°)
+          range_fraction: 0.1  # Fraction of range bins for detection
+          aft:                 # Name of shadow region
+            LHS: 130           # Left hand side angle (degrees)
+            RHS: 230           # Right hand side angle (degrees)
+            expected_LHS: 145  # Expected LHS for theta adjustment (optional)
+            expected_RHS: 215  # Expected RHS for theta adjustment (optional)
 
     Example:
         >>> from wamos_tpw.polarfile import PolarFile
@@ -56,6 +54,12 @@ class Shadow:
 
     # Constants
     _RANGE_FRACTION_DEFAULT = 0.05  # Default fraction of range for shadow detection
+    _ANGLE_RANGE_DEFAULT = 10.0      # Default angle range around shadow region
+    _THETA_REFINE_DEFAULT = True    # Default to refine theta based on expected edges
+    _KNOWN_IGNORES = [
+            "range_fraction",
+            "angle_range",
+            "theta_refinement"] # Skip non-region keys
 
     def __init__(
         self,
@@ -72,21 +76,43 @@ class Shadow:
         """
         self._config = theta.config
         self._timing: dict[str, float] = {}
+
+        # Get shadow config - try direct access first (tower-specific config)
         config = self._config.get("shadow", Config())
 
-        edges = []
-        for key in config:
-            if key != "range_fraction":
-                edges.append(config[key])
+        self._thetas = np.empty([0, 2], dtype=float)
+        self._indices = np.empty_like(self._thetas, dtype=int)
+        self._theta_bias = 0.0
 
-        if not edges:
-            self._thetas = np.empty([0, 2], dtype=float)
-            self._indices = np.empty_like(self._thetas, dtype=int)
-            return
+        # Parse shadow regions from config (new format with LHS/RHS keys)
 
         t0 = _time.perf_counter()
-        edges = np.array(edges)
+
+        signs = []
+        centroids = []
+
+        for key in config:
+            if key in self._KNOWN_IGNORES: # Skip non-region keys
+                continue
+            region = config[key]
+            if "LHS" in region:
+                centroids.append(region["LHS"])
+                signs.append(+1)
+            if "RHS" in region:
+                centroids.append(region["RHS"])
+                signs.append(-1)
+
+        if not centroids:
+            return
+
+        centroids = np.array(centroids)
+        angle_range = config.get("angle_range", self._ANGLE_RANGE_DEFAULT)
+        angle_delta = np.array([-1, 1]) * angle_range
+        edges = centroids[:, np.newaxis] + angle_delta[np.newaxis, :]
+
+        signs = np.array(signs, dtype=int)
         indices = theta.index(edges)  # Indices for these thetas
+
         self._timing["index_lookup"] = _time.perf_counter() - t0
 
         range_fraction = config.get("range_fraction", self._RANGE_FRACTION_DEFAULT)
@@ -95,44 +121,57 @@ class Shadow:
         )
 
         t0 = _time.perf_counter()
-        intensity = intensity[:, :range_slice]
-        kernel = np.ones((5, 5))  # LHS is +1
-        kernel[2, :] = 0  # Ignore center
-        kernel[3:, :] *= -1  # RHS is -1
+        kernel_1d = np.array([1, 1, 0, -1, -1], dtype=np.float32)
 
-        regions = []
+        index = []
 
-        for region in indices:
-            a = intensity[region[0] : (region[1] + 1), :]
-            b = convolve2d(a, kernel, mode="same", boundary="wrap")
-            bSum = b.sum(axis=1)
-            iRHS = np.argmax(bSum)  # high to low
-            iLHS = np.argmin(bSum)  # low to high
-            regions.append((iLHS + region[0], iRHS + region[0]))
+        for row in range(indices.shape[0]):
+            ii = indices[row,:]
+            sgn = signs[row]
+            aLocal = intensity[ii[0]: (ii[1] + 1), :range_slice]
+            row_sums = aLocal.sum(axis=1)
+            row_padded = np.pad(row_sums, 2, mode="reflect")
+            b = np.convolve(row_padded, kernel_1d, mode="same")[2:-2]
+            if sgn > 0:
+                iEdge = np.argmin(b)
+            else:
+                iEdge = np.argmax(b)
+            index.append(iEdge + ii[0])
+
         self._timing["convolve"] = _time.perf_counter() - t0
 
         t0 = _time.perf_counter()
-        self._indices = np.array(regions)
+        # Reshape to pair LHS and RHS edges into regions: [[lhs0, rhs0], [lhs1, rhs1], ...]
+        self._indices = np.array(index, dtype=int).reshape(-1, 2)
         self._thetas = theta.theta[self._indices]
         self._timing["extract"] = _time.perf_counter() - t0
+
+        if config.get("theta_refinement", self._THETA_REFINE_DEFAULT):
+            # Refine theta bias based on expected edges
+            self._theta_bias = np.mean(centroids - self._thetas.ravel())
 
     def mask(self, intensity: np.ndarray) -> np.ndarray:
         """Return intensity with shadow regions masked as NaN."""
         masked_intensity = intensity.astype(np.float32, copy=True)
         mask = np.zeros(masked_intensity.shape[0], dtype=bool)
-        for region in self._indices:
-            mask[region[0] : region[1] + 1] = True
+        for start, end in self._indices:
+            mask[start : end + 1] = True
         masked_intensity[mask, :] = np.nan
         return masked_intensity
 
     @property
+    def theta_bias(self) -> float:
+        """Return the theta bias applied during shadow detection (0.0 if none)."""
+        return self._theta_bias
+
+    @property
     def indices(self) -> np.ndarray:
-        """Return the shadow regions as (start, end) index tuples."""
+        """Return the shadow regions as Nx2 array of [start, end] index pairs."""
         return self._indices
 
     @property
     def thetas(self) -> np.ndarray:
-        """Return the shadow regions as (start, end) angle tuples in degrees."""
+        """Return the shadow regions as Nx2 array of [start, end] angle pairs in degrees."""
         return self._thetas
 
     @property

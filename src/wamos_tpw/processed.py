@@ -550,8 +550,10 @@ class ProcessedViewer(BaseViewer):
         # Determine radar height (CLI arg > config > metadata)
         if radar_height is not None:
             self._radar_height = radar_height
-        elif self._config.radar.height is not None:
-            self._radar_height = self._config.radar.height
+        elif self._config.get("radar.height") is not None:
+            self._radar_height = self._config.get("radar.height")
+        elif self._config.get("tower.height") is not None:
+            self._radar_height = self._config.get("tower.height")
         else:
             self._radar_height = None
 

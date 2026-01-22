@@ -98,7 +98,9 @@ class Theta:
 
         self._frames = frames
         self._config = config or Config()
-        self._refine = refine and self._config.theta_refinement.enabled
+        theta_refine_cfg = self._config.get("theta_refinement", {})
+        refine_enabled = theta_refine_cfg.get("enabled", False) if isinstance(theta_refine_cfg, dict) else getattr(theta_refine_cfg, "enabled", False)
+        self._refine = refine and refine_enabled
 
         # Calculated values (computed lazily)
         self._bearing: np.ndarray | None = None
@@ -133,9 +135,11 @@ class Theta:
         self._bearing = np.concatenate(self._bearing_per_frame)
 
         # Refine using shadow region if enabled
-        min_frames = self._config.theta_refinement.min_frames
-        if self._refine and len(self._frames) >= min_frames:
-            self._refine_with_shadow()
+        if self._refine:
+            theta_refine_cfg = self._config.get("theta_refinement", {})
+            min_frames = theta_refine_cfg.get("min_frames", 3) if isinstance(theta_refine_cfg, dict) else getattr(theta_refine_cfg, "min_frames", 3)
+            if len(self._frames) >= min_frames:
+                self._refine_with_shadow()
 
     def _calculate_frame_bearing(self, frame: Frame) -> np.ndarray:
         """
@@ -291,8 +295,9 @@ class Theta:
         left_edges = []
         right_edges = []
 
-        expected_center = self._config.shadow.center
-        search_range = self._config.shadow.width
+        shadow_cfg = self._config.get("shadow", {})
+        expected_center = shadow_cfg.get("center", 180.0) if isinstance(shadow_cfg, dict) else getattr(shadow_cfg, "center", 180.0)
+        search_range = shadow_cfg.get("width", 90.0) if isinstance(shadow_cfg, dict) else getattr(shadow_cfg, "width", 90.0)
 
         for frame_idx, frame in enumerate(self._frames):
             bearing = self._bearing_per_frame[frame_idx]
@@ -464,8 +469,10 @@ class Theta:
             left_edges: List of detected left edge angles
             right_edges: List of detected right edge angles
         """
-        min_frames = self._config.theta_refinement.min_frames
-        expected_center = self._config.shadow.center
+        theta_refine_cfg = self._config.get("theta_refinement", {})
+        min_frames = theta_refine_cfg.get("min_frames", 3) if isinstance(theta_refine_cfg, dict) else getattr(theta_refine_cfg, "min_frames", 3)
+        shadow_cfg = self._config.get("shadow", {})
+        expected_center = shadow_cfg.get("center", 180.0) if isinstance(shadow_cfg, dict) else getattr(shadow_cfg, "center", 180.0)
 
         if len(left_edges) < min_frames or len(right_edges) < min_frames:
             logging.warning(
@@ -642,8 +649,9 @@ class Theta:
             logging.warning("No shadow data available (refinement may be disabled)")
             return
 
-        expected_center = self._config.shadow.center
-        expected_width = self._config.shadow.width
+        shadow_cfg = self._config.get("shadow", {})
+        expected_center = shadow_cfg.get("center", 180.0) if isinstance(shadow_cfg, dict) else getattr(shadow_cfg, "center", 180.0)
+        expected_width = shadow_cfg.get("width", 90.0) if isinstance(shadow_cfg, dict) else getattr(shadow_cfg, "width", 90.0)
         search_range = expected_width
 
         # Create figure with subplots
@@ -943,8 +951,10 @@ class Bearing:
         # Determine radar height: parameter > config > metadata > wind sensor height
         if radar_height is not None:
             self._radar_height = radar_height
-        elif self._config.radar.height is not None:
-            self._radar_height = self._config.radar.height
+        elif self._config.get("radar.height") is not None:
+            self._radar_height = self._config.get("radar.height")
+        elif self._config.get("tower.height") is not None:
+            self._radar_height = self._config.get("tower.height")
         elif self._frames[0].metadata.radar_height is not None:
             self._radar_height = self._frames[0].metadata.radar_height
         else:

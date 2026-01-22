@@ -341,7 +341,7 @@ def plot_frame_intensity(
         title: Plot title (default: frame timestamp)
         colorbar: Whether to add colorbar (default: True)
         radar_height: Height of radar above water in meters.
-                     Priority: this arg > config.radar.height > frame.metadata.radar_height
+                     Priority: this arg > config radar/tower.height > frame.metadata.radar_height
                      Falls back to slant range if not available.
         config: Config for radar height fallback.
 
@@ -368,7 +368,7 @@ def plot_frame_intensity(
 
     # Calculate ground distances for x-axis (priority: arg > config > metadata)
     if radar_height is None and config is not None:
-        radar_height = config.radar.height
+        radar_height = config.get("radar.height") or config.get("tower.height")
     if radar_height is None:
         radar_height = frame.metadata.radar_height
 
@@ -447,7 +447,7 @@ class IntensityViewer(BaseViewer):
             cmap: Colormap name
             figsize: Figure size
             radar_height: Height of radar above water in meters.
-                         Priority: this arg > config.radar.height > frame.metadata.radar_height
+                         Priority: this arg > config radar/tower.height > frame.metadata.radar_height
             config: Config for bearing calculation and other settings.
             view: Initial view type ('polar', 'ship', or 'earth')
         """
@@ -475,8 +475,10 @@ class IntensityViewer(BaseViewer):
         # Determine radar height (CLI arg > config > metadata)
         if radar_height is not None:
             self._radar_height = radar_height
-        elif self._config.radar.height is not None:
-            self._radar_height = self._config.radar.height
+        elif self._config.get("radar.height") is not None:
+            self._radar_height = self._config.get("radar.height")
+        elif self._config.get("tower.height") is not None:
+            self._radar_height = self._config.get("tower.height")
         else:
             self._radar_height = None
 

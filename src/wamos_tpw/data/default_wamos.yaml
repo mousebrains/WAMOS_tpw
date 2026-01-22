@@ -2,32 +2,35 @@
 
 # Global settings (used when tower-specific config is not available)
 
-# Radar settings
-radar:
-  height: null  # Radar height above water (meters), null = use frame metadata
+global:
+  theta_refinement:
+    enabled: True # Enable theta refinement across frames
+    min_frames: 3 # Minimum frames needed for refinement
 
-# Shadow region settings (used by bearing.Theta for shadow exclusion)
-shadow:
-  start: 130    # Start angle of shadow region (degrees)
-  end: 230      # End angle of shadow region (degrees)
+  shadow:
+    range_fraction: 0.1 # fraction of range bins to use for detecting the shadow region
 
-# Offset settings for heading calculations
-offsets:
-  bow_to_radar: 0.0     # Angle from bow to radar (degrees)
-  heading_delay: 0.0    # Heading delay correction (degrees)
-  compass: 0.0          # Compass offset (degrees)
+  bias:
+    range: 0 # Range bias in meters
+    theta: 0 # Theta bias in degrees
 
-# Theta refinement settings (used by bearing.Theta for multi-frame processing)
-theta_refinement:
-  enabled: true  # Enable shadow-based theta refinement
-  min_frames: 3  # Minimum frames required for refinement
+  deramp:
+    order: 4 # Fit to 1 + 1/r + 1/r^2 + ... + 1/r^order
+
+  dewind:
+    order: 2 # Fit to polynomial of order
 
 "roger revelle":
+  theta_refinement: True # Tower-specific theta refinement settings
+
   shadow: # Shadow regions
+    theta_refinement: True # Use shadow edges to refine theta bias frame by frame
     range_fraction: 0.1 # fraction of range bins to use for detecting the shadow region
+    angle_range: 10 # +- degrees around expected shadow angles to search
     aft:  # Aft tower
-      - 130 # Left hand side of shadow angle in degrees relative to radar 0
-      - 230 # Right hand side of shadow angle in degrees relative to radar 0
+      LHS: 145.36 # Expected LHS angle in degrees based on sample (high to low)
+      RHS: 215.36 # Expected RHS angle in degrees based on sample (low to high)
+
 
   bias: # Bias parameters
     range: -6 # Range bias in meters
@@ -38,3 +41,4 @@ theta_refinement:
 
   dewind: # Dewind parameters
     order: 2 # Fit to polynomial of order
+

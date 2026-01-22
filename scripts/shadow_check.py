@@ -30,10 +30,9 @@ import os
 import resource
 import sys
 import time
-import tracemalloc
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
-from threading import Lock
 
 import numpy as np
 from scipy import stats
@@ -53,127 +52,74 @@ from wamos_tpw.theta import Theta  # noqa: E402 - Single-frame theta calculator
 
 logger = logging.getLogger(__name__)
 
-# Global timing accumulators (thread-safe)
-_timing_lock = Lock()
-_timing_stats = {
-    "polarfile": [],
-    "frame": [],
-    "theta": [],
-    "destreak": [],
-    "shadow": [],
-}
-_memory_stats = {
-    "polarfile": [],
-    "frame": [],
-    "theta": [],
-    "destreak": [],
-    "shadow": [],
-}
-# Sub-step timing accumulators
-_substep_stats: dict[str, dict[str, list[float]]] = {
-    "polarfile": {},
-    "theta": {},
-    "destreak": {},
-    "shadow": {},
-}
-
 
 def load_frame(
     fn: str,
     config: Config,
+    stats_only: bool = False,
 ) -> dict | None:
     """
-    Worker function to load a single frame and extract theta information.
+    Worker function to load a single frame and extract shadow information.
 
     Args:
         fn: Filename to load
         config: Configuration object
+        stats_only: If True, return only timing and shadow stats (reduces memory)
 
     Returns:
         Dictionary with frame info, or None on error.
     """
     try:
         timings = {}
-        memories = {}
         substeps: dict[str, dict[str, float]] = {}
 
         # PolarFile loading
-        tracemalloc.start()
         t0 = time.perf_counter()
         pf = PolarFile(fn, config=config)
         timings["polarfile"] = time.perf_counter() - t0
-        _, memories["polarfile"] = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
         substeps["polarfile"] = pf.timing
 
         # Frame extraction
-        tracemalloc.start()
         t0 = time.perf_counter()
         frame = pf.frame()
         timings["frame"] = time.perf_counter() - t0
-        _, memories["frame"] = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
 
         # Theta calculation
-        tracemalloc.start()
         t0 = time.perf_counter()
         theta = Theta(frame)
         timings["theta"] = time.perf_counter() - t0
-        _, memories["theta"] = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
         substeps["theta"] = theta.timing
 
         # Destreak processing
-        tracemalloc.start()
         t0 = time.perf_counter()
         destreaked = Destreak(frame)
         timings["destreak"] = time.perf_counter() - t0
-        _, memories["destreak"] = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
         substeps["destreak"] = destreaked.timing
 
         # Shadow detection
-        tracemalloc.start()
         t0 = time.perf_counter()
         shadow = Shadow(destreaked.intensity, theta)
         timings["shadow"] = time.perf_counter() - t0
-        _, memories["shadow"] = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
         substeps["shadow"] = shadow.timing
 
-        # Accumulate timing stats (thread-safe)
-        with _timing_lock:
-            for step, t in timings.items():
-                _timing_stats[step].append(t)
-            for step, m in memories.items():
-                _memory_stats[step].append(m)
-            # Accumulate sub-step timings
-            for step, sub_timings in substeps.items():
-                for sub_step, sub_time in sub_timings.items():
-                    if sub_step not in _substep_stats[step]:
-                        _substep_stats[step][sub_step] = []
-                    _substep_stats[step][sub_step].append(sub_time)
-
-        return {
+        result = {
             "filename": fn,
-            "shadow": shadow,
+            "timing": timings,
+            "substeps": substeps,
+            # Always include shadow stats (small data)
+            "shadow_indices": shadow.indices.copy() if len(shadow.indices) > 0 else None,
+            "shadow_thetas": shadow.thetas.copy() if len(shadow.thetas) > 0 else None,
+            "theta_bias": shadow.theta_bias,
         }
+
+        # Only store large objects if needed for plotting
+        if not stats_only:
+            result["shadow"] = shadow
+
+        return result
     except Exception:
         logger.exception("Failed to load %s", fn)
         return None
-
-
-def wrap_to_180(diff: float | np.ndarray) -> float | np.ndarray:
-    """
-    Wrap angle differences to [-180, 180] range.
-
-    Args:
-        diff: Array of theta differences in degrees
-
-    Returns:
-        Wrapped differences
-    """
-    return ((diff + 180) % 360) - 180
 
 
 def print_progress(current: int, total: int, width: int = 40, prefix: str = "Progress") -> None:
@@ -197,9 +143,37 @@ def print_progress(current: int, total: int, width: int = 40, prefix: str = "Pro
         print()  # Newline when complete
 
 
+@dataclass
+class Stats:
+    """Statistical summary of an array."""
+
+    mean: float
+    median: float
+    std: float
+    var: float
+    skew: float
+    kurtosis: float
+    min: float
+    max: float
+
+
+def compute_stats(arr: np.ndarray) -> Stats:
+    """Compute statistical summary of an array."""
+    return Stats(
+        mean=arr.mean(),
+        median=np.median(arr),
+        std=arr.std(),
+        var=arr.var(),
+        skew=stats.skew(arr),
+        kurtosis=stats.kurtosis(arr),
+        min=arr.min(),
+        max=arr.max(),
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Check theta (beam theta) continuity across polar files"
+        description="Check shadow region statistics across polar files"
     )
 
     add_common_arguments(parser)
@@ -226,28 +200,17 @@ def main() -> int:
         "--workers",
         type=int,
         default=None,
-        help=f"Number of worker threads (default: CPU count = {os.cpu_count()})",
+        help=f"Number of workers (default: CPU count = {os.cpu_count()})",
     )
     parser.add_argument(
-        "--tolerance",
-        type=float,
-        default=1.0,
-        help="Tolerance for continuity check in degrees (default: 1.0)",
-    )
-    parser.add_argument(
-        "--per-frame",
+        "--processes",
         action="store_true",
-        help="Show per-frame statistics",
-    )
-    parser.add_argument(
-        "--show-gaps",
-        action="store_true",
-        help="Only show frames with continuity gaps (requires --per-frame)",
+        help="Use ProcessPoolExecutor instead of ThreadPoolExecutor (avoids GIL)",
     )
     parser.add_argument(
         "--plot",
         action="store_true",
-        help="Show plot of theta vs time",
+        help="Show shadow statistics plots",
     )
     parser.add_argument(
         "--output",
@@ -268,35 +231,6 @@ def main() -> int:
         default="14,8",
         help="Figure size as 'width,height' in inches (default: 14,8)",
     )
-    parser.add_argument(
-        "--pcolor",
-        action="store_true",
-        help="Show pcolor plot of intensity vs theta and range",
-    )
-    parser.add_argument(
-        "--n-ranges",
-        type=int,
-        default=100,
-        help="Number of range bins to plot in pcolor (default: 100)",
-    )
-    parser.add_argument(
-        "--range-start",
-        type=int,
-        default=0,
-        help="Starting range bin for pcolor plot (default: 0)",
-    )
-    parser.add_argument(
-        "--vmin",
-        type=float,
-        default=None,
-        help="Minimum intensity value for pcolor colormap",
-    )
-    parser.add_argument(
-        "--vmax",
-        type=float,
-        default=None,
-        help="Maximum intensity value for pcolor colormap",
-    )
 
     args = parser.parse_args()
     setup_logging(args)
@@ -310,19 +244,25 @@ def main() -> int:
             logger.error("No files found in specified time range")
             return 1
 
+        executor_type = "processes" if args.processes else "threads"
         logger.info(
-            "Loading %d files with %d workers",
+            "Loading %d files with %d %s",
             n_files,
             args.workers or os.cpu_count(),
+            executor_type,
         )
 
         # Load frames in parallel
         results: list[dict] = []
-
         config = Config(args.config)
+        stats_only = not args.plot
+
         t0 = time.perf_counter()
-        with ThreadPoolExecutor(max_workers=args.workers) as executor:
-            futures = {executor.submit(load_frame, fn, config): fn for fn in files}
+        ExecutorClass = ProcessPoolExecutor if args.processes else ThreadPoolExecutor
+        with ExecutorClass(max_workers=args.workers) as executor:
+            futures = {
+                executor.submit(load_frame, fn, config, stats_only): fn for fn in files
+            }
 
             for i, future in enumerate(as_completed(futures)):
                 if args.progress_flag:
@@ -338,34 +278,43 @@ def main() -> int:
             f"Successfully loaded {n_loaded} of {n_files} frames in {elapsed:.2f}s ({fps:.1f} frames/sec)"
         )
 
-        # Print per-step timing and memory statistics
+        # Aggregate timing statistics from results
+        timing_stats: dict[str, list[float]] = {
+            "polarfile": [], "frame": [], "theta": [], "destreak": [], "shadow": []
+        }
+        substep_stats: dict[str, dict[str, list[float]]] = {
+            "polarfile": {}, "theta": {}, "destreak": {}, "shadow": {}
+        }
+
+        for r in results:
+            for step, t in r["timing"].items():
+                timing_stats[step].append(t)
+            for step, sub_timings in r["substeps"].items():
+                for sub_step, sub_time in sub_timings.items():
+                    if sub_step not in substep_stats[step]:
+                        substep_stats[step][sub_step] = []
+                    substep_stats[step][sub_step].append(sub_time)
+
+        # Print per-step timing statistics
         if n_loaded > 0:
             print("\n=== Per-Step Processing Statistics ===")
-            total_time = sum(sum(times) for times in _timing_stats.values())
-            total_mem = sum(sum(mems) for mems in _memory_stats.values())
+            total_time = sum(sum(times) for times in timing_stats.values())
 
-            print(
-                f"{'Step':<12} {'Time (ms)':<12} {'Time %':<10} {'Memory (KB)':<14} {'Mem %':<10}"
-            )
-            print("-" * 58)
+            print(f"{'Step':<12} {'Time (ms)':<12} {'Time %':<10}")
+            print("-" * 34)
             for step in ["polarfile", "frame", "theta", "destreak", "shadow"]:
-                times = _timing_stats[step]
-                mems = _memory_stats[step]
+                times = timing_stats[step]
                 if times:
                     avg_time_ms = np.mean(times) * 1000
                     time_pct = (sum(times) / total_time * 100) if total_time > 0 else 0
-                    avg_mem_kb = np.mean(mems) / 1024
-                    mem_pct = (sum(mems) / total_mem * 100) if total_mem > 0 else 0
-                    print(
-                        f"{step:<12} {avg_time_ms:<12.3f} {time_pct:<10.1f} {avg_mem_kb:<14.1f} {mem_pct:<10.1f}"
-                    )
+                    print(f"{step:<12} {avg_time_ms:<12.3f} {time_pct:<10.1f}")
 
             # Print sub-step timing breakdown
             print("\n=== Sub-Step Timing Breakdown ===")
             for step in ["polarfile", "theta", "destreak", "shadow"]:
-                substeps = _substep_stats.get(step, {})
+                substeps = substep_stats.get(step, {})
                 if substeps:
-                    step_total = sum(_timing_stats[step])
+                    step_total = sum(timing_stats[step])
                     print(f"\n{step}:")
                     for sub_name, sub_times in sorted(substeps.items()):
                         if sub_times:
@@ -385,22 +334,26 @@ def main() -> int:
         shadow_indices_end = []
         shadow_thetas_start = []
         shadow_thetas_end = []
+        theta_biases = []
         frame_numbers = []
 
         for i, r in enumerate(results):
-            shadow = r["shadow"]
-            if len(shadow.indices) > 0:
+            indices = r["shadow_indices"]
+            thetas = r["shadow_thetas"]
+            theta_biases.append(r["theta_bias"])
+            if indices is not None and len(indices) > 0:
                 # Take first shadow region (typically the main aft shadow)
-                shadow_indices_start.append(shadow.indices[0, 0])
-                shadow_indices_end.append(shadow.indices[0, 1])
-                shadow_thetas_start.append(shadow.thetas[0, 0])
-                shadow_thetas_end.append(shadow.thetas[0, 1])
+                shadow_indices_start.append(indices[0, 0])
+                shadow_indices_end.append(indices[0, 1])
+                shadow_thetas_start.append(thetas[0, 0])
+                shadow_thetas_end.append(thetas[0, 1])
                 frame_numbers.append(i)
 
         shadow_indices_start = np.array(shadow_indices_start)
         shadow_indices_end = np.array(shadow_indices_end)
         shadow_thetas_start = np.array(shadow_thetas_start)
         shadow_thetas_end = np.array(shadow_thetas_end)
+        theta_biases = np.array(theta_biases)
         frame_numbers = np.array(frame_numbers)
 
         # Calculate statistics
@@ -408,80 +361,61 @@ def main() -> int:
         print(f"\nFrames with shadow detected: {n_with_shadow} of {n_loaded}")
 
         if n_with_shadow > 0:
-            # Index statistics
-            idx_start_mean = shadow_indices_start.mean()
-            idx_start_median = np.median(shadow_indices_start)
-            idx_start_std = shadow_indices_start.std()
-            idx_start_var = shadow_indices_start.var()
-            idx_start_skew = stats.skew(shadow_indices_start)
-            idx_start_kurt = stats.kurtosis(shadow_indices_start)
-            idx_end_mean = shadow_indices_end.mean()
-            idx_end_median = np.median(shadow_indices_end)
-            idx_end_std = shadow_indices_end.std()
-            idx_end_var = shadow_indices_end.var()
-            idx_end_skew = stats.skew(shadow_indices_end)
-            idx_end_kurt = stats.kurtosis(shadow_indices_end)
-            idx_width = shadow_indices_end - shadow_indices_start
-            idx_width_mean = idx_width.mean()
-            idx_width_median = np.median(idx_width)
-            idx_width_std = idx_width.std()
-
-            # Theta statistics
-            theta_start_mean = shadow_thetas_start.mean()
-            theta_start_median = np.median(shadow_thetas_start)
-            theta_start_std = shadow_thetas_start.std()
-            theta_start_var = shadow_thetas_start.var()
-            theta_start_skew = stats.skew(shadow_thetas_start)
-            theta_start_kurt = stats.kurtosis(shadow_thetas_start)
-            theta_end_mean = shadow_thetas_end.mean()
-            theta_end_median = np.median(shadow_thetas_end)
-            theta_end_std = shadow_thetas_end.std()
-            theta_end_var = shadow_thetas_end.var()
-            theta_end_skew = stats.skew(shadow_thetas_end)
-            theta_end_kurt = stats.kurtosis(shadow_thetas_end)
-            theta_width = shadow_thetas_end - shadow_thetas_start
-            theta_width_mean = theta_width.mean()
-            theta_width_median = np.median(theta_width)
-            theta_width_std = theta_width.std()
+            # Compute statistics using helper function
+            idx_start = compute_stats(shadow_indices_start)
+            idx_end = compute_stats(shadow_indices_end)
+            idx_width = compute_stats(shadow_indices_end - shadow_indices_start)
+            theta_start = compute_stats(shadow_thetas_start)
+            theta_end = compute_stats(shadow_thetas_end)
+            theta_width = compute_stats(shadow_thetas_end - shadow_thetas_start)
 
             print("\n=== Shadow Index Statistics ===")
             print(
-                f"Start index:  mean={idx_start_mean:.1f}, median={idx_start_median:.1f}, "
-                f"std={idx_start_std:.2f}, var={idx_start_var:.2f}, "
-                f"skew={idx_start_skew:.3f}, kurt={idx_start_kurt:.3f}"
+                f"Start index:  mean={idx_start.mean:.1f}, median={idx_start.median:.1f}, "
+                f"std={idx_start.std:.2f}, var={idx_start.var:.2f}, "
+                f"skew={idx_start.skew:.3f}, kurt={idx_start.kurtosis:.3f}"
             )
             print(
-                f"End index:    mean={idx_end_mean:.1f}, median={idx_end_median:.1f}, "
-                f"std={idx_end_std:.2f}, var={idx_end_var:.2f}, "
-                f"skew={idx_end_skew:.3f}, kurt={idx_end_kurt:.3f}"
+                f"End index:    mean={idx_end.mean:.1f}, median={idx_end.median:.1f}, "
+                f"std={idx_end.std:.2f}, var={idx_end.var:.2f}, "
+                f"skew={idx_end.skew:.3f}, kurt={idx_end.kurtosis:.3f}"
             )
             print(
-                f"Width:        mean={idx_width_mean:.1f}, median={idx_width_median:.1f}, "
-                f"std={idx_width_std:.2f}"
+                f"Width:        mean={idx_width.mean:.1f}, median={idx_width.median:.1f}, "
+                f"std={idx_width.std:.2f}"
             )
             print(
-                f"Range:        start=[{shadow_indices_start.min()}, {shadow_indices_start.max()}], "
-                f"end=[{shadow_indices_end.min()}, {shadow_indices_end.max()}]"
+                f"Range:        start=[{idx_start.min:.0f}, {idx_start.max:.0f}], "
+                f"end=[{idx_end.min:.0f}, {idx_end.max:.0f}]"
             )
 
             print("\n=== Shadow Theta Statistics ===")
             print(
-                f"Start theta:  mean={theta_start_mean:.2f}°, median={theta_start_median:.2f}°, "
-                f"std={theta_start_std:.3f}°, var={theta_start_var:.4f}, "
-                f"skew={theta_start_skew:.3f}, kurt={theta_start_kurt:.3f}"
+                f"Start theta:  mean={theta_start.mean:.2f}°, median={theta_start.median:.2f}°, "
+                f"std={theta_start.std:.3f}°, var={theta_start.var:.4f}, "
+                f"skew={theta_start.skew:.3f}, kurt={theta_start.kurtosis:.3f}"
             )
             print(
-                f"End theta:    mean={theta_end_mean:.2f}°, median={theta_end_median:.2f}°, "
-                f"std={theta_end_std:.3f}°, var={theta_end_var:.4f}, "
-                f"skew={theta_end_skew:.3f}, kurt={theta_end_kurt:.3f}"
+                f"End theta:    mean={theta_end.mean:.2f}°, median={theta_end.median:.2f}°, "
+                f"std={theta_end.std:.3f}°, var={theta_end.var:.4f}, "
+                f"skew={theta_end.skew:.3f}, kurt={theta_end.kurtosis:.3f}"
             )
             print(
-                f"Width:        mean={theta_width_mean:.2f}°, median={theta_width_median:.2f}°, "
-                f"std={theta_width_std:.3f}°"
+                f"Width:        mean={theta_width.mean:.2f}°, median={theta_width.median:.2f}°, "
+                f"std={theta_width.std:.3f}°"
             )
             print(
-                f"Range:        start=[{shadow_thetas_start.min():.2f}°, {shadow_thetas_start.max():.2f}°], "
-                f"end=[{shadow_thetas_end.min():.2f}°, {shadow_thetas_end.max():.2f}°]"
+                f"Range:        start=[{theta_start.min:.2f}°, {theta_start.max:.2f}°], "
+                f"end=[{theta_end.min:.2f}°, {theta_end.max:.2f}°]"
+            )
+
+        # Theta bias statistics (collected from all frames, not just those with shadow)
+        if len(theta_biases) > 0:
+            bias_stats = compute_stats(theta_biases)
+            print("\n=== Theta Bias Statistics ===")
+            print(
+                f"Bias:         mean={bias_stats.mean:.3f}°, median={bias_stats.median:.3f}°, "
+                f"std={bias_stats.std:.4f}°, range=[{bias_stats.min:.3f}°, {bias_stats.max:.3f}°]"
             )
 
         # Generate scatter plot if requested
@@ -497,8 +431,8 @@ def main() -> int:
 
             # Plot 1: Histogram of shadow indices relative to their means (combined start/end)
             ax = axes[0, 0]
-            idx_start_rel = shadow_indices_start - idx_start_mean
-            idx_end_rel = shadow_indices_end - idx_end_mean
+            idx_start_rel = shadow_indices_start - idx_start.mean
+            idx_end_rel = shadow_indices_end - idx_end.mean
             bins_idx = np.linspace(
                 min(idx_start_rel.min(), idx_end_rel.min()),
                 max(idx_start_rel.max(), idx_end_rel.max()),
@@ -524,8 +458,8 @@ def main() -> int:
 
             # Plot 2: Histogram of shadow thetas relative to their means (combined start/end)
             ax = axes[0, 1]
-            theta_start_rel = shadow_thetas_start - theta_start_mean
-            theta_end_rel = shadow_thetas_end - theta_end_mean
+            theta_start_rel = shadow_thetas_start - theta_start.mean
+            theta_end_rel = shadow_thetas_end - theta_end.mean
             bins_theta = np.linspace(
                 min(theta_start_rel.min(), theta_end_rel.min()),
                 max(theta_start_rel.max(), theta_end_rel.max()),

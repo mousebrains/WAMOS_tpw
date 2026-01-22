@@ -64,7 +64,7 @@ def run(args) -> None:
             continue
         for index, frame in enumerate(pf.frames):
             pps = PPS(frame)
-            logging.info("%s Frame(%d): PPS indices: %s", 
+            logging.info("%s Frame(%d): PPS indices: %s",
                          fn,
                          index,
                          pps.indices)

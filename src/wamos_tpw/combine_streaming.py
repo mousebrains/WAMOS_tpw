@@ -137,7 +137,9 @@ def compute_grid_bounds_from_metadata(
         # Convert to ground range if radar height available
         height = radar_height
         if height is None:
-            height = config.radar.height
+            height = config.get("radar.height")
+        if height is None:
+            height = config.get("tower.height")
         if height is None and all_metadata:
             height = all_metadata[0].radar_height or all_metadata[0].wind_sensor_height
 
