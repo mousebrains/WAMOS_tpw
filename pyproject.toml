@@ -98,6 +98,7 @@ warn_unused_ignores = false
 # - var-annotated: accumulator patterns in loops
 # - has-type: matplotlib inset axes type inference
 # - misc: numpy bool vs Python bool, matplotlib scatter kwargs
+# - call-arg: Executor base class stubs don't have max_workers, but all impls do
 disable_error_code = [
     "union-attr",
     "index",
@@ -110,6 +111,7 @@ disable_error_code = [
     "var-annotated",
     "has-type",
     "misc",
+    "call-arg",
 ]
 
 [tool.ruff]
