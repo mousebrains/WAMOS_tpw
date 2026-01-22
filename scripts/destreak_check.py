@@ -39,7 +39,9 @@ from wamos_tpw.logging_config import add_logging_arguments, setup_logging  # noq
 logger = logging.getLogger(__name__)
 
 
-def load_frame(fn: str, config: Config, save_mask: bool = True, stats_only: bool = False) -> dict | None:
+def load_frame(
+    fn: str, config: Config, save_mask: bool = True, stats_only: bool = False
+) -> dict | None:
     """
     Worker function to load a single frame.
 
@@ -517,9 +519,7 @@ def main() -> int:
                     )
                     self.axes[1].set_xlabel("Range Bin")
                     self.axes[1].set_ylabel("Bearing Index")
-                    self.axes[1].set_title(
-                        f"Streak Mask ({n_streaks} pixels, {streak_pct:.2f}%)"
-                    )
+                    self.axes[1].set_title(f"Streak Mask ({n_streaks} pixels, {streak_pct:.2f}%)")
                     self.colorbars.append(self.fig.colorbar(pcm1, ax=self.axes[1]))
 
                     pcm2 = self.axes[2].pcolormesh(

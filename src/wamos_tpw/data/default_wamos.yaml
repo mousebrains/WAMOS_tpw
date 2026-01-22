@@ -50,4 +50,3 @@ global:
 
   dewind: # Dewind parameters
     order: 2 # Fit to polynomial of order
-

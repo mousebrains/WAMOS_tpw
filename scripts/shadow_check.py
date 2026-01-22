@@ -260,9 +260,7 @@ def main() -> int:
         t0 = time.perf_counter()
         ExecutorClass = ProcessPoolExecutor if args.processes else ThreadPoolExecutor
         with ExecutorClass(max_workers=args.workers) as executor:
-            futures = {
-                executor.submit(load_frame, fn, config, stats_only): fn for fn in files
-            }
+            futures = {executor.submit(load_frame, fn, config, stats_only): fn for fn in files}
 
             for i, future in enumerate(as_completed(futures)):
                 if args.progress_flag:
@@ -280,10 +278,17 @@ def main() -> int:
 
         # Aggregate timing statistics from results
         timing_stats: dict[str, list[float]] = {
-            "polarfile": [], "frame": [], "theta": [], "destreak": [], "shadow": []
+            "polarfile": [],
+            "frame": [],
+            "theta": [],
+            "destreak": [],
+            "shadow": [],
         }
         substep_stats: dict[str, dict[str, list[float]]] = {
-            "polarfile": {}, "theta": {}, "destreak": {}, "shadow": {}
+            "polarfile": {},
+            "theta": {},
+            "destreak": {},
+            "shadow": {},
         }
 
         for r in results:
