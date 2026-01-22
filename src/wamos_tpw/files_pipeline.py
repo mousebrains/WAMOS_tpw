@@ -1173,6 +1173,7 @@ class ProjectionViewer:
         self._ax_ship = None
         self._ax_wind = None
         self._ax_time = None
+        self._ax_time_twin = None  # Track twin axis for proper clearing
         self._colorbar = None
         self._im = None
 
@@ -1198,7 +1199,7 @@ class ProjectionViewer:
 
     def show(
         self,
-        figsize: tuple[float, float] = (16, 12),
+        figsize: tuple[float, float] = (16, 10),
         cmap: str = "viridis",
         vmin: float | None = None,
         vmax: float | None = None,
@@ -1235,28 +1236,27 @@ class ProjectionViewer:
             if self._vmax is None:
                 self._vmax = np.percentile(combined, 98)
 
-        # Create figure with custom layout
+        # Create figure with custom layout: main plot (left), time series (right)
         self._fig = plt.figure(figsize=figsize)
 
-        # Plot area grid
         gs_plots = GridSpec(
+            1,
             2,
-            3,
-            width_ratios=[2, 1, 1],
-            height_ratios=[1, 1],
-            wspace=0.3,
-            hspace=0.3,
+            width_ratios=[2, 1],
+            wspace=0.15,
             top=0.92,
             bottom=0.12,
             left=0.06,
             right=0.98,
         )
 
-        # Create plot axes
-        self._ax_main = self._fig.add_subplot(gs_plots[:, 0])
-        self._ax_ship = self._fig.add_subplot(gs_plots[0, 1], projection="polar")
-        self._ax_wind = self._fig.add_subplot(gs_plots[1, 1], projection="polar")
-        self._ax_time = self._fig.add_subplot(gs_plots[:, 2])
+        # Main intensity plot
+        self._ax_main = self._fig.add_subplot(gs_plots[0, 0])
+
+        # Time series plot (right side)
+        self._ax_time = self._fig.add_subplot(gs_plots[0, 1])
+
+        # Polar insets will be created in _update_plot as they need proper positioning
 
         # Create navigation buttons
         btn_width = 0.08
@@ -1287,15 +1287,28 @@ class ProjectionViewer:
 
     def _update_plot(self) -> None:
         """Update all plots for the current result."""
+        from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+
         result = self.current_result
         grid = result.earth_grid
         intensity = grid.intensity
 
-        # Clear axes
+        # Clear main axis
         self._ax_main.clear()
-        self._ax_ship.clear()
-        self._ax_wind.clear()
+
+        # Clear and remove old polar inset axes if they exist
+        if self._ax_ship is not None:
+            self._ax_ship.remove()
+            self._ax_ship = None
+        if self._ax_wind is not None:
+            self._ax_wind.remove()
+            self._ax_wind = None
+
+        # Clear time series and twin axis
         self._ax_time.clear()
+        if self._ax_time_twin is not None:
+            self._ax_time_twin.remove()
+            self._ax_time_twin = None
 
         # Main intensity plot
         self._im = self._ax_main.pcolormesh(
@@ -1321,24 +1334,48 @@ class ProjectionViewer:
         else:
             self._colorbar.update_normal(self._im)
 
-        # Grid info
+        # Grid info in SW corner
         self._ax_main.text(
             0.02,
-            0.98,
+            0.02,
             f"Grid: {grid.n_x}x{grid.n_y}\nSpacing: {grid.grid_spacing:.1f}m",
             transform=self._ax_main.transAxes,
-            verticalalignment="top",
+            verticalalignment="bottom",
             fontsize=9,
             bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
         )
 
-        # Ship polar plot
+        # Create small polar inset for ship in NE corner (top-right of main plot)
+        self._ax_ship = inset_axes(
+            self._ax_main,
+            width="20%",
+            height="20%",
+            loc="upper right",
+            borderpad=1.0,
+            axes_class=None,
+        )
+        # Convert to polar projection by replacing the inset
+        pos = self._ax_ship.get_position()
+        self._ax_ship.remove()
+        self._ax_ship = self._fig.add_axes(pos, projection="polar")
         self._plot_ship_polar(self._ax_ship, result)
 
-        # Wind polar plot
+        # Create small polar inset for wind in SE corner (bottom-right of main plot)
+        self._ax_wind = inset_axes(
+            self._ax_main,
+            width="20%",
+            height="20%",
+            loc="lower right",
+            borderpad=1.0,
+            axes_class=None,
+        )
+        # Convert to polar projection
+        pos = self._ax_wind.get_position()
+        self._ax_wind.remove()
+        self._ax_wind = self._fig.add_axes(pos, projection="polar")
         self._plot_wind_polar(self._ax_wind, result)
 
-        # Time series
+        # Time series with twin axis
         self._plot_time_series(self._ax_time, result)
 
         # Title with navigation info
@@ -1355,55 +1392,52 @@ class ProjectionViewer:
         self._fig.canvas.draw_idle()
 
     def _plot_ship_polar(self, ax, result: ProjectionResult) -> None:
-        """Plot ship speed and heading as a polar scatter plot."""
+        """Plot ship speed and heading as a polar scatter plot (compact for inset)."""
         headings_rad = np.deg2rad(90 - result.ship_headings)
         speeds = result.ship_speeds
         colors = np.arange(len(speeds))
 
-        ax.scatter(headings_rad, speeds, c=colors, cmap="viridis", s=20, alpha=0.7)
+        ax.scatter(headings_rad, speeds, c=colors, cmap="viridis", s=10, alpha=0.7)
         ax.set_theta_zero_location("N")
         ax.set_theta_direction(-1)
-        ax.set_title("Ship Speed/Heading", pad=10)
 
+        # Compact title inside the plot
         mean_speed = np.mean(speeds)
         mean_heading = self._circular_mean(result.ship_headings)
-        ax.text(
-            0.5,
-            -0.15,
-            f"Mean: {mean_speed:.1f} m/s @ {mean_heading:.0f}\u00b0",
-            transform=ax.transAxes,
-            ha="center",
-            fontsize=9,
-        )
+        ax.set_title(f"Ship\n{mean_speed:.1f}m/s @ {mean_heading:.0f}\u00b0", fontsize=7, pad=2)
+
+        # Make tick labels smaller
+        ax.tick_params(axis="both", labelsize=6)
+        # Reduce radial tick labels
+        ax.set_yticklabels([])
 
     def _plot_wind_polar(self, ax, result: ProjectionResult) -> None:
-        """Plot wind speed and direction as a polar scatter plot."""
+        """Plot wind speed and direction as a polar scatter plot (compact for inset)."""
         directions_rad = np.deg2rad(90 - result.wind_directions)
         speeds = result.wind_speeds
         colors = np.arange(len(speeds))
 
-        ax.scatter(directions_rad, speeds, c=colors, cmap="coolwarm", s=20, alpha=0.7)
+        ax.scatter(directions_rad, speeds, c=colors, cmap="coolwarm", s=10, alpha=0.7)
         ax.set_theta_zero_location("N")
         ax.set_theta_direction(-1)
-        ax.set_title("Wind Speed/Direction", pad=10)
 
+        # Compact title inside the plot
         mean_speed = np.mean(speeds)
         mean_dir = self._circular_mean(result.wind_directions)
-        ax.text(
-            0.5,
-            -0.15,
-            f"Mean: {mean_speed:.1f} m/s from {mean_dir:.0f}\u00b0",
-            transform=ax.transAxes,
-            ha="center",
-            fontsize=9,
-        )
+        ax.set_title(f"Wind\n{mean_speed:.1f}m/s from {mean_dir:.0f}\u00b0", fontsize=7, pad=2)
+
+        # Make tick labels smaller
+        ax.tick_params(axis="both", labelsize=6)
+        # Reduce radial tick labels
+        ax.set_yticklabels([])
 
     def _plot_time_series(self, ax, result: ProjectionResult) -> None:
         """Plot time series of ship and wind data."""
         t0 = result.frame_start_times[0]
         times = (result.frame_start_times - t0) / np.timedelta64(1, "s")
 
-        ax2 = ax.twinx()
+        # Create twin axis and store reference for proper clearing
+        self._ax_time_twin = ax.twinx()
 
         ax.plot(times, result.ship_headings, "b-", label="Ship heading", alpha=0.7)
         ax.plot(times, result.wind_directions, "r-", label="Wind direction", alpha=0.7)
@@ -1411,10 +1445,10 @@ class ProjectionViewer:
         ax.set_ylim(0, 360)
         ax.legend(loc="upper left", fontsize=8)
 
-        ax2.plot(times, result.ship_speeds, "b--", label="Ship speed", alpha=0.7)
-        ax2.plot(times, result.wind_speeds, "r--", label="Wind speed", alpha=0.7)
-        ax2.set_ylabel("Speed (m/s)")
-        ax2.legend(loc="upper right", fontsize=8)
+        self._ax_time_twin.plot(times, result.ship_speeds, "b--", label="Ship speed", alpha=0.7)
+        self._ax_time_twin.plot(times, result.wind_speeds, "r--", label="Wind speed", alpha=0.7)
+        self._ax_time_twin.set_ylabel("Speed (m/s)")
+        self._ax_time_twin.legend(loc="upper right", fontsize=8)
 
         ax.set_xlabel("Time (s)")
         ax.set_title("Time Series")
