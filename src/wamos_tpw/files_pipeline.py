@@ -1807,11 +1807,6 @@ def run(args) -> None:
 
         # Display projection results and plots for each group
         if do_project:
-            logging.info("")
-            logging.info("=" * 60)
-            logging.info("Earth Projection Results")
-            logging.info("=" * 60)
-
             # Collect valid projection results, labels, and timings
             proj_results = []
             proj_labels = []
@@ -1822,7 +1817,6 @@ def run(args) -> None:
                 if proj_result is not None:
                     proj_results.append(proj_result)
                     proj_labels.append(f"Group {r['period']}")
-                    _display_projection_stats(proj_result, label=f"Group {r['period']}")
 
                     # Collect projection timings for aggregation
                     proj_timings = r.get("projection_timings", {})
