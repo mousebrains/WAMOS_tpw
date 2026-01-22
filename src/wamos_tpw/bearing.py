@@ -897,8 +897,8 @@ class Theta:
         else:
             bearing = self._bearing
 
-        shadow_start = self._config.shadow.start
-        shadow_end = self._config.shadow.end
+        shadow_start = self._config.get("shadow.start", 130)
+        shadow_end = self._config.get("shadow.end", 230)
 
         if shadow_start < shadow_end:
             return (bearing >= shadow_start) & (bearing <= shadow_end)
@@ -1041,7 +1041,7 @@ class Bearing:
             return self._heading_ship_cache[frame_idx]
 
         theta = self._theta.bearing_for_frame(frame_idx)
-        bo2ra = self._config.offsets.bow_to_radar
+        bo2ra = self._config.get("offsets.bow_to_radar", 0)
         result = (theta + bo2ra) % 360
 
         if self._cache_enabled:
@@ -1061,8 +1061,8 @@ class Bearing:
             Array of image-adjusted headings in degrees [0, 360)
         """
         theta = self._theta.bearing_for_frame(frame_idx)
-        bo2ra = self._config.offsets.bow_to_radar
-        hdgdl = self._config.offsets.heading_delay
+        bo2ra = self._config.get("offsets.bow_to_radar", 0)
+        hdgdl = self._config.get("offsets.heading_delay", 0)
         return (theta + bo2ra + hdgdl) % 360
 
     def heading_earth(self, frame_idx: int) -> np.ndarray:
@@ -1082,10 +1082,10 @@ class Bearing:
 
         frame = self._frames[frame_idx]
         theta = self._theta.bearing_for_frame(frame_idx)
-        bo2ra = self._config.offsets.bow_to_radar
-        hdgdl = self._config.offsets.heading_delay
+        bo2ra = self._config.get("offsets.bow_to_radar", 0)
+        hdgdl = self._config.get("offsets.heading_delay", 0)
         gyroc = frame.metadata.heading or 0.0
-        compass_offset = self._config.offsets.compass
+        compass_offset = self._config.get("offsets.compass", 0)
 
         result = (theta + bo2ra + hdgdl + gyroc + compass_offset) % 360
 

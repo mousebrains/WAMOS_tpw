@@ -14,6 +14,11 @@ global:
     range: 0 # Range bias in meters
     theta: 0 # Theta bias in degrees
 
+  offsets:
+    bow_to_radar: 0 # BO2RA: Angle from bow to radar beam in degrees
+    heading_delay: 0 # HDGDL: Heading delay correction in degrees
+    compass: 0 # Compass offset correction in degrees
+
   deramp:
     order: 4 # Fit to 1 + 1/r + 1/r^2 + ... + 1/r^order
 
@@ -31,10 +36,14 @@ global:
       LHS: 145.36 # Expected LHS angle in degrees based on sample (high to low)
       RHS: 215.36 # Expected RHS angle in degrees based on sample (low to high)
 
-
   bias: # Bias parameters
     range: -6 # Range bias in meters
     theta: 10 # Theta bias in degrees
+
+  offsets: # Coordinate offset parameters
+    bow_to_radar: 0 # BO2RA: Angle from bow to radar beam in degrees
+    heading_delay: 0 # HDGDL: Heading delay correction in degrees
+    compass: 0 # Compass offset correction in degrees
 
   deramp: # Deramping parameters
     order: 4 # Fit to 1 + 1/r + 1/r^2 + ... + 1/r^order

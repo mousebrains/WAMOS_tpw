@@ -17,18 +17,18 @@ class TestConfig:
         assert len(config) > 0
 
     def test_default_has_shadow(self):
-        """Test default config has shadow settings."""
+        """Test default config has shadow settings in global section."""
         config = Config()
-        assert "shadow" in config
-        shadow = config["shadow"]
-        assert shadow["start"] == 130
-        assert shadow["end"] == 230
+        assert "global" in config
+        assert "shadow" in config["global"]
+        shadow = config["global"]["shadow"]
+        assert shadow["range_fraction"] == 0.1
 
     def test_default_has_theta_refinement(self):
-        """Test default config has theta refinement settings."""
+        """Test default config has theta refinement settings in global section."""
         config = Config()
-        assert "theta_refinement" in config
-        theta = config["theta_refinement"]
+        assert "global" in config
+        theta = config["global"]["theta_refinement"]
         assert theta["enabled"] is True
         assert theta["min_frames"] == 3
 
@@ -41,14 +41,17 @@ class TestConfig:
     def test_dot_notation_access(self):
         """Test dot notation for nested keys."""
         config = Config()
-        assert config["shadow.start"] == 130
-        assert config["theta_refinement.enabled"] is True
+        assert config["global.shadow.range_fraction"] == 0.1
+        assert config["global.theta_refinement.enabled"] is True
 
     def test_attribute_access(self):
         """Test attribute-style access."""
         config = Config()
-        assert config.shadow.start == 130
-        assert config.theta_refinement.enabled is True
+        # Note: 'global' is a Python keyword, so we use dict access for it
+        # but can use attribute access for nested keys
+        global_config = config["global"]
+        assert global_config.shadow.range_fraction == 0.1
+        assert global_config.theta_refinement.enabled is True
 
     def test_setitem(self):
         """Test setting values with dot notation."""
@@ -59,16 +62,17 @@ class TestConfig:
     def test_contains(self):
         """Test __contains__ method."""
         config = Config()
-        assert "shadow" in config
-        assert "shadow.start" in config
+        assert "global" in config
+        assert "global.shadow" in config
+        assert "global.shadow.range_fraction" in config
         assert "nonexistent" not in config
 
     def test_iter(self):
         """Test iteration over keys."""
         config = Config()
         keys = list(config)
-        assert "shadow" in keys
-        assert "theta_refinement" in keys
+        assert "global" in keys
+        assert "roger revelle" in keys
 
     def test_bool_nonempty(self):
         """Test bool for non-empty config."""
@@ -108,21 +112,25 @@ shadow:
     def test_child_config(self):
         """Test that nested dicts return child Config objects."""
         config = Config()
-        shadow = config["shadow"]
+        global_config = config["global"]
+        assert isinstance(global_config, Config)
+        shadow = global_config["shadow"]
         assert isinstance(shadow, Config)
-        assert shadow["start"] == 130
+        assert shadow["range_fraction"] == 0.1
 
     def test_keys_method(self):
         """Test keys() method."""
         config = Config()
         keys = config.keys()
-        assert "shadow" in keys
+        assert "global" in keys
+        assert "roger revelle" in keys
 
     def test_items_method(self):
         """Test items() method."""
         config = Config()
         items = dict(config.items())
-        assert "shadow" in items
+        assert "global" in items
+        assert "roger revelle" in items
 
     def test_values_method(self):
         """Test values() method."""
