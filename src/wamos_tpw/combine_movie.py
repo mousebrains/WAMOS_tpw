@@ -240,7 +240,7 @@ def _process_group(
         Tuple of (period_str, output_path, elapsed_seconds) on success,
         (period_str, None, elapsed_seconds) on failure
     """
-    from wamos_tpw.bearing import Theta, Bearing
+    from wamos_tpw.multi_theta import MultiTheta as Theta, MultiBearing as Bearing
     from wamos_tpw.config import Config
     from wamos_tpw.polarfile import PolarFile
     from wamos_tpw.combine_shadow import compute_chunk_shadow_offset
@@ -337,8 +337,8 @@ def _process_group(
                 # Apply offset to theta bearing arrays for correct coordinate calculation
                 # This corrects the bearing used by Bearing.xy_earth() and in_shadow()
                 for j in range(len(chunk_frames)):
-                    theta._bearing_per_frame[j] = (theta._bearing_per_frame[j] - offset) % 360
-                theta._bearing = np.concatenate(theta._bearing_per_frame)
+                    theta._theta_per_frame[j] = (theta._theta_per_frame[j] - offset) % 360
+                theta._bearing = np.concatenate(theta._theta_per_frame)
 
                 # Create Bearing for coordinate calculation (now uses corrected bearings)
                 bearing_obj = Bearing(theta, radar_height=radar_height, cache_coordinates=False)

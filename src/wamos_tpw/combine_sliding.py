@@ -477,7 +477,7 @@ def generate_sliding_movie(args, config: "Config") -> None:
             - radar_height, max_frames, process: Processing options
         config: Config object
     """
-    from wamos_tpw.bearing import Theta as BearingTheta, Bearing
+    from wamos_tpw.multi_theta import MultiTheta as BearingTheta, MultiBearing as Bearing
     from wamos_tpw.deramp import Deramp
     from wamos_tpw.destreak import Destreak
     from wamos_tpw.dewind import Dewind

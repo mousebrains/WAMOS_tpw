@@ -14,7 +14,7 @@ from typing import Iterator, Callable, Any
 
 import numpy as np
 
-from wamos_tpw.bearing import Theta, Bearing
+from wamos_tpw.multi_theta import MultiTheta as Theta, MultiBearing as Bearing
 from wamos_tpw.config import Config
 from wamos_tpw.filenames import Filenames, _parse_timestamp
 from wamos_tpw.frame import Frame

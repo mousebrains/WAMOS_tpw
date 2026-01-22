@@ -24,7 +24,7 @@ from wamos_tpw import __version__
 from wamos_tpw.config import Config
 from wamos_tpw.processed import ProcessedFrames
 from wamos_tpw.frame import Frame
-from wamos_tpw.bearing import Theta, Bearing
+from wamos_tpw.multi_theta import MultiTheta as Theta, MultiBearing as Bearing
 from wamos_tpw.combine import Combine
 
 

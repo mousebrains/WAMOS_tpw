@@ -12,7 +12,7 @@ from typing import Tuple
 
 import numpy as np
 
-from wamos_tpw.bearing import Theta, Bearing
+from wamos_tpw.multi_theta import MultiTheta as Theta, MultiBearing as Bearing
 from wamos_tpw.config import Config
 from wamos_tpw.frame import Frame
 from wamos_tpw.timestamp import Timestamp

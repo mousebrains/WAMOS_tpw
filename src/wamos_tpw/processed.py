@@ -13,7 +13,7 @@ from typing import Callable
 import numpy as np
 from tqdm import tqdm
 
-from wamos_tpw.bearing import Theta, Bearing
+from wamos_tpw.multi_theta import MultiTheta as Theta, MultiBearing as Bearing
 from wamos_tpw.config import Config
 from wamos_tpw.deramp import Deramp
 from wamos_tpw.destreak import Destreak

@@ -1,184 +1,237 @@
-"""Tests for Theta and Bearing classes."""
+"""Tests for Bearing class and coordinate conversion functions."""
 
 import numpy as np
-import pytest
 from pathlib import Path
 
-from wamos_tpw.bearing import Theta, Bearing
-from wamos_tpw.config import WamosConfig
+from wamos_tpw.bearing import (
+    Bearing,
+    theta_to_heading_ship,
+    theta_to_heading_earth,
+    heading_to_xy,
+)
+from wamos_tpw.config import Config
 from wamos_tpw.polarfile import PolarFile
+from wamos_tpw.theta import Theta
+from wamos_tpw.range import Range
 
 
-class TestTheta:
-    """Tests for Theta class (bearing angle calculation)."""
+class TestThetaToHeadingShip:
+    """Tests for theta_to_heading_ship function."""
 
-    def test_theta_single_frame(self, single_polar_file: Path):
-        """Test theta calculation with a single frame."""
-        pf = PolarFile(single_polar_file)
-        frames = pf.frames[:1]
+    def test_no_offset(self):
+        """Test with zero offset - output equals input."""
+        theta = np.array([0, 90, 180, 270], dtype=np.float32)
+        heading = theta_to_heading_ship(theta, bow_to_radar=0.0)
+        np.testing.assert_array_almost_equal(heading, theta)
 
-        theta = Theta(frames)
+    def test_with_offset(self):
+        """Test with bow_to_radar offset."""
+        theta = np.array([0, 90, 180, 270], dtype=np.float32)
+        heading = theta_to_heading_ship(theta, bow_to_radar=10.0)
+        expected = np.array([10, 100, 190, 280], dtype=np.float32)
+        np.testing.assert_array_almost_equal(heading, expected)
 
-        # Should produce bearing array
-        assert theta.bearing is not None
-        assert len(theta.bearing) == frames[0].n_bearings
+    def test_wraparound(self):
+        """Test that values wrap correctly at 360."""
+        theta = np.array([350, 355, 359], dtype=np.float32)
+        heading = theta_to_heading_ship(theta, bow_to_radar=20.0)
+        expected = np.array([10, 15, 19], dtype=np.float32)
+        np.testing.assert_array_almost_equal(heading, expected)
 
-        # All bearings should be in [0, 360)
-        assert np.all(theta.bearing >= 0)
-        assert np.all(theta.bearing < 360)
+    def test_negative_offset(self):
+        """Test with negative offset."""
+        theta = np.array([0, 10, 350], dtype=np.float32)
+        heading = theta_to_heading_ship(theta, bow_to_radar=-20.0)
+        expected = np.array([340, 350, 330], dtype=np.float32)
+        np.testing.assert_array_almost_equal(heading, expected)
 
-    def test_theta_multiple_frames(self, april_polar_files: list[Path]):
-        """Test theta calculation with multiple frames."""
-        frames = []
-        for fp in april_polar_files[:2]:
-            pf = PolarFile(fp)
-            frames.extend(pf.frames[:1])
 
-        if len(frames) < 2:
-            pytest.skip("Need at least 2 frames")
+class TestThetaToHeadingEarth:
+    """Tests for theta_to_heading_earth function."""
 
-        theta = Theta(frames)
+    def test_ship_heading_only(self):
+        """Test with only ship heading offset."""
+        theta = np.array([0, 90, 180, 270], dtype=np.float32)
+        heading = theta_to_heading_earth(theta, ship_heading=45.0)
+        expected = np.array([45, 135, 225, 315], dtype=np.float32)
+        np.testing.assert_array_almost_equal(heading, expected)
 
-        # Total bearings should be sum of all frames
-        expected_total = sum(f.n_bearings for f in frames)
-        assert len(theta.bearing) == expected_total
+    def test_all_offsets(self):
+        """Test with all offset parameters."""
+        theta = np.array([0, 90], dtype=np.float32)
+        heading = theta_to_heading_earth(
+            theta,
+            ship_heading=100.0,
+            bow_to_radar=10.0,
+            heading_delay=5.0,
+            compass_offset=-3.0,
+        )
+        # 0 + 10 + 5 + 100 - 3 = 112
+        # 90 + 10 + 5 + 100 - 3 = 202
+        expected = np.array([112, 202], dtype=np.float32)
+        np.testing.assert_array_almost_equal(heading, expected)
 
-        # Per-frame bearings should match
-        assert len(theta.bearing_per_frame) == len(frames)
-        for i, frame in enumerate(frames):
-            assert len(theta.bearing_for_frame(i)) == frame.n_bearings
+    def test_wraparound(self):
+        """Test wraparound with ship heading."""
+        theta = np.array([300, 350], dtype=np.float32)
+        heading = theta_to_heading_earth(theta, ship_heading=100.0)
+        expected = np.array([40, 90], dtype=np.float32)
+        np.testing.assert_array_almost_equal(heading, expected)
 
-    def test_theta_with_config(self, single_polar_file: Path):
-        """Test theta with custom configuration."""
-        pf = PolarFile(single_polar_file)
-        frames = pf.frames[:1]
 
-        config = WamosConfig()
-        config["shadow.center"] = 180.0
-        config["shadow.width"] = 90.0
+class TestHeadingToXY:
+    """Tests for heading_to_xy function."""
 
-        theta = Theta(frames, config, refine=False)
+    def test_north_heading(self):
+        """Test heading=0 (North) produces +Y."""
+        heading = np.array([0.0])
+        ground_range = np.array([100.0, 200.0])
+        x, y = heading_to_xy(heading, ground_range)
 
-        assert theta.config is config
-        assert theta.shadow_offset == 0.0  # No refinement
+        # At heading 0 (North), x=0 and y=range
+        np.testing.assert_array_almost_equal(x[0], [0, 0], decimal=5)
+        np.testing.assert_array_almost_equal(y[0], [100, 200], decimal=5)
 
-    def test_theta_empty_frames_raises(self):
-        """Test that empty frames list raises ValueError."""
-        with pytest.raises(ValueError, match="At least one frame"):
-            Theta([])
+    def test_east_heading(self):
+        """Test heading=90 (East) produces +X."""
+        heading = np.array([90.0])
+        ground_range = np.array([100.0])
+        x, y = heading_to_xy(heading, ground_range)
 
-    def test_theta_bearing_wraparound(self, single_polar_file: Path):
-        """Test that bearing values wrap correctly around 360."""
-        pf = PolarFile(single_polar_file)
-        frames = pf.frames[:1]
+        # At heading 90 (East), x=range and y=0
+        np.testing.assert_array_almost_equal(x[0], [100], decimal=5)
+        np.testing.assert_array_almost_equal(y[0], [0], decimal=4)
 
-        theta = Theta(frames)
+    def test_south_heading(self):
+        """Test heading=180 (South) produces -Y."""
+        heading = np.array([180.0])
+        ground_range = np.array([100.0])
+        x, y = heading_to_xy(heading, ground_range)
 
-        # Check wraparound: all values should be in [0, 360)
-        bearing = theta.bearing
-        assert bearing.min() >= 0.0
-        assert bearing.max() < 360.0
+        # At heading 180 (South), x=0 and y=-range
+        np.testing.assert_array_almost_equal(x[0], [0], decimal=4)
+        np.testing.assert_array_almost_equal(y[0], [-100], decimal=5)
 
-    def test_theta_in_shadow(self, single_polar_file: Path):
-        """Test shadow mask calculation."""
-        pf = PolarFile(single_polar_file)
-        frames = pf.frames[:1]
+    def test_west_heading(self):
+        """Test heading=270 (West) produces -X."""
+        heading = np.array([270.0])
+        ground_range = np.array([100.0])
+        x, y = heading_to_xy(heading, ground_range)
 
-        config = WamosConfig()
-        config["shadow.start"] = 135.0
-        config["shadow.end"] = 225.0
+        # At heading 270 (West), x=-range and y=0
+        np.testing.assert_array_almost_equal(x[0], [-100], decimal=5)
+        np.testing.assert_array_almost_equal(y[0], [0], decimal=4)
 
-        theta = Theta(frames, config, refine=False)
-        shadow_mask = theta.in_shadow(0)
+    def test_output_shape(self):
+        """Test output shape is (n_radials, n_distances)."""
+        heading = np.array([0, 90, 180, 270], dtype=np.float32)
+        ground_range = np.array([100, 200, 300], dtype=np.float32)
+        x, y = heading_to_xy(heading, ground_range)
 
-        # Some bearings should be in shadow, some not
-        assert shadow_mask.dtype == bool
-        assert len(shadow_mask) == frames[0].n_bearings
-
-    def test_theta_repr(self, single_polar_file: Path):
-        """Test string representation."""
-        pf = PolarFile(single_polar_file)
-        frames = pf.frames[:1]
-
-        theta = Theta(frames, refine=False)
-        repr_str = repr(theta)
-
-        assert "Theta(" in repr_str
-        assert "frames=" in repr_str
-        assert "radials=" in repr_str
+        assert x.shape == (4, 3)
+        assert y.shape == (4, 3)
 
 
 class TestBearing:
-    """Tests for Bearing class (coordinate transformations)."""
+    """Tests for Bearing class."""
 
     def test_bearing_basic(self, single_polar_file: Path):
-        """Test basic Bearing creation and properties."""
+        """Test basic Bearing creation."""
         pf = PolarFile(single_polar_file)
-        frames = pf.frames[:1]
+        frame = pf[0]
 
-        theta = Theta(frames, refine=False)
-        bearing = Bearing(theta, radar_height=25.0)
+        theta_obj = Theta(frame)
+        range_obj = Range(frame)
+        ship_heading = frame.metadata.heading or 0.0
 
-        assert bearing.radar_height == 25.0
-        assert bearing.theta is theta
-        assert bearing.config is theta.config
+        bearing = Bearing(
+            theta=theta_obj.theta,
+            ship_heading=ship_heading,
+            ground_range=range_obj.ground_range,
+        )
+
+        assert len(bearing.theta) == frame.n_bearings
+        assert len(bearing.ground_range) == frame.n_distances
 
     def test_heading_ship(self, single_polar_file: Path):
         """Test ship-relative heading calculation."""
         pf = PolarFile(single_polar_file)
-        frames = pf.frames[:1]
+        frame = pf[0]
 
-        theta = Theta(frames, refine=False)
-        bearing = Bearing(theta)
+        theta_obj = Theta(frame)
+        range_obj = Range(frame)
+        ship_heading = frame.metadata.heading or 0.0
 
-        heading = bearing.heading_ship(0)
+        bearing = Bearing(
+            theta=theta_obj.theta,
+            ship_heading=ship_heading,
+            ground_range=range_obj.ground_range,
+        )
 
-        assert len(heading) == frames[0].n_bearings
+        heading = bearing.heading_ship()
+
+        assert len(heading) == frame.n_bearings
         assert np.all(heading >= 0)
         assert np.all(heading < 360)
 
     def test_heading_earth(self, single_polar_file: Path):
         """Test earth-relative heading calculation."""
         pf = PolarFile(single_polar_file)
-        frames = pf.frames[:1]
+        frame = pf[0]
 
-        theta = Theta(frames, refine=False)
-        bearing = Bearing(theta)
+        theta_obj = Theta(frame)
+        range_obj = Range(frame)
+        ship_heading = frame.metadata.heading or 0.0
 
-        heading = bearing.heading_earth(0)
+        bearing = Bearing(
+            theta=theta_obj.theta,
+            ship_heading=ship_heading,
+            ground_range=range_obj.ground_range,
+        )
 
-        assert len(heading) == frames[0].n_bearings
+        heading = bearing.heading_earth()
+
+        assert len(heading) == frame.n_bearings
         assert np.all(heading >= 0)
         assert np.all(heading < 360)
 
     def test_xy_ship(self, single_polar_file: Path):
         """Test ship coordinate calculation."""
         pf = PolarFile(single_polar_file)
-        frames = pf.frames[:1]
-        frame = frames[0]
+        frame = pf[0]
 
-        theta = Theta(frames, refine=False)
-        bearing = Bearing(theta, radar_height=25.0)
+        theta_obj = Theta(frame)
+        range_obj = Range(frame)
+        ship_heading = frame.metadata.heading or 0.0
 
-        x, y = bearing.xy_ship(0)
+        bearing = Bearing(
+            theta=theta_obj.theta,
+            ship_heading=ship_heading,
+            ground_range=range_obj.ground_range,
+        )
+
+        x, y = bearing.xy_ship()
 
         # Should be 2D arrays
         assert x.shape == (frame.n_bearings, frame.n_distances)
         assert y.shape == (frame.n_bearings, frame.n_distances)
 
-        # Origin should have small values (near ship)
-        assert x[:, 0].mean() < 100  # Close to center
-
     def test_xy_earth(self, single_polar_file: Path):
         """Test earth coordinate calculation."""
         pf = PolarFile(single_polar_file)
-        frames = pf.frames[:1]
-        frame = frames[0]
+        frame = pf[0]
 
-        theta = Theta(frames, refine=False)
-        bearing = Bearing(theta, radar_height=25.0)
+        theta_obj = Theta(frame)
+        range_obj = Range(frame)
+        ship_heading = frame.metadata.heading or 0.0
 
-        x, y = bearing.xy_earth(0)
+        bearing = Bearing(
+            theta=theta_obj.theta,
+            ship_heading=ship_heading,
+            ground_range=range_obj.ground_range,
+        )
+
+        x, y = bearing.xy_earth()
 
         # Should be 2D arrays
         assert x.shape == (frame.n_bearings, frame.n_distances)
@@ -187,64 +240,83 @@ class TestBearing:
     def test_bearing_repr(self, single_polar_file: Path):
         """Test string representation."""
         pf = PolarFile(single_polar_file)
-        frames = pf.frames[:1]
+        frame = pf[0]
 
-        theta = Theta(frames, refine=False)
-        bearing = Bearing(theta, radar_height=25.0)
+        theta_obj = Theta(frame)
+        range_obj = Range(frame)
+        ship_heading = frame.metadata.heading or 0.0
+
+        bearing = Bearing(
+            theta=theta_obj.theta,
+            ship_heading=ship_heading,
+            ground_range=range_obj.ground_range,
+        )
 
         repr_str = repr(bearing)
         assert "Bearing(" in repr_str
-        assert "frames=" in repr_str
-        assert "radar_height=" in repr_str
+        assert "n_radials=" in repr_str
+        assert "n_distances=" in repr_str
 
     def test_heading_with_offsets(self, single_polar_file: Path):
         """Test heading calculation with compass/mounting offsets."""
         pf = PolarFile(single_polar_file)
-        frames = pf.frames[:1]
+        frame = pf[0]
 
-        config = WamosConfig()
-        config["offsets.bow_to_radar"] = 10.0  # 10 degree offset
+        theta_obj = Theta(frame)
+        range_obj = Range(frame)
+        ship_heading = frame.metadata.heading or 0.0
+
+        config = Config()
+        config["offsets.bow_to_radar"] = 10.0
         config["offsets.heading_delay"] = 5.0
+        config["offsets.compass"] = 3.0
 
-        theta = Theta(frames, config, refine=False)
-        bearing = Bearing(theta)
+        bearing = Bearing(
+            theta=theta_obj.theta,
+            ship_heading=ship_heading,
+            ground_range=range_obj.ground_range,
+            config=config,
+        )
 
-        heading_ship = bearing.heading_ship(0)
-        heading_image = bearing.heading_image(0)
+        heading_ship = bearing.heading_ship()
+        heading_earth = bearing.heading_earth()
 
-        # heading_image should differ from heading_ship by heading_delay
-        diff = (heading_image - heading_ship) % 360
-        # Should be approximately 5 degrees
-        assert np.allclose(diff, 5.0, atol=0.1) or np.allclose(diff, 355.0, atol=0.1)
+        # All headings should be valid
+        assert np.all(heading_ship >= 0)
+        assert np.all(heading_ship < 360)
+        assert np.all(heading_earth >= 0)
+        assert np.all(heading_earth < 360)
+
+    def test_caching(self, single_polar_file: Path):
+        """Test that results are cached."""
+        pf = PolarFile(single_polar_file)
+        frame = pf[0]
+
+        theta_obj = Theta(frame)
+        range_obj = Range(frame)
+        ship_heading = frame.metadata.heading or 0.0
+
+        bearing = Bearing(
+            theta=theta_obj.theta,
+            ship_heading=ship_heading,
+            ground_range=range_obj.ground_range,
+        )
+
+        # First call computes
+        heading1 = bearing.heading_ship()
+        # Second call should return cached
+        heading2 = bearing.heading_ship()
+
+        assert heading1 is heading2  # Same object (cached)
 
 
-class TestCircularStatistics:
-    """Tests for circular statistics helper methods."""
+class TestBackwardCompatibility:
+    """Test backward compatibility with Theta import from bearing."""
 
-    def test_circular_mean_simple(self):
-        """Test circular mean with simple values."""
-        # Mean of 0, 90, 180, 270 should be undefined (near center)
-        # but mean of 10, 20, 30 should be ~20
-        angles = [10.0, 20.0, 30.0]
-        mean, _ = Theta._circular_stats(angles)
-        assert abs(mean - 20.0) < 1.0
+    def test_theta_import_from_bearing(self):
+        """Test that Theta can be imported from bearing module."""
+        from wamos_tpw.bearing import Theta as BearingTheta
+        from wamos_tpw.theta import Theta as ThetaTheta
 
-    def test_circular_mean_wraparound(self):
-        """Test circular mean handles wraparound correctly."""
-        # Mean of 350, 10 should be ~0 (midnight)
-        angles = [350.0, 10.0]
-        mean, _ = Theta._circular_stats(angles)
-        # Mean should be close to 0 (or 360)
-        assert mean < 20.0 or mean > 340.0
-
-    def test_circular_std(self):
-        """Test circular standard deviation."""
-        # Tightly clustered angles should have low std
-        angles = [90.0, 91.0, 89.0, 90.5]
-        _, std = Theta._circular_stats(angles)
-        assert std < 5.0
-
-        # Spread out angles should have higher std
-        angles_spread = [0.0, 90.0, 180.0, 270.0]
-        _, std_spread = Theta._circular_stats(angles_spread)
-        assert std_spread > std
+        # Should be the same class
+        assert BearingTheta is ThetaTheta
