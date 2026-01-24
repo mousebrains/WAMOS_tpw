@@ -3,12 +3,11 @@
 ## Data Flow
 
 ```
-Filenames -> PolarFile -> Frame -> Theta/Bearing -> IntensityViewer
-                               |                  (inherits BaseViewer)
-                     ProcessedFrames -> ProcessedViewer
-                     (extends Files)              (inherits BaseViewer)
+Filenames -> PolarFile -> Frame -> Bearing -> Deramp -> Destreak
                                |
-                            Combine -> Movie generation
+                     FramePipeline -> FilePipeline -> FilesPipeline
+                               |
+                         Interpolator -> MergedImage -> KML/NetCDF
 
 plotting.py provides: BaseViewer, quantile_limits, calc_bin_edges, format_nav_title,
                       add_crosshairs, add_range_rings, sort_polar_data
@@ -46,25 +45,6 @@ YAML configuration loader for tower-specific settings (shadow region, offsets, r
 ### Files (files.py)
 High-level interface combining Filenames loading with time-based group iteration. Includes `IntensityViewer` for interactive plotting.
 
-### Timestamp (timestamp.py)
-Calculates precise timing for each radial using 1-second timing signal encoded in bit 12, bin 18. Estimates lat/lon positions using ship speed/heading.
-
-### ProcessedFrames (processed.py)
-Extends Files with configuration and processing capabilities:
-- `process()`: Main processing pipeline - calls refine_theta then destreak_frames for each itergroup. Supports parallel processing when diagnostics are disabled.
-- `refine_theta()`: Shadow-based angle refinement
-- `deramp_frames()`: Range-dependent intensity fall-off correction
-- `destreak_frames()`: Radial streak artifact removal
-- `ProcessedViewer`: Interactive visualization with polar, ship, and earth coordinate views.
-
-### Combine (combine.py)
-Combines multiple radar frames into earth-referenced images with ship motion compensation:
-- `xy_earth()`: Get x/y earth coordinates for frames
-- `latlon()`: Get lat/lon coordinates
-- `ship_track()`: Continuous ship position during scan
-- `grid_parallel_rotated()`: Fast parallel gridding aligned to ship track
-- `save_frame()`: Non-interactive frame saving for movie generation
-
 ### Deramp (deramp.py)
 Removes range-dependent intensity fall-off:
 - Calculates quantile intensity profile as function of range (excluding shadow)
@@ -74,6 +54,33 @@ Removes range-dependent intensity fall-off:
 Removes radial streak artifacts from radar data:
 - Detects streaks using derivative analysis
 - Applies interpolation to replace streak pixels
+
+## Pipeline Classes
+
+### FramePipeline (frame_pipeline.py)
+Single frame processing pipeline combining deramp and destreak operations.
+
+### FilePipeline (file_pipeline.py)
+Processes all frames in a single polar file using FramePipeline.
+
+### FilesPipeline (files_pipeline.py)
+Multi-file processing pipeline with time windowing and parallel execution:
+- Groups frames into overlapping time windows
+- Processes windows in parallel using PriorityProcessExecutor
+- Outputs merged earth-referenced images
+
+### Interpolator (interpolator.py)
+Multi-frame interpolation with ship motion correction:
+- Collects frames in temporal triplets
+- Interpolates ship position per radial
+- Projects to common UTM grid
+
+### MergedImage (files_pipeline.py)
+Dataclass containing merged radar image with metadata:
+- intensity: 2D averaged intensity array
+- x_edges, y_edges: Grid edges in meters
+- UTM zone and hemisphere
+- Mean heading, ship speed, wind data
 
 ## Plotting Classes (plotting.py)
 
@@ -90,12 +97,6 @@ Three view modes inheriting BaseViewer:
 - Ship: +X=starboard, +Y=bow
 - Earth: +X=East, +Y=North
 
-### ProcessedViewer (processed.py)
-Three view modes inheriting BaseViewer:
-- Polar: bearing vs ground distance
-- Ship: +X=starboard, +Y=bow
-- Earth: +X=East, +Y=North
-
 ## Plotting Utilities (plotting.py)
 
 - `quantile_limits(data, low_pct, high_pct)`: Calculate colorbar limits from percentiles
@@ -104,3 +105,18 @@ Three view modes inheriting BaseViewer:
 - `add_crosshairs(ax)`: Add crosshairs at origin for coordinate plots
 - `add_range_rings(ax, max_range, interval)`: Add range rings to coordinate plots
 - `sort_polar_data(bearing, data)`: Sort bearing and reorder data rows for monotonic pcolormesh input
+
+## Projection (projection.py)
+
+UTM projection and coordinate transformation:
+- `get_utm_zone()`: Determine UTM zone from longitude
+- `get_utm_epsg()`: Get EPSG code for UTM zone
+- `create_utm_transformer()`: Create pyproj transformer
+- `transform_to_utm()`: Convert lat/lon to UTM coordinates
+
+## Priority Executor (priority_executor.py)
+
+Multi-process executor with priority scheduling:
+- Supports high/medium/low priority task queues
+- Manages worker processes with graceful shutdown
+- Used by file processing pipelines

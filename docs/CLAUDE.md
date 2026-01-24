@@ -37,17 +37,11 @@ wamos view 2022040400 2022040600 /path/to/POLAR --plot-intensity --view ship
 # Bearing analysis
 wamos bearing 2022040400 2022040600 /path/to/POLAR --plot all
 
-# Timestamp analysis
-wamos timestamp 2022040400 2022040600 /path/to/POLAR
+# Process files with pipeline
+wamos file-pipeline 2022040400 2022040600 /path/to/POLAR --timing
 
-# Processed frames with interactive viewer
-wamos process 2022040400 2022040600 /path/to/POLAR --plot --view polar
-
-# Combine frames into earth coordinate image
-wamos combine 2022040400 2022040600 /path/to/POLAR --process --plot
-
-# Generate movie
-wamos combine 2022040400 2022040600 /path/to/POLAR --process --movie output.mp4
+# Multi-file merge pipeline with KML output
+wamos files-pipeline 2022040400 2022040600 /path/to/POLAR --window 60 --kml
 ```
 
 **Viewer Controls:**
@@ -75,3 +69,5 @@ wamos combine 2022040400 2022040600 /path/to/POLAR --process --movie output.mp4
 - matplotlib (visualization)
 - pyyaml (configuration)
 - pandas (time series handling)
+- pyproj (UTM projection)
+- tqdm (progress bars)

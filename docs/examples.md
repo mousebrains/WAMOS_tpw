@@ -43,30 +43,35 @@ wamos view 2022040400 2022040600 /path/to/POLAR --plot-intensity --view ship
 
 ## Processing Data
 
-Process frames with deramp and destreak corrections:
+### Single File Pipeline
+
+Process all frames in a single file:
 
 ```bash
-wamos process 2022040400 2022040600 /path/to/POLAR --plot
+wamos file-pipeline 2022040400 2022040600 /path/to/POLAR --timing
 ```
 
-With configuration file:
+### Multi-File Pipeline
+
+Process multiple files with time windowing and merge:
 
 ```bash
-wamos process 2022040400 2022040600 /path/to/POLAR --config wamos_config.yaml --plot
+wamos files-pipeline 2022040400 2022040600 /path/to/POLAR \
+    --window 60 --overlap 0.5 --output-dir /tmp/output
 ```
 
-## Combining Frames
-
-Combine multiple frames into earth-referenced images:
+With KML output for Google Earth:
 
 ```bash
-wamos combine 2022040400 2022040600 /path/to/POLAR --process --plot
+wamos files-pipeline 2022040400 2022040600 /path/to/POLAR \
+    --window 60 --output-dir /tmp/output --kml
 ```
 
-Generate a movie:
+With KMZ output (packaged KML with images):
 
 ```bash
-wamos combine 2022040400 2022040600 /path/to/POLAR --process --movie output.mp4 --fps 10
+wamos files-pipeline 2022040400 2022040600 /path/to/POLAR \
+    --window 60 --output-dir /tmp/output --kmz
 ```
 
 ## Analysis Tools
@@ -77,14 +82,6 @@ Analyze and plot bearing calculations:
 
 ```bash
 wamos bearing 2022040400 2022040600 /path/to/POLAR --plot all
-```
-
-### Timestamp Analysis
-
-Analyze timing signals:
-
-```bash
-wamos timestamp 2022040400 2022040600 /path/to/POLAR
 ```
 
 ### Standalone Deramp
@@ -101,6 +98,14 @@ Test destreaking on a single file:
 
 ```bash
 wamos destreak /path/to/file.pol --plot
+```
+
+### List Frame Timestamps
+
+List timestamps for all frames in a time range:
+
+```bash
+wamos list-frames 2022040400 2022040600 /path/to/POLAR
 ```
 
 ## Python API
@@ -126,43 +131,45 @@ ground_range = frame.ground_range(radar_height=25.0)  # meters
 ### Processing Pipeline
 
 ```python
-from wamos_tpw.config import WamosConfig
-from wamos_tpw.processed import ProcessedFrames
+from wamos_tpw.config import Config
+from wamos_tpw.file_pipeline import FilePipeline
 
-config = WamosConfig('wamos_config.yaml')
+config = Config('wamos_config.yaml')
 
-with ProcessedFrames(
-    stime='2022040400',
-    etime='2022040600',
-    polar_path='/path/to/POLAR',
-    groupby='h',
-    config=config
-) as pframes:
-    for period, frames in pframes.itergroups():
-        frames = list(frames)
-        corrected = pframes.process_group(frames)
-        for frame, corr in zip(frames, corrected):
-            frame.corrected_intensity = corr
+# Process a single file
+fp = FilePipeline('/path/to/file.pol', config=config, qTiming=True)
+
+for frame_pipeline in fp.frames:
+    # Access processed intensity
+    intensity = frame_pipeline.intensity
+    # Access timing information
+    timings = frame_pipeline.timings
 ```
 
-### Combining Frames
+### Multi-File Processing
 
 ```python
-from wamos_tpw.combine import Combine
+from wamos_tpw.files_pipeline import FilesMergePipeline, TimeWindowConfig
+from wamos_tpw.filenames import Filenames
 
-# After processing frames...
-combine = Combine(frames, config, radar_height=25.0)
+# Get list of files
+filenames = Filenames('2022040400', '2022040600', '/path/to/POLAR')
+files = list(filenames)
 
-# Get earth coordinates
-x_earth, y_earth = combine.xy_earth_all()
-lat, lon = combine.latlon_all()
-intensity = combine.intensity_all()
+# Configure time windows
+window_config = TimeWindowConfig(
+    window_seconds=60.0,
+    overlap_fraction=0.5,
+    min_frames_per_window=5
+)
 
-# Ship track
-ship_lat, ship_lon = combine.ship_track()
-
-# Grid for plotting
-x_edges, y_edges, gridded = combine.grid_parallel()
+# Process and merge
+pipeline = FilesMergePipeline(files, window_config=window_config)
+for merged in pipeline.iter_merged():
+    print(f"Merged {merged.n_frames} frames")
+    print(f"Time: {merged.start_time} to {merged.end_time}")
+    # Access merged intensity grid
+    intensity = merged.intensity
 ```
 
 ## Viewer Controls

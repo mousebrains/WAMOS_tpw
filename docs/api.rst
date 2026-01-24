@@ -59,16 +59,6 @@ Radial streak artifact removal.
    :undoc-members:
    :show-inheritance:
 
-Combine
-~~~~~~~
-
-Earth-referenced image combination with ship motion compensation.
-
-.. automodule:: wamos_tpw.combine
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 File I/O
 --------
 
@@ -102,88 +92,51 @@ High-level file loading interface with grouping.
    :undoc-members:
    :show-inheritance:
 
-Processed Frames
-~~~~~~~~~~~~~~~~
+Pipelines
+---------
 
-Processed frame collection with deramp/destreak pipeline.
-
-.. automodule:: wamos_tpw.processed
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Movie Generation
-~~~~~~~~~~~~~~~~
-
-MP4 movie generation from radar frame sequences.
-
-.. automodule:: wamos_tpw.combine_movie
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Shadow Detection
-~~~~~~~~~~~~~~~~
-
-Shadow region detection and bearing refinement.
-
-.. automodule:: wamos_tpw.combine_shadow
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Streaming Processing
-~~~~~~~~~~~~~~~~~~~~
-
-Memory-efficient streaming frame processing and gridding.
-
-.. automodule:: wamos_tpw.combine_streaming
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Plotting
-~~~~~~~~
-
-Interactive viewer and frame plotting utilities.
-
-.. automodule:: wamos_tpw.combine_plot
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-NetCDF Export
+File Pipeline
 ~~~~~~~~~~~~~
 
-NetCDF file writer for radar data export.
+Single file processing pipeline.
 
-.. automodule:: wamos_tpw.combine_netcdf
+.. automodule:: wamos_tpw.file_pipeline
    :members:
    :undoc-members:
    :show-inheritance:
 
-Dataset Export
+Files Pipeline
 ~~~~~~~~~~~~~~
 
-xarray Dataset creation and export to multiple formats.
+Multi-file processing pipeline with time windowing.
 
-.. automodule:: wamos_tpw.dataset
+.. automodule:: wamos_tpw.files_pipeline
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Frame Pipeline
+~~~~~~~~~~~~~~
+
+Per-frame processing pipeline.
+
+.. automodule:: wamos_tpw.frame_pipeline
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Interpolator
+~~~~~~~~~~~~
+
+Multi-frame interpolation for motion correction.
+
+.. automodule:: wamos_tpw.interpolator
    :members:
    :undoc-members:
    :show-inheritance:
 
 Utilities
 ---------
-
-Timestamp
-~~~~~~~~~
-
-Timestamp parsing and validation utilities.
-
-.. automodule:: wamos_tpw.timestamp
-   :members:
-   :undoc-members:
-   :show-inheritance:
 
 Logging
 ~~~~~~~
@@ -205,6 +158,26 @@ Common plotting utilities and helpers.
    :undoc-members:
    :show-inheritance:
 
+Projection
+~~~~~~~~~~
+
+UTM projection and coordinate transformation.
+
+.. automodule:: wamos_tpw.projection
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Range
+~~~~~
+
+Slant and ground range calculations.
+
+.. automodule:: wamos_tpw.range
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Exceptions
 ----------
 
@@ -221,16 +194,6 @@ Type Definitions
 Type aliases for scientific computing.
 
 .. automodule:: wamos_tpw._types
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Protocols
----------
-
-Runtime-checkable protocol definitions.
-
-.. automodule:: wamos_tpw.protocols
    :members:
    :undoc-members:
    :show-inheritance:
