@@ -33,7 +33,7 @@ class FramePipeline:
     Single WAMOS polar frame processing pipeline.
 
     Processes a single radar frame through the complete pipeline:
-    PPS -> Theta -> Range -> Destreak -> Shadow -> Deramp -> Dewind
+    PPS -> Theta -> Range -> Destreak -> Shadow -> Deramp -> Dewind -> Normalize
     """
 
     def __init__(
@@ -137,9 +137,27 @@ class FramePipeline:
 
             dewind = Dewind(deramp.intensity, theta)
             self._dewind = dewind if qSave else None
-            self._final_intensity = dewind.intensity  # Always store for projection
             if t0 is not None:
                 self._timings["Dewind"] = time.perf_counter() - t0
+                t0 = time.perf_counter()
+
+            # Normalize intensity to [0, 1] range
+            intensity = dewind.intensity
+            valid_mask = ~np.isnan(intensity)
+            if np.any(valid_mask):
+                imin = np.nanmin(intensity)
+                imax = np.nanmax(intensity)
+                if imax > imin:
+                    normalized = (intensity - imin) / (imax - imin)
+                else:
+                    # All values are the same, set to 0.5
+                    normalized = np.where(valid_mask, 0.5, np.nan)
+            else:
+                # All NaN, keep as is
+                normalized = intensity
+            self._final_intensity = normalized
+            if t0 is not None:
+                self._timings["Normalize"] = time.perf_counter() - t0
                 t0 = time.perf_counter()
 
             if not qSave:
@@ -241,7 +259,7 @@ class FramePipeline:
 
     @property
     def final_intensity(self) -> np.ndarray:
-        """Return the dewinded intensity array (destreaked, shadow-masked, deramped, dewinded)."""
+        """Return the normalized intensity array [0, 1] (destreaked, shadow-masked, deramped, dewinded, normalized)."""
         return self._final_intensity
 
     def __repr__(self) -> str:

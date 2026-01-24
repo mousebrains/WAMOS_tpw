@@ -67,12 +67,11 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  wamos combine "2022-04-05 14:00" "2022-04-05 15:00" /path/to/POLAR --plot
-  wamos process "2022-04-05 14:00" "2022-04-05 15:00" /path/to/POLAR --plot
+  wamos files-pipeline "2022-04-05 14:00" "2022-04-05 15:00" /path/to/POLAR --plot
+  wamos file-pipeline "2022-04-05 14:00" "2022-04-05 15:00" /path/to/POLAR
   wamos view "2022-04-05 14:00" "2022-04-05 15:00" /path/to/POLAR --plot-intensity
   wamos list "2022-04-05 14:00" "2022-04-05 15:00" /path/to/POLAR
   wamos parse /path/to/file.pol --show-header
-  wamos combine --dry-run "2022-04-05 14:00" "2022-04-05 15:00" /path/to/POLAR
 """,
     )
 
@@ -90,22 +89,19 @@ Examples:
     )
 
     # Register subcommands from each module
-    from wamos_tpw import combine, processed, files, bearing, theta
-    from wamos_tpw import filenames, polarfile, timestamp, config
+    from wamos_tpw import files, bearing, theta
+    from wamos_tpw import filenames, polarfile, config
     from wamos_tpw import deramp, destreak, shadow, dewind, pps
     from wamos_tpw import frame_pipeline, file_pipeline, files_pipeline, interpolator
     from wamos_tpw import range as range_module  # Avoid shadowing builtin
-    from wamos_tpw import combine_sliding
+    from wamos_tpw import list_frames
 
-    combine.add_subparser(subparsers)  # wamos combine
-    processed.add_subparser(subparsers)  # wamos process
     files.add_subparser(subparsers)  # wamos view
     bearing.add_subparser(subparsers)  # wamos bearing
     theta.add_subparser(subparsers)  # wamos theta
     range_module.add_subparser(subparsers)  # wamos range
     filenames.add_subparser(subparsers)  # wamos list
     polarfile.add_subparser(subparsers)  # wamos parse
-    timestamp.add_subparser(subparsers)  # wamos timestamp
     config.add_subparser(subparsers)  # wamos config
     deramp.add_subparser(subparsers)  # wamos deramp
     destreak.add_subparser(subparsers)  # wamos destreak
@@ -116,7 +112,7 @@ Examples:
     file_pipeline.add_subparser(subparsers)  # wamos file-pipeline
     files_pipeline.add_subparser(subparsers)  # wamos files-pipeline
     interpolator.add_subparser(subparsers)  # wamos interpolator
-    combine_sliding.add_subparser(subparsers)  # wamos sliding-movie
+    list_frames.add_subparser(subparsers)  # wamos list-frames
 
     # Parse arguments
     args = parser.parse_args()

@@ -354,6 +354,8 @@ class PolarFile:
             data_bits=self._header.get("DABIT", 12),
             noise_floor=self._header.get("NSFLR", 0),
             wind_sensor_height=self._header.get("WINDH"),
+            bow_to_radar=self._header.get("BO2RA", 0.0),
+            heading_delay=self._header.get("HDGDL", 0.0),
         )
 
         # Parse frame-specific fields
@@ -425,6 +427,8 @@ class PolarFile:
             wind_speed=self._header.get("WINDS"),
             wind_direction=self._header.get("WINDR"),
             wind_sensor_height=self._header.get("WINDH"),
+            bow_to_radar=self._header.get("BO2RA", 0.0),
+            heading_delay=self._header.get("HDGDL", 0.0),
         )
 
     def _parse_data(self, fp: BinaryIO) -> None:

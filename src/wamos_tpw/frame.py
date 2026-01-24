@@ -50,6 +50,9 @@ class FrameMetadata:
     noise_floor: int = 0
     radar_height: float | None = None  # Height of radar above water (meters)
     wind_sensor_height: float | None = None  # Height of wind sensor above water (meters)
+    # Offset corrections (from file header)
+    bow_to_radar: float = 0.0  # BO2RA: Angle from bow to radar beam (degrees)
+    heading_delay: float = 0.0  # HDGDL: Heading delay correction (degrees)
     # Wind
     wind_speed: float | None = None
     wind_direction: float | None = None

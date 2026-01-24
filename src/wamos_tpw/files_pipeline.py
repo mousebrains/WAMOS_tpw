@@ -1,13 +1,19 @@
 #! /usr/bin/env python3
 #
-# Multiple files processing pipeline for WAMOS polar data
+# Frame merge pipeline for WAMOS polar data
+#
+# Merges multiple frames into motion-corrected composite images for movie creation.
+# Uses overlapping time windows to produce smooth transitions between merged images.
 #
 # Jan-2026, Pat Welch, pat@mousebrains.com
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+import os
+import time
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Iterator
 
 import numpy as np
@@ -15,1588 +21,1879 @@ import numpy as np
 if TYPE_CHECKING:
     from wamos_tpw.config import Config
 
-from wamos_tpw.file_pipeline import FilePipeline
-from wamos_tpw.frame_pipeline import FramePipeline
-from wamos_tpw.interpolator import FrameInterpolator
+logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# Data Structures
+# ============================================================
 
 
 @dataclass
-class EarthGrid:
-    """Earth-referenced Cartesian coordinate system for projected radar data."""
+class TimeWindowConfig:
+    """Configuration for time-based windowing of frames."""
 
-    # Grid definition
-    x_edges: np.ndarray  # East-west bin edges in meters
-    y_edges: np.ndarray  # North-south bin edges in meters
+    window_seconds: float = 60.0  # Window duration in seconds
+    overlap_fraction: float = 0.5  # Overlap between consecutive windows (0.0-1.0)
+    min_frames_per_window: int = 5  # Minimum frames required to produce output
+
+    @property
+    def stride_seconds(self) -> float:
+        """Compute stride (time between window starts) from overlap."""
+        return self.window_seconds * (1.0 - self.overlap_fraction)
+
+    def __post_init__(self):
+        if self.window_seconds <= 0:
+            raise ValueError("window_seconds must be positive")
+        if not 0 <= self.overlap_fraction < 1:
+            raise ValueError("overlap_fraction must be in [0, 1)")
+        if self.min_frames_per_window < 1:
+            raise ValueError("min_frames_per_window must be at least 1")
+
+
+@dataclass
+class MergedImage:
+    """A motion-corrected composite image from multiple frames."""
+
+    intensity: np.ndarray  # 2D averaged intensity (n_y, n_x)
+    x_edges: np.ndarray  # Grid x edges in meters (from center)
+    y_edges: np.ndarray  # Grid y edges in meters (from center)
+    start_time: np.datetime64  # Window start time
+    end_time: np.datetime64  # Window end time
+    n_frames: int  # Number of frames merged
+    utm_zone: int  # UTM zone number
+    hemisphere: str  # 'north' or 'south'
+    center_lat: float  # Grid center latitude
+    center_lon: float  # Grid center longitude
     grid_spacing: float  # Grid cell size in meters
-
-    # Projected data (sum and count for averaging)
-    intensity_sum: np.ndarray = field(default=None)
-    intensity_count: np.ndarray = field(default=None)
-
-    # Reference position (origin)
-    ref_latitude: float = 0.0
-    ref_longitude: float = 0.0
-
-    @property
-    def x_centers(self) -> np.ndarray:
-        """Return x (east) bin centers."""
-        return (self.x_edges[:-1] + self.x_edges[1:]) / 2
-
-    @property
-    def y_centers(self) -> np.ndarray:
-        """Return y (north) bin centers."""
-        return (self.y_edges[:-1] + self.y_edges[1:]) / 2
-
-    @property
-    def intensity(self) -> np.ndarray:
-        """Return averaged projected intensity (NaN where no data)."""
-        with np.errstate(invalid="ignore"):
-            result = self.intensity_sum / self.intensity_count
-        result[self.intensity_count == 0] = np.nan
-        return result
+    mean_heading: float  # Mean ship heading during window
+    mean_ship_speed: float | None = None
+    mean_wind_speed: float | None = None
+    mean_wind_direction: float | None = None
+    window_index: int = 0  # Index of this window in the sequence
 
     @property
     def n_x(self) -> int:
-        """Return number of x bins."""
+        """Number of x bins."""
         return len(self.x_edges) - 1
 
     @property
     def n_y(self) -> int:
-        """Return number of y bins."""
+        """Number of y bins."""
         return len(self.y_edges) - 1
 
     @property
-    def extent(self) -> tuple[float, float, float, float]:
-        """Return (x_min, x_max, y_min, y_max) in meters."""
-        return (self.x_edges[0], self.x_edges[-1], self.y_edges[0], self.y_edges[-1])
+    def x_centers(self) -> np.ndarray:
+        """Grid x centers."""
+        return (self.x_edges[:-1] + self.x_edges[1:]) / 2
+
+    @property
+    def y_centers(self) -> np.ndarray:
+        """Grid y centers."""
+        return (self.y_edges[:-1] + self.y_edges[1:]) / 2
+
+    @property
+    def duration_seconds(self) -> float:
+        """Duration of the time window in seconds."""
+        return (self.end_time - self.start_time) / np.timedelta64(1, "s")
 
 
-@dataclass
-class ProjectionResult:
+# ============================================================
+# Time Window Creation
+# ============================================================
+
+
+def extract_file_timestamp(filepath: str) -> np.datetime64 | None:
     """
-    Retained data after earth projection and memory cleanup.
+    Extract timestamp from a polar filename.
 
-    Contains only the essential data for analysis:
-    - Earth coordinate system and projected intensities
-    - Ship navigation data (speeds, headings)
-    - Wind data (speeds, directions)
-    - Frame timing information
+    Expects format: YYYYMMDDHHmmss*.pol*
     """
-
-    # Earth grid with projected data
-    earth_grid: EarthGrid
-
-    # Ship navigation per frame
-    ship_speeds: np.ndarray  # m/s per frame
-    ship_headings: np.ndarray  # degrees per frame (mean heading during frame)
-
-    # Wind data per frame
-    wind_speeds: np.ndarray  # m/s per frame
-    wind_directions: np.ndarray  # degrees per frame
-
-    # Timing
-    frame_start_times: np.ndarray  # datetime64 per frame
-    frame_end_times: np.ndarray  # datetime64 per frame
-
-    # Statistics
-    n_frames: int = 0
-    n_radials_total: int = 0
+    name = os.path.basename(filepath)
+    if len(name) < 14:
+        return None
+    timestamp_str = name[:14]
+    if not timestamp_str.isdigit():
+        return None
+    try:
+        return np.datetime64(
+            f"{timestamp_str[:4]}-{timestamp_str[4:6]}-{timestamp_str[6:8]}"
+            f"T{timestamp_str[8:10]}:{timestamp_str[10:12]}:{timestamp_str[12:14]}"
+        )
+    except ValueError:
+        return None
 
 
-# Earth radius in meters (WGS84 mean radius)
-EARTH_RADIUS = 6371000.0
-
-
-logger = logging.getLogger(__name__)
-
-
-def create_overlapping_groups(
-    filenames,
-    groupby: str,
-    overlap: int = 1,
-) -> list[tuple[np.datetime64, list[str], int, int]]:
+def create_time_windows(
+    files: list[str],
+    window_config: TimeWindowConfig,
+) -> list[tuple[np.datetime64, np.datetime64, list[int]]]:
     """
-    Create overlapping groups from a Filenames object.
-
-    Each group includes `overlap` files from the previous group (at start)
-    and `overlap` files from the next group (at end), enabling frame pairing
-    and interpolation across group boundaries.
+    Create overlapping time windows from a file list.
 
     Args:
-        filenames: Filenames object with itergroups() method
-        groupby: Time frequency for grouping (e.g., 'h', '30m')
-        overlap: Number of files to overlap from adjacent groups (default: 1)
+        files: List of polar file paths (should be time-sorted)
+        window_config: Time window configuration
 
     Returns:
-        List of (period, files, n_overlap_before, n_overlap_after) tuples where:
-        - period: Group start time
-        - files: List of files including overlap from both directions
-        - n_overlap_before: Number of overlap files at start (from previous group)
-        - n_overlap_after: Number of overlap files at end (from next group)
+        List of (start_time, end_time, file_indices) tuples
+
+    Example: window=60s, overlap=50% (stride=30s)
+      Window 0: [0s, 60s]   - files with timestamps in this range
+      Window 1: [30s, 90s]  - overlaps with Window 0
+      Window 2: [60s, 120s] - overlaps with Window 1
+      ...
     """
-    groups = list(filenames.itergroups(groupby))
-    result = []
+    if not files:
+        return []
 
-    for i, (period, files) in enumerate(groups):
-        # Add overlap from previous group at start
-        if i > 0:
-            prev_files = groups[i - 1][1][-overlap:]
-        else:
-            prev_files = []
+    # Extract timestamps from all files
+    timestamps = []
+    valid_indices = []
+    for i, f in enumerate(files):
+        ts = extract_file_timestamp(f)
+        if ts is not None:
+            timestamps.append(ts)
+            valid_indices.append(i)
 
-        # Add overlap from next group at end
-        if i < len(groups) - 1:
-            next_files = groups[i + 1][1][:overlap]
-        else:
-            next_files = []
+    if not timestamps:
+        return []
 
-        combined = prev_files + files + next_files
-        result.append((period, combined, len(prev_files), len(next_files)))
+    timestamps = np.array(timestamps, dtype="datetime64[ns]")
+    valid_indices = np.array(valid_indices)
 
-    return result
+    # Get time range
+    t_min = timestamps.min()
+    t_max = timestamps.max()
+
+    window_ns = np.timedelta64(int(window_config.window_seconds * 1e9), "ns")
+    stride_ns = np.timedelta64(int(window_config.stride_seconds * 1e9), "ns")
+
+    windows = []
+    window_start = t_min
+
+    while window_start <= t_max:
+        window_end = window_start + window_ns
+
+        # Find files within this window
+        mask = (timestamps >= window_start) & (timestamps < window_end)
+        file_indices = valid_indices[mask].tolist()
+
+        # Only include windows with enough frames
+        if len(file_indices) >= window_config.min_frames_per_window:
+            windows.append((window_start, window_end, file_indices))
+
+        window_start = window_start + stride_ns
+
+    return windows
 
 
-class FilesPipeline:
+# ============================================================
+# Window Accumulator
+# ============================================================
+
+
+class WindowAccumulator:
     """
-    Process a list of polar files in a single process/thread.
+    Accumulate multiple frames onto a common UTM grid.
 
-    Aggregates results from multiple FilePipeline instances, collecting
-    frame timings and metadata for batch processing.
+    Handles the projection and averaging of radar frames within a time window.
+    """
 
-    Files are processed sequentially in the order provided (typically time-sorted
-    from Filenames), preserving time ordering for frame pair iteration.
+    def __init__(
+        self,
+        x_edges: np.ndarray,
+        y_edges: np.ndarray,
+        grid_spacing: float,
+        utm_zone: int,
+        hemisphere: str,
+        center_lat: float,
+        center_lon: float,
+    ):
+        """
+        Initialize accumulator with pre-computed grid.
 
-    Supports overlap files at both ends for frame pairing across group boundaries.
-    Creates FrameInterpolator objects for each primary frame during construction.
+        Args:
+            x_edges: Grid x edges in meters (centered on reference point)
+            y_edges: Grid y edges in meters
+            grid_spacing: Grid cell size in meters
+            utm_zone: UTM zone number
+            hemisphere: 'north' or 'south'
+            center_lat: Grid center latitude
+            center_lon: Grid center longitude
+        """
+        self.x_edges = x_edges
+        self.y_edges = y_edges
+        self.grid_spacing = grid_spacing
+        self.utm_zone = utm_zone
+        self.hemisphere = hemisphere
+        self.center_lat = center_lat
+        self.center_lon = center_lon
+
+        n_x = len(x_edges) - 1
+        n_y = len(y_edges) - 1
+        self.intensity_sum = np.zeros((n_y, n_x), dtype=np.float64)
+        self.intensity_count = np.zeros((n_y, n_x), dtype=np.int32)
+
+        self.timestamps: list[np.datetime64] = []
+        self.headings: list[float] = []
+        self.ship_speeds: list[float] = []
+        self.wind_speeds: list[float] = []
+        self.wind_directions: list[float] = []
+
+    @property
+    def n_frames(self) -> int:
+        """Number of frames accumulated."""
+        return len(self.timestamps)
+
+    @property
+    def n_x(self) -> int:
+        """Number of x bins."""
+        return len(self.x_edges) - 1
+
+    @property
+    def n_y(self) -> int:
+        """Number of y bins."""
+        return len(self.y_edges) - 1
+
+    def add_projected(
+        self,
+        projected_intensity: np.ndarray,
+        projected_count: np.ndarray,
+        timestamp: np.datetime64,
+        heading: float,
+        ship_speed: float | None = None,
+        wind_speed: float | None = None,
+        wind_direction: float | None = None,
+    ) -> None:
+        """
+        Add a pre-projected frame to the accumulator.
+
+        Args:
+            projected_intensity: 2D projected intensity sum
+            projected_count: 2D count of points per cell
+            timestamp: Frame timestamp
+            heading: Mean ship heading during frame
+            ship_speed: Ship speed (m/s) or None
+            wind_speed: Wind speed (m/s) or None
+            wind_direction: Wind direction (degrees) or None
+        """
+        self.intensity_sum += projected_intensity
+        self.intensity_count += projected_count
+        self.timestamps.append(timestamp)
+        self.headings.append(heading)
+
+        if ship_speed is not None:
+            self.ship_speeds.append(ship_speed)
+        if wind_speed is not None:
+            self.wind_speeds.append(wind_speed)
+        if wind_direction is not None:
+            self.wind_directions.append(wind_direction)
+
+    def finalize(self, window_index: int = 0) -> MergedImage:
+        """
+        Compute averaged intensity and return MergedImage.
+
+        Args:
+            window_index: Index of this window in the sequence
+
+        Returns:
+            MergedImage with averaged data and metadata
+        """
+        with np.errstate(invalid="ignore"):
+            intensity = self.intensity_sum / self.intensity_count
+        intensity[self.intensity_count == 0] = np.nan
+
+        # Compute circular mean for heading
+        headings_rad = np.deg2rad(self.headings)
+        mean_sin = np.mean(np.sin(headings_rad))
+        mean_cos = np.mean(np.cos(headings_rad))
+        mean_heading = np.rad2deg(np.arctan2(mean_sin, mean_cos)) % 360
+
+        # Compute optional means
+        mean_ship_speed = float(np.mean(self.ship_speeds)) if self.ship_speeds else None
+        mean_wind_speed = float(np.mean(self.wind_speeds)) if self.wind_speeds else None
+        mean_wind_dir = None
+        if self.wind_directions:
+            wd_rad = np.deg2rad(self.wind_directions)
+            wd_sin = np.mean(np.sin(wd_rad))
+            wd_cos = np.mean(np.cos(wd_rad))
+            mean_wind_dir = np.rad2deg(np.arctan2(wd_sin, wd_cos)) % 360
+
+        return MergedImage(
+            intensity=intensity,
+            x_edges=self.x_edges,
+            y_edges=self.y_edges,
+            start_time=self.timestamps[0],
+            end_time=self.timestamps[-1],
+            n_frames=len(self.timestamps),
+            utm_zone=self.utm_zone,
+            hemisphere=self.hemisphere,
+            center_lat=self.center_lat,
+            center_lon=self.center_lon,
+            grid_spacing=self.grid_spacing,
+            mean_heading=float(mean_heading),
+            mean_ship_speed=mean_ship_speed,
+            mean_wind_speed=mean_wind_speed,
+            mean_wind_direction=mean_wind_dir,
+            window_index=window_index,
+        )
+
+
+# ============================================================
+# Grid Computation
+# ============================================================
+
+
+def compute_common_grid(
+    latitudes: list[np.ndarray],
+    longitudes: list[np.ndarray],
+    max_ranges: list[float],
+    range_resolutions: list[float],
+    padding: float = 1.1,
+) -> dict:
+    """
+    Compute a common UTM grid that covers all frames.
+
+    Args:
+        latitudes: List of per-radial latitude arrays
+        longitudes: List of per-radial longitude arrays
+        max_ranges: Maximum ground range per frame in meters
+        range_resolutions: Range resolution per frame in meters
+        padding: Multiplier for max range to add margin
+
+    Returns:
+        Dictionary with grid parameters:
+        - x_edges, y_edges: Grid edges in meters (centered)
+        - grid_spacing: Cell size in meters
+        - utm_zone, hemisphere: Coordinate system info
+        - center_lat, center_lon: Grid center in degrees
+        - transformer: pyproj Transformer from WGS84 to UTM
+    """
+    from pyproj import CRS, Transformer
+
+    # Get reference position (center of all data)
+    all_lats = np.concatenate(latitudes)
+    all_lons = np.concatenate(longitudes)
+    ref_lat = float(np.mean(all_lats))
+    ref_lon = float(np.mean(all_lons))
+
+    # Determine UTM zone
+    utm_zone = int((ref_lon + 180) / 6) % 60 + 1
+    hemisphere = "north" if ref_lat >= 0 else "south"
+
+    utm_crs = CRS.from_proj4(f"+proj=utm +zone={utm_zone} +{hemisphere} +datum=WGS84")
+    crs_wgs84 = CRS.from_epsg(4326)
+    transformer = Transformer.from_crs(crs_wgs84, utm_crs, always_xy=True)
+
+    # Transform all positions to UTM
+    all_x, all_y = transformer.transform(all_lons, all_lats)
+
+    # Grid spacing from average range resolution
+    grid_spacing = float(np.mean(range_resolutions))
+
+    # Grid extent: data extent + max radar range + padding
+    max_range = float(np.max(max_ranges)) * padding
+
+    x_min = all_x.min() - max_range
+    x_max = all_x.max() + max_range
+    y_min = all_y.min() - max_range
+    y_max = all_y.max() + max_range
+
+    # Create bin edges aligned to grid spacing
+    n_x = int(np.ceil((x_max - x_min) / grid_spacing))
+    n_y = int(np.ceil((y_max - y_min) / grid_spacing))
+
+    x_edges = np.linspace(x_min, x_min + n_x * grid_spacing, n_x + 1)
+    y_edges = np.linspace(y_min, y_min + n_y * grid_spacing, n_y + 1)
+
+    # Compute grid center
+    x_center = (x_edges[0] + x_edges[-1]) / 2
+    y_center = (y_edges[0] + y_edges[-1]) / 2
+
+    # Convert center to lat/lon
+    transformer_inv = Transformer.from_crs(utm_crs, crs_wgs84, always_xy=True)
+    center_lon, center_lat = transformer_inv.transform(x_center, y_center)
+
+    # Center the edges for output
+    x_edges_centered = x_edges - x_center
+    y_edges_centered = y_edges - y_center
+
+    return {
+        "x_edges": x_edges_centered,
+        "y_edges": y_edges_centered,
+        "x_edges_utm": x_edges,
+        "y_edges_utm": y_edges,
+        "grid_spacing": grid_spacing,
+        "utm_zone": utm_zone,
+        "hemisphere": hemisphere,
+        "center_lat": float(center_lat),
+        "center_lon": float(center_lon),
+        "x_center_utm": x_center,
+        "y_center_utm": y_center,
+        "transformer": transformer,
+        "n_x": n_x,
+        "n_y": n_y,
+    }
+
+
+def project_frame_to_common_grid(
+    intensity: np.ndarray,
+    theta: np.ndarray,
+    ground_range: np.ndarray,
+    latitudes: np.ndarray,
+    longitudes: np.ndarray,
+    headings: np.ndarray,
+    grid_params: dict,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Project a single frame onto a common UTM grid.
+
+    Args:
+        intensity: 2D intensity array (n_bearings, n_distances)
+        theta: Beam angles relative to ship (degrees)
+        ground_range: Ground range (meters) for each distance bin
+        latitudes: Per-radial latitudes
+        longitudes: Per-radial longitudes
+        headings: Per-radial ship headings (degrees)
+        grid_params: Common grid parameters from compute_common_grid()
+
+    Returns:
+        Tuple of (intensity_sum, intensity_count) arrays for this frame
+    """
+    transformer = grid_params["transformer"]
+    x_edges_utm = grid_params["x_edges_utm"]
+    y_edges_utm = grid_params["y_edges_utm"]
+    grid_spacing = grid_params["grid_spacing"]
+    n_x = grid_params["n_x"]
+    n_y = grid_params["n_y"]
+
+    # Convert ship positions to UTM
+    ship_x, ship_y = transformer.transform(longitudes, latitudes)
+
+    # Initialize accumulation arrays
+    frame_sum = np.zeros((n_y, n_x), dtype=np.float64)
+    frame_count = np.zeros((n_y, n_x), dtype=np.int32)
+
+    # Compute earth bearing for each radial
+    earth_bearing_rad = np.deg2rad((theta + headings) % 360)
+    sin_bearing = np.sin(earth_bearing_rad)
+    cos_bearing = np.cos(earth_bearing_rad)
+
+    # Compute x, y for all points (n_bearings, n_distances)
+    x_coords = np.outer(sin_bearing, ground_range) + ship_x[:, np.newaxis]
+    y_coords = np.outer(cos_bearing, ground_range) + ship_y[:, np.newaxis]
+
+    # Convert to grid indices
+    x_origin = x_edges_utm[0]
+    y_origin = y_edges_utm[0]
+    inv_spacing = 1.0 / grid_spacing
+
+    x_idx = ((x_coords - x_origin) * inv_spacing).astype(np.int32)
+    y_idx = ((y_coords - y_origin) * inv_spacing).astype(np.int32)
+
+    # Flatten arrays
+    x_flat = x_idx.ravel()
+    y_flat = y_idx.ravel()
+    values_flat = intensity.ravel()
+
+    # Filter valid indices
+    valid = (
+        (x_flat >= 0)
+        & (x_flat < n_x)
+        & (y_flat >= 0)
+        & (y_flat < n_y)
+        & ~np.isnan(values_flat)
+    )
+
+    if np.sum(valid) > 0:
+        linear_idx = y_flat[valid] * n_x + x_flat[valid]
+        grid_size = n_x * n_y
+
+        batch_sum = np.bincount(linear_idx, weights=values_flat[valid], minlength=grid_size)
+        batch_count = np.bincount(linear_idx, minlength=grid_size)
+
+        frame_sum.ravel()[:] = batch_sum
+        frame_count.ravel()[:] = batch_count
+
+    return frame_sum, frame_count
+
+
+# ============================================================
+# Grid Remapping
+# ============================================================
+
+
+def _remap_to_common_grid(
+    intensity: np.ndarray,
+    count: np.ndarray | None,
+    src_x_edges: np.ndarray,
+    src_y_edges: np.ndarray,
+    dst_x_edges: np.ndarray,
+    dst_y_edges: np.ndarray,
+    dst_n_x: int,
+    dst_n_y: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Remap projected intensity from source grid to destination grid.
+
+    Args:
+        intensity: Source intensity (averaged) array
+        count: Source count array (may be None)
+        src_x_edges: Source grid x edges (in absolute UTM coordinates)
+        src_y_edges: Source grid y edges (in absolute UTM coordinates)
+        dst_x_edges: Destination grid x edges (in absolute UTM coordinates)
+        dst_y_edges: Destination grid y edges (in absolute UTM coordinates)
+        dst_n_x: Destination grid x dimension
+        dst_n_y: Destination grid y dimension
+
+    Returns:
+        Tuple of (intensity_sum, count) arrays in destination grid
+    """
+    # Compute source grid centers
+    src_x_centers = (src_x_edges[:-1] + src_x_edges[1:]) / 2
+    src_y_centers = (src_y_edges[:-1] + src_y_edges[1:]) / 2
+
+    # Get destination grid spacing
+    dst_dx = dst_x_edges[1] - dst_x_edges[0]
+    dst_dy = dst_y_edges[1] - dst_y_edges[0]
+
+    # Create meshgrid of source coordinates
+    src_xx, src_yy = np.meshgrid(src_x_centers, src_y_centers, indexing="xy")
+
+    # Compute destination indices for all source cells
+    dst_ix = ((src_xx - dst_x_edges[0]) / dst_dx).astype(np.int32)
+    dst_iy = ((src_yy - dst_y_edges[0]) / dst_dy).astype(np.int32)
+
+    # Find valid cells (within destination grid and not NaN)
+    valid = (
+        (dst_ix >= 0)
+        & (dst_ix < dst_n_x)
+        & (dst_iy >= 0)
+        & (dst_iy < dst_n_y)
+        & ~np.isnan(intensity)
+    )
+
+    if not np.any(valid):
+        return (
+            np.zeros((dst_n_y, dst_n_x), dtype=np.float64),
+            np.zeros((dst_n_y, dst_n_x), dtype=np.int32),
+        )
+
+    # Get valid values
+    valid_ix = dst_ix[valid]
+    valid_iy = dst_iy[valid]
+    valid_intensity = intensity[valid]
+
+    if count is not None:
+        valid_count = count[valid]
+    else:
+        valid_count = np.ones(np.sum(valid), dtype=np.int32)
+
+    # Use linear indices for bincount
+    linear_idx = valid_iy * dst_n_x + valid_ix
+    grid_size = dst_n_x * dst_n_y
+
+    # Accumulate weighted intensity and counts
+    dst_sum = np.bincount(
+        linear_idx, weights=valid_intensity * valid_count, minlength=grid_size
+    ).reshape((dst_n_y, dst_n_x))
+
+    dst_count = np.bincount(linear_idx, weights=valid_count, minlength=grid_size).reshape(
+        (dst_n_y, dst_n_x)
+    )
+
+    return dst_sum.astype(np.float64), dst_count.astype(np.int32)
+
+
+# ============================================================
+# Task Handlers for Priority Executor
+# ============================================================
+
+
+def _do_project_frame(task):  # -> Result:
+    """
+    Project a single frame onto a common grid.
+
+    Task data: (frame_data, grid_params)
+    """
+    import resource
+    from wamos_tpw.priority_executor import Result, read_shared_array
+
+    frame_data, grid_params_serialized = task.data
+
+    t0 = time.perf_counter()
+
+    # Read arrays from shared memory
+    intensity = read_shared_array(*frame_data.intensity_shm) if frame_data.intensity_shm else None
+    theta = read_shared_array(*frame_data.theta_shm) if frame_data.theta_shm else None
+    ground_range = (
+        read_shared_array(*frame_data.ground_range_shm) if frame_data.ground_range_shm else None
+    )
+
+    if intensity is None or theta is None or ground_range is None:
+        return Result(
+            task_type="project_frame",
+            task_id=task.task_id,
+            data={"success": False, "error": "Missing arrays"},
+            shm_to_release=[],
+        )
+
+    # Reconstruct grid params with transformer
+    from pyproj import CRS, Transformer
+
+    utm_crs = CRS.from_proj4(
+        f"+proj=utm +zone={grid_params_serialized['utm_zone']} "
+        f"+{grid_params_serialized['hemisphere']} +datum=WGS84"
+    )
+    crs_wgs84 = CRS.from_epsg(4326)
+    transformer = Transformer.from_crs(crs_wgs84, utm_crs, always_xy=True)
+
+    grid_params = {**grid_params_serialized, "transformer": transformer}
+
+    # We need latitudes, longitudes, headings from interpolation
+    # These should be passed in frame_data
+    latitudes = frame_data.latitudes
+    longitudes = frame_data.longitudes
+    headings = frame_data.headings
+
+    # Project frame
+    frame_sum, frame_count = project_frame_to_common_grid(
+        intensity=intensity,
+        theta=theta,
+        ground_range=ground_range,
+        latitudes=latitudes,
+        longitudes=longitudes,
+        headings=headings,
+        grid_params=grid_params,
+    )
+
+    elapsed = time.perf_counter() - t0
+    peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+
+    return Result(
+        task_type="project_frame",
+        task_id=task.task_id,
+        data={
+            "success": True,
+            "file_index": frame_data.file_index,
+            "frame_index": frame_data.frame_index,
+            "timestamp": frame_data.timestamp,
+            "frame_sum": frame_sum,
+            "frame_count": frame_count,
+            "heading": float(np.mean(headings)),
+            "ship_speed": frame_data.ship_speed,
+            "wind_speed": frame_data.wind_speed,
+            "wind_direction": frame_data.wind_direction,
+            "elapsed": elapsed,
+            "peak_rss": peak_rss,
+        },
+        shm_to_release=[],
+    )
+
+
+# ============================================================
+# Main Pipeline Class
+# ============================================================
+
+
+class FilesMergePipeline:
+    """
+    Merge radar frames into motion-corrected composite images.
+
+    Processes frames in parallel, projects them onto a common UTM grid,
+    and accumulates them into time-windowed composites.
+
+    Usage:
+        pipeline = FilesMergePipeline(files, config, window_config)
+        for merged in pipeline.iter_merged():
+            # Process merged image (display, save, etc.)
     """
 
     def __init__(
         self,
         filenames: list[str],
-        config: Config | None = None,
-        qSave: bool = False,
-        qTiming: bool = False,
-        n_overlap_files_before: int = 0,
-        n_overlap_files_after: int = 0,
+        config: "Config | None" = None,
+        window_config: TimeWindowConfig | None = None,
+        n_workers: int | None = None,
         tolerance: float = 1.2,
-        qProject: bool = False,
-    ) -> None:
+        qTiming: bool = False,
+        qProgress: bool = True,
+    ):
         """
-        Process a list of polar files.
+        Initialize the merge pipeline.
 
         Args:
             filenames: List of polar file paths to process (should be time-sorted)
             config: YAML configuration information
-            qSave: Save intermediate results for debugging
-            qTiming: Time each processing step
-            n_overlap_files_before: Number of files at the start that are overlap
-                                   (from previous group, used for pairing only)
-            n_overlap_files_after: Number of files at the end that are overlap
-                                  (from next group, used for pairing only)
-            tolerance: Multiplier for repeat_time to accept frame pair (1.2 = 20% margin)
-            qProject: Perform earth projection after processing frames
+            window_config: Time window configuration
+            n_workers: Number of parallel workers (default: auto)
+            tolerance: Multiplier for repeat_time to accept frame pair
+            qTiming: Enable timing statistics
+            qProgress: Show progress bars
         """
-        self._filenames = filenames
+        self._files = filenames
         self._config = config
+        self._window_config = window_config or TimeWindowConfig()
+        self._n_workers = n_workers or min(len(filenames), os.cpu_count() or 1)
         self._tolerance = tolerance
-        self._file_pipelines: list[FilePipeline] = []
-        self._frame_pipelines: list[FramePipeline] = []
-        self._frame_timings: list[dict[str, float]] = []
-        self._interpolators: list[FrameInterpolator] = []
-        self._total_frames = 0
-        self._n_overlap_files_before = n_overlap_files_before
-        self._n_overlap_files_after = n_overlap_files_after
-        self._n_overlap_frames_before = 0
-        self._n_overlap_frames_after = 0
-        self._n_interpolated = 0
-        self._n_extrapolated = 0
-        self._n_skipped = 0
+        self._qTiming = qTiming
+        self._qProgress = qProgress
 
-        # Spatial data for earth projection (collected during second loop)
-        self._all_latitudes: list[np.ndarray] = []  # Per-radial latitudes per frame
-        self._all_longitudes: list[np.ndarray] = []  # Per-radial longitudes per frame
-        self._all_headings: list[np.ndarray] = []  # Per-radial headings per frame
-        self._range_resolutions: list[float] = []  # Range resolution per frame
-        self._max_ground_ranges: list[float] = []  # Max ground range per frame
-        self._earth_grid: EarthGrid | None = None
-        self._projection_result: ProjectionResult | None = None
-        self._projection_timings: dict[str, float] = {}  # Timing for projection steps
+        # Create time windows
+        self._windows = create_time_windows(filenames, self._window_config)
 
-        n_files = len(filenames)
-        primary_start = n_overlap_files_before
-        primary_end = n_files - n_overlap_files_after
+        # Statistics
+        self._n_processed = 0
+        self._n_merged = 0
+        self._timings: dict[str, float] = {}
 
-        # First pass: collect all frames
-        for i, fn in enumerate(filenames):
-            try:
-                pf = FilePipeline(fn, config=config, qSave=qSave, qTiming=qTiming)
-                self._file_pipelines.append(pf)
-                self._total_frames += len(pf)
+    @property
+    def n_windows(self) -> int:
+        """Number of time windows."""
+        return len(self._windows)
 
-                for frm in pf.frames:
-                    self._frame_pipelines.append(frm)
-                    if i < primary_start:
-                        self._n_overlap_frames_before += 1
-                    elif i >= primary_end:
-                        self._n_overlap_frames_after += 1
-                    if qTiming:
-                        self._frame_timings.append(frm.timings)
-            except Exception:
-                logger.exception("Error processing %s", fn)
-                raise
+    @property
+    def window_config(self) -> TimeWindowConfig:
+        """Return the window configuration."""
+        return self._window_config
 
-        self._n_primary_frames = (
-            self._total_frames - self._n_overlap_frames_before - self._n_overlap_frames_after
+    def _merge_window(self, window_idx: int, frames: list[dict]) -> MergedImage | None:
+        """
+        Merge frames into a single MergedImage for a window.
+
+        Args:
+            window_idx: Index of this window
+            frames: List of interpolated frame data dicts
+
+        Returns:
+            MergedImage or None if not enough valid frames
+        """
+        if len(frames) < self._window_config.min_frames_per_window:
+            return None
+
+        # Sort by timestamp
+        frames.sort(key=lambda x: x["timestamp"])
+
+        # Compute common grid for this window
+        latitudes = [f["latitudes"] for f in frames if "latitudes" in f]
+        longitudes = [f["longitudes"] for f in frames if "longitudes" in f]
+
+        if not latitudes:
+            return None
+
+        max_ranges = []
+        range_resolutions = []
+
+        for f in frames:
+            if "grid_params" in f and f["grid_params"]:
+                max_ranges.append(f["grid_params"].get("n_x", 1000) * 10)
+                range_resolutions.append(f["grid_params"].get("grid_spacing", 10))
+            else:
+                max_ranges.append(3000.0)
+                range_resolutions.append(7.5)
+
+        grid_params = compute_common_grid(
+            latitudes=latitudes,
+            longitudes=longitudes,
+            max_ranges=max_ranges,
+            range_resolutions=range_resolutions,
         )
 
-        # Second pass: create interpolators for primary frames and collect spatial data
-        import time
+        # Create accumulator
+        accumulator = WindowAccumulator(
+            x_edges=grid_params["x_edges"],
+            y_edges=grid_params["y_edges"],
+            grid_spacing=grid_params["grid_spacing"],
+            utm_zone=grid_params["utm_zone"],
+            hemisphere=grid_params["hemisphere"],
+            center_lat=grid_params["center_lat"],
+            center_lon=grid_params["center_lon"],
+        )
 
-        frames = self._frame_pipelines
-        start = self._n_overlap_frames_before
-        end = start + self._n_primary_frames
+        # Project each frame onto the common grid
+        for frame_data in frames:
+            if "latitudes" not in frame_data:
+                continue
 
-        for i in range(start, end):
-            prev_frame = frames[i - 1] if i > 0 else None
-            current_frame = frames[i]
-            next_frame = frames[i + 1] if i + 1 < len(frames) else None
+            headings = frame_data.get("headings")
+            mean_heading = float(np.mean(headings)) if headings is not None else 0.0
 
-            try:
-                t0 = time.perf_counter() if qTiming else None
-                interp = FrameInterpolator(
-                    prev_frame,
-                    current_frame,
-                    next_frame,
-                    tolerance=tolerance,
-                )
-                if t0 is not None and i < len(self._frame_timings):
-                    # Add interpolation timing to the corresponding frame's timings
-                    self._frame_timings[i]["Interpolate"] = time.perf_counter() - t0
-                self._interpolators.append(interp)
-                if interp.method == "interpolate":
-                    self._n_interpolated += 1
+            if frame_data.get("projected_intensity") is not None:
+                proj_intensity = frame_data["projected_intensity"]
+                proj_count = frame_data.get("projected_count")
+                frame_grid_params = frame_data.get("grid_params", {})
+
+                frame_x_edges_centered = frame_grid_params.get("x_edges")
+                frame_y_edges_centered = frame_grid_params.get("y_edges")
+                frame_center_lat = frame_grid_params.get("center_lat")
+                frame_center_lon = frame_grid_params.get("center_lon")
+
+                if (
+                    frame_x_edges_centered is not None
+                    and frame_y_edges_centered is not None
+                    and frame_center_lat is not None
+                    and frame_center_lon is not None
+                ):
+                    frame_center_x, frame_center_y = grid_params["transformer"].transform(
+                        frame_center_lon, frame_center_lat
+                    )
+                    frame_x_edges_utm = frame_x_edges_centered + frame_center_x
+                    frame_y_edges_utm = frame_y_edges_centered + frame_center_y
+
+                    frame_sum, frame_count = _remap_to_common_grid(
+                        proj_intensity,
+                        proj_count,
+                        frame_x_edges_utm,
+                        frame_y_edges_utm,
+                        grid_params["x_edges_utm"],
+                        grid_params["y_edges_utm"],
+                        grid_params["n_x"],
+                        grid_params["n_y"],
+                    )
                 else:
-                    self._n_extrapolated += 1
-
-                # Collect spatial data for earth projection
-                self._all_latitudes.append(interp.latitudes)
-                self._all_longitudes.append(interp.longitudes)
-                self._all_headings.append(interp.headings)
-                self._range_resolutions.append(current_frame.range_resolution)
-                self._max_ground_ranges.append(current_frame.ground_range[-1])
-
-            except ValueError as e:
-                logger.warning("Skipping frame %d: %s", i, e)
-                self._n_skipped += 1
-
-        # Third pass: earth projection (if requested)
-        if qProject and self._n_primary_frames > 0:
-            self.create_earth_grid()
-            self.project_to_earth()
-            self.finalize_projection()
-
-    def __repr__(self) -> str:
-        return f"<FilesPipeline files={len(self._filenames)} frames={self._total_frames}>"
-
-    def __bool__(self) -> bool:
-        """Return True if any frames were processed."""
-        return self._total_frames > 0
-
-    def __len__(self) -> int:
-        """Return the total number of processed frames."""
-        return self._total_frames
-
-    def __iter__(self) -> Iterator[FramePipeline]:
-        """Iterate over all FramePipeline objects across all files."""
-        for pf in self._file_pipelines:
-            yield from pf.frames
-
-    @property
-    def filenames(self) -> list[str]:
-        """Return the list of filenames."""
-        return self._filenames
-
-    @property
-    def file_pipelines(self) -> list[FilePipeline]:
-        """Return the list of FilePipeline objects."""
-        return self._file_pipelines
-
-    @property
-    def frame_timings(self) -> list[dict[str, float]]:
-        """Return the list of frame-level timings."""
-        return self._frame_timings
-
-    @property
-    def total_frames(self) -> int:
-        """Return the total number of frames processed."""
-        return self._total_frames
-
-    @property
-    def config(self) -> Config | None:
-        """Return the configuration object."""
-        return self._config
-
-    @property
-    def n_primary_frames(self) -> int:
-        """Return the number of primary (non-overlap) frames."""
-        return self._n_primary_frames
-
-    @property
-    def n_overlap_frames(self) -> int:
-        """Return the total number of overlap frames (before + after)."""
-        return self._n_overlap_frames_before + self._n_overlap_frames_after
-
-    @property
-    def n_overlap_frames_before(self) -> int:
-        """Return the number of overlap frames at the start."""
-        return self._n_overlap_frames_before
-
-    @property
-    def n_overlap_frames_after(self) -> int:
-        """Return the number of overlap frames at the end."""
-        return self._n_overlap_frames_after
-
-    @property
-    def primary_frames(self) -> list[FramePipeline]:
-        """Return only the primary (non-overlap) frames."""
-        start = self._n_overlap_frames_before
-        end = self._total_frames - self._n_overlap_frames_after
-        return self._frame_pipelines[start:end]
-
-    @property
-    def interpolators(self) -> list[FrameInterpolator]:
-        """Return the list of FrameInterpolator objects for primary frames."""
-        return self._interpolators
-
-    @property
-    def n_interpolated(self) -> int:
-        """Return the number of frames that were interpolated (forward)."""
-        return self._n_interpolated
-
-    @property
-    def n_extrapolated(self) -> int:
-        """Return the number of frames that were extrapolated (backward)."""
-        return self._n_extrapolated
-
-    @property
-    def n_skipped(self) -> int:
-        """Return the number of frames that were skipped (no valid pair)."""
-        return self._n_skipped
-
-    @property
-    def earth_grid(self) -> EarthGrid | None:
-        """Return the earth grid (available after create_earth_grid is called)."""
-        return self._earth_grid
-
-    @property
-    def projection_result(self) -> ProjectionResult | None:
-        """Return the projection result (available after project_to_earth is called)."""
-        return self._projection_result
-
-    @property
-    def projection_timings(self) -> dict[str, float]:
-        """Return timing statistics for projection steps."""
-        return self._projection_timings
-
-    @property
-    def average_range_resolution(self) -> float:
-        """Return the average range resolution across all frames in meters."""
-        if not self._range_resolutions:
-            return 0.0
-        return float(np.mean(self._range_resolutions))
-
-    @property
-    def max_horizontal_range(self) -> float:
-        """Return the maximum horizontal (ground) range across all frames in meters."""
-        if not self._max_ground_ranges:
-            return 0.0
-        return float(np.max(self._max_ground_ranges))
-
-    def create_earth_grid(self, padding: float = 1.1) -> EarthGrid:
-        """
-        Create an earth-referenced Cartesian coordinate system.
-
-        The grid spacing is set to the average range resolution across all frames.
-        The extent is determined by the ship track plus the maximum radar range.
-
-        Args:
-            padding: Multiplier for radar range to add margin (default 1.1 = 10% margin)
-
-        Returns:
-            EarthGrid object with x/y edges defined
-        """
-        import time as _time
-
-        t0 = _time.perf_counter()
-
-        if not self._all_latitudes:
-            raise ValueError("No spatial data available - was interpolation performed?")
-
-        # Calculate grid spacing from average range resolution
-        grid_spacing = self.average_range_resolution
-        if grid_spacing <= 0:
-            raise ValueError("Invalid range resolution")
-
-        # Get reference position (first radial of first frame)
-        ref_lat = self._all_latitudes[0][0]
-        ref_lon = self._all_longitudes[0][0]
-
-        # Convert lat/lon to meters (flat earth approximation for local area)
-        meters_per_deg_lat = np.pi * EARTH_RADIUS / 180.0
-        meters_per_deg_lon = meters_per_deg_lat * np.cos(np.deg2rad(ref_lat))
-
-        # Calculate ship track extent in meters
-        all_lats = np.concatenate(self._all_latitudes)
-        all_lons = np.concatenate(self._all_longitudes)
-
-        ship_x = (all_lons - ref_lon) * meters_per_deg_lon
-        ship_y = (all_lats - ref_lat) * meters_per_deg_lat
-
-        # Grid extent: ship track + max radar range + padding
-        max_range = self.max_horizontal_range * padding
-
-        x_min = ship_x.min() - max_range
-        x_max = ship_x.max() + max_range
-        y_min = ship_y.min() - max_range
-        y_max = ship_y.max() + max_range
-
-        # Create bin edges aligned to grid spacing
-        n_x = int(np.ceil((x_max - x_min) / grid_spacing))
-        n_y = int(np.ceil((y_max - y_min) / grid_spacing))
-
-        x_edges = np.linspace(x_min, x_min + n_x * grid_spacing, n_x + 1)
-        y_edges = np.linspace(y_min, y_min + n_y * grid_spacing, n_y + 1)
-
-        # Initialize accumulation arrays
-        intensity_sum = np.zeros((n_y, n_x), dtype=np.float64)
-        intensity_count = np.zeros((n_y, n_x), dtype=np.int32)
-
-        self._earth_grid = EarthGrid(
-            x_edges=x_edges,
-            y_edges=y_edges,
-            grid_spacing=grid_spacing,
-            intensity_sum=intensity_sum,
-            intensity_count=intensity_count,
-            ref_latitude=ref_lat,
-            ref_longitude=ref_lon,
-        )
-
-        elapsed = _time.perf_counter() - t0
-        self._projection_timings["CreateGrid"] = elapsed
-
-        logger.debug(
-            "Created earth grid: %dx%d cells, %.2fm spacing, "
-            "extent: [%.1f, %.1f] x [%.1f, %.1f] m (%.3fs)",
-            n_x,
-            n_y,
-            grid_spacing,
-            x_edges[0],
-            x_edges[-1],
-            y_edges[0],
-            y_edges[-1],
-            elapsed,
-        )
-
-        return self._earth_grid
-
-    def project_to_earth(self) -> None:
-        """
-        Project all frames onto the earth grid (third loop).
-
-        For each frame:
-        - Compute earth bearing = theta (beam angle) + ship heading
-        - Compute (x, y) for all radials and range bins using vectorized operations
-        - Accumulate intensity into grid cells using bincount (faster than add.at)
-        """
-        import time as _time
-
-        if self._earth_grid is None:
-            self.create_earth_grid()
-
-        grid = self._earth_grid
-        primary_frames = self.primary_frames
-
-        # Meters per degree for coordinate conversion
-        meters_per_deg_lat = np.pi * EARTH_RADIUS / 180.0
-        meters_per_deg_lon = meters_per_deg_lat * np.cos(np.deg2rad(grid.ref_latitude))
-
-        # Pre-compute grid origin and spacing for direct index calculation
-        x_origin = grid.x_edges[0]
-        y_origin = grid.y_edges[0]
-        inv_spacing = 1.0 / grid.grid_spacing
-
-        # Grid dimensions for linear indexing
-        n_x = grid.n_x
-        n_y = grid.n_y
-        grid_size = n_x * n_y
-
-        # Get flat views of accumulation arrays for efficient in-place addition
-        sum_flat = grid.intensity_sum.ravel()
-        count_flat = grid.intensity_count.ravel()
-
-        # Track buffer dimensions for reuse (frames may have different sizes)
-        buf_n_radials = 0
-        buf_n_ranges = 0
-        x_buf = None
-        y_buf = None
-        x_idx_buf = None
-        y_idx_buf = None
-
-        t0 = _time.perf_counter()
-        n_projected = 0
-
-        # Batch size for accumulating frames before bincount
-        batch_size = 10
-        batch_indices: list[np.ndarray] = []
-        batch_values: list[np.ndarray] = []
-
-        def flush_batch():
-            """Process accumulated batch with single bincount call."""
-            nonlocal n_projected
-            if not batch_indices:
-                return
-            # Concatenate all indices and values from batch
-            all_idx = np.concatenate(batch_indices)
-            all_vals = np.concatenate(batch_values)
-
-            # Single bincount for entire batch
-            batch_sum = np.bincount(all_idx, weights=all_vals, minlength=grid_size)
-            batch_count = np.bincount(all_idx, minlength=grid_size)
-
-            # Accumulate into grid (use np.add with out= to avoid scoping issues with +=)
-            np.add(sum_flat, batch_sum, out=sum_flat)
-            np.add(count_flat, batch_count, out=count_flat)
-            n_projected += len(all_idx)
-
-            # Clear batch
-            batch_indices.clear()
-            batch_values.clear()
-
-        for frame_idx, frame in enumerate(primary_frames):
-            # Get frame data
-            theta_ship = frame.theta_array  # Beam angles relative to ship (degrees)
-            ground_range = frame.ground_range  # Distance per range bin (meters)
-            intensity = frame.final_intensity  # Dewinded intensity
-
-            # Get interpolated navigation for this frame
-            lats = self._all_latitudes[frame_idx]
-            lons = self._all_longitudes[frame_idx]
-            headings = self._all_headings[frame_idx]
-
-            # Get frame dimensions
-            n_radials = len(theta_ship)
-            n_ranges = len(ground_range)
-
-            # Allocate/reallocate buffers if dimensions changed
-            if n_radials != buf_n_radials or n_ranges != buf_n_ranges:
-                buf_n_radials = n_radials
-                buf_n_ranges = n_ranges
-                x_buf = np.empty((n_radials, n_ranges), dtype=np.float64)
-                y_buf = np.empty((n_radials, n_ranges), dtype=np.float64)
-                x_idx_buf = np.empty((n_radials, n_ranges), dtype=np.int32)
-                y_idx_buf = np.empty((n_radials, n_ranges), dtype=np.int32)
-
-            # Convert ship positions to meters from reference (n_radials,)
-            ship_x = (lons - grid.ref_longitude) * meters_per_deg_lon
-            ship_y = (lats - grid.ref_latitude) * meters_per_deg_lat
-
-            # Compute earth bearing for each radial (n_radials,)
-            earth_bearing_rad = np.deg2rad((theta_ship + headings) % 360)
-
-            # Vectorized projection using pre-allocated buffers
-            sin_bearing = np.sin(earth_bearing_rad)
-            cos_bearing = np.cos(earth_bearing_rad)
-
-            # Compute x, y for all points into pre-allocated buffers
-            # x = ship_x + ground_range * sin(bearing)  (East)
-            # y = ship_y + ground_range * cos(bearing)  (North)
-            np.outer(sin_bearing, ground_range, out=x_buf)
-            x_buf += ship_x[:, np.newaxis]
-            np.outer(cos_bearing, ground_range, out=y_buf)
-            y_buf += ship_y[:, np.newaxis]
-
-            # Direct index calculation (in-place to avoid temporaries)
-            x_buf -= x_origin
-            x_buf *= inv_spacing
-            y_buf -= y_origin
-            y_buf *= inv_spacing
-
-            # Convert to int32 indices
-            np.copyto(x_idx_buf, x_buf, casting="unsafe")
-            np.copyto(y_idx_buf, y_buf, casting="unsafe")
-
-            # Flatten arrays (views, no allocation)
-            x_flat = x_idx_buf.ravel()
-            y_flat = y_idx_buf.ravel()
-            values_flat = intensity.ravel()
-
-            # Filter valid indices (within grid bounds and non-NaN intensity)
-            valid = (
-                (x_flat >= 0)
-                & (x_flat < n_x)
-                & (y_flat >= 0)
-                & (y_flat < n_y)
-                & ~np.isnan(values_flat)
+                    frame_sum = np.zeros(
+                        (grid_params["n_y"], grid_params["n_x"]), dtype=np.float64
+                    )
+                    frame_count = np.zeros(
+                        (grid_params["n_y"], grid_params["n_x"]), dtype=np.int32
+                    )
+                    if proj_intensity.shape == frame_sum.shape:
+                        valid = ~np.isnan(proj_intensity)
+                        frame_sum[valid] = proj_intensity[valid]
+                        if proj_count is not None:
+                            frame_count[valid] = proj_count[valid]
+                        else:
+                            frame_count[valid] = 1
+            else:
+                logger.debug(
+                    "Frame (%d, %d) has no projected data",
+                    frame_data.get("file_index", -1),
+                    frame_data.get("frame_index", -1),
+                )
+                frame_sum = np.zeros(
+                    (grid_params["n_y"], grid_params["n_x"]), dtype=np.float64
+                )
+                frame_count = np.zeros(
+                    (grid_params["n_y"], grid_params["n_x"]), dtype=np.int32
+                )
+
+            accumulator.add_projected(
+                projected_intensity=frame_sum,
+                projected_count=frame_count,
+                timestamp=frame_data["timestamp"],
+                heading=mean_heading,
+                ship_speed=frame_data.get("ship_speed"),
+                wind_speed=frame_data.get("wind_speed"),
+                wind_direction=frame_data.get("wind_direction"),
             )
 
-            if np.any(valid):
-                # Convert 2D indices to 1D linear indices and add to batch
-                linear_idx = y_flat[valid] * n_x + x_flat[valid]
-                batch_indices.append(linear_idx.copy())
-                batch_values.append(values_flat[valid].copy())
+        if accumulator.n_frames >= self._window_config.min_frames_per_window:
+            return accumulator.finalize(window_index=window_idx)
+        return None
 
-                # Flush batch when it reaches batch_size
-                if len(batch_indices) >= batch_size:
-                    flush_batch()
+    def iter_merged(self) -> Iterator[MergedImage]:
+        """
+        Yield merged images as windows complete.
 
-        # Flush any remaining frames
-        flush_batch()
+        Uses streaming architecture: windows are merged and yielded as soon as
+        all their constituent files have been interpolated, rather than waiting
+        for all files to complete first.
+        """
+        from collections import defaultdict
 
-        elapsed = _time.perf_counter() - t0
-        self._projection_timings["Project"] = elapsed
+        from tqdm import tqdm
+
+        from wamos_tpw.interpolator import TASK_HANDLERS
+        from wamos_tpw.priority_executor import (
+            Priority,
+            PriorityProcessExecutor,
+            SharedMemoryManager,
+            TripletCollector,
+        )
+
+        if not self._windows:
+            logger.warning("No time windows to process")
+            return
+
+        # Pre-compute window membership: which windows need which files
+        # window_needs[window_idx] = set of file indices still needed
+        # file_to_windows[file_idx] = list of window indices that need this file
+        window_needs: dict[int, set[int]] = {}
+        file_to_windows: dict[int, list[int]] = defaultdict(list)
+        window_time_ranges: dict[int, tuple[np.datetime64, np.datetime64]] = {}
+
+        for window_idx, (start_time, end_time, file_indices) in enumerate(self._windows):
+            window_needs[window_idx] = set(file_indices)
+            window_time_ranges[window_idx] = (start_time, end_time)
+            for file_idx in file_indices:
+                file_to_windows[file_idx].append(window_idx)
+
+        # Frames collected per window: window_idx -> list of frame_data
+        window_frames: dict[int, list[dict]] = defaultdict(list)
+
+        # Track completed windows to avoid re-processing
+        completed_windows: set[int] = set()
+
+        # Get all unique file indices
+        all_file_indices = set()
+        for indices in window_needs.values():
+            all_file_indices.update(indices)
+        file_indices_to_process = sorted(all_file_indices)
+
+        # Serialize config
+        config_dict = self._config._config if self._config else None
+
+        # Create executor
+        executor = PriorityProcessExecutor(
+            max_workers=self._n_workers,
+            task_handlers=TASK_HANDLERS,
+        )
+        executor.start()
+        shm_manager = SharedMemoryManager()
+
+        t0_total = time.perf_counter()
+
+        # Submit file processing tasks
+        pending_files = len(file_indices_to_process)
+        pending_interp = 0
+
+        for file_idx in file_indices_to_process:
+            filepath = self._files[file_idx]
+            task_data = (filepath, file_idx, config_dict, self._qTiming)
+            executor.submit(Priority.LOW, "process_file", task_data)
+
+        # Triplet collection
+        triplet_collector = TripletCollector(total_files=len(self._files))
+
+        # Track files that have completed interpolation (all frames done)
+        files_with_all_frames_interpolated: set[int] = set()
+        # Track how many frames each file has and how many are interpolated
+        file_frame_counts: dict[int, int] = {}
+        file_frames_interpolated: dict[int, int] = defaultdict(int)
+
+        # Progress bars
+        # Interpolation count approximates file count (one frame per file typically)
+        pbar_files = tqdm(
+            total=len(file_indices_to_process), desc="Loading files", unit="file",
+            disable=not self._qProgress
+        )
+        pbar_interp = tqdm(
+            total=len(file_indices_to_process), desc="Interpolating", unit="frame",
+            disable=not self._qProgress
+        )
+        pbar_merged = tqdm(
+            total=len(self._windows), desc="Merging", unit="window",
+            disable=not self._qProgress
+        )
+
+        # Track interpolation count for timing statistics
+        n_interp_completed = 0
+
+        # Memory tracking
+        try:
+            import resource
+            def get_max_memory_mb():
+                return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 * 1024)
+        except ImportError:
+            def get_max_memory_mb():
+                return 0.0
+
+        # Phase timing accumulators
+        time_loading = 0.0
+        time_interpolating = 0.0
+        time_merging = 0.0
+
+        # Main processing loop
+        while pending_files > 0 or pending_interp > 0:
+            result = executor.get_result(timeout=0.1)
+            if result is None:
+                continue
+
+            if result.error:
+                logger.error("Error: %s", result.error)
+                if result.task_type == "process_file":
+                    pending_files -= 1
+                    pbar_files.update(1)
+                else:
+                    pending_interp -= 1
+                    pbar_interp.update(1)
+                continue
+
+            if result.task_type == "process_file":
+                t_phase = time.perf_counter()
+                pending_files -= 1
+                pbar_files.update(1)
+                data = result.data
+                file_idx = data["file_index"]
+
+                # Track frame count for this file
+                file_frame_counts[file_idx] = len(data["frames"])
+
+                # Add frames to triplet collector
+                for frame_data in data["frames"]:
+                    triplet_collector.add(frame_data)
+
+                    if frame_data.theta_shm:
+                        shm_manager.register(frame_data.theta_shm[0], refcount=1)
+                    if frame_data.ground_range_shm:
+                        shm_manager.register(frame_data.ground_range_shm[0], refcount=1)
+                    if frame_data.intensity_shm:
+                        shm_manager.register(frame_data.intensity_shm[0], refcount=1)
+
+                triplet_collector.file_complete(file_idx, len(data["frames"]))
+
+                # Check for ready triplets
+                for prev, current, next_frame in triplet_collector.ready_triplets():
+                    task_data = (
+                        prev,
+                        current,
+                        next_frame,
+                        self._tolerance,
+                        True,
+                        None,
+                    )
+                    executor.submit(Priority.MEDIUM, "interpolate", task_data)
+                    pending_interp += 1
+
+                time_loading += time.perf_counter() - t_phase
+
+            elif result.task_type == "interpolate":
+                t_phase = time.perf_counter()
+                pending_interp -= 1
+                pbar_interp.update(1)
+                n_interp_completed += 1
+                data = result.data
+
+                if data["success"]:
+                    file_idx = data["file_index"]
+                    timestamp = data["timestamp"]
+
+                    # Track interpolation progress for this file
+                    file_frames_interpolated[file_idx] += 1
+                    if file_frames_interpolated[file_idx] >= file_frame_counts.get(file_idx, 0):
+                        files_with_all_frames_interpolated.add(file_idx)
+
+                    # Route this frame to all windows that need it
+                    for window_idx in file_to_windows[file_idx]:
+                        if window_idx in completed_windows:
+                            continue
+
+                        start_time, end_time = window_time_ranges[window_idx]
+                        if start_time <= timestamp < end_time:
+                            window_frames[window_idx].append(data)
+
+                    # Check if any windows are now complete
+                    # A window is complete when all its files have finished interpolation
+                    for window_idx in file_to_windows[file_idx]:
+                        if window_idx in completed_windows:
+                            continue
+
+                        # Check if all files for this window are done
+                        needed = window_needs[window_idx]
+                        if needed.issubset(files_with_all_frames_interpolated):
+                            # Window is ready to merge
+                            t_merge = time.perf_counter()
+                            frames = window_frames.get(window_idx, [])
+                            merged = self._merge_window(window_idx, frames)
+                            time_merging += time.perf_counter() - t_merge
+
+                            if merged is not None:
+                                self._n_merged += 1
+                                pbar_merged.update(1)
+                                yield merged
+
+                            # Mark as completed and free memory
+                            completed_windows.add(window_idx)
+                            if window_idx in window_frames:
+                                del window_frames[window_idx]
+
+                # Check for more ready triplets
+                for prev, current, next_frame in triplet_collector.ready_triplets():
+                    task_data = (
+                        prev,
+                        current,
+                        next_frame,
+                        self._tolerance,
+                        True,
+                        None,
+                    )
+                    executor.submit(Priority.MEDIUM, "interpolate", task_data)
+                    pending_interp += 1
+
+                time_interpolating += time.perf_counter() - t_phase
+
+        pbar_files.close()
+        pbar_interp.close()
+        pbar_merged.close()
+
+        # Clean up
+        shm_manager.cleanup()
+        executor.shutdown()
+
+        self._timings["total"] = time.perf_counter() - t0_total
+        max_mem = get_max_memory_mb()
+
         logger.info(
-            "Projected %d frames, %d values in %.2fs (%.0f values/s)",
-            len(primary_frames),
-            n_projected,
-            elapsed,
-            n_projected / elapsed,
+            "Merged %d windows in %.2fs, max memory: %.1f MB",
+            self._n_merged,
+            self._timings["total"],
+            max_mem,
         )
 
-    def finalize_projection(self) -> ProjectionResult:
-        """
-        Finalize the projection and clean up memory.
-
-        Collects metadata, creates ProjectionResult, and deletes
-        frame data that is no longer needed.
-
-        Returns:
-            ProjectionResult with earth grid and metadata
-        """
-        import time as _time
-
-        t0 = _time.perf_counter()
-
-        if self._earth_grid is None:
-            raise ValueError("Earth grid not created - call project_to_earth first")
-
-        primary_frames = self.primary_frames
-        n_frames = len(primary_frames)
-
-        # Collect ship navigation data per frame
-        ship_speeds = np.array([f.metadata.ship_speed or 0.0 for f in primary_frames])
-        ship_headings = np.array([np.mean(self._all_headings[i]) for i in range(n_frames)])
-
-        # Collect wind data per frame
-        wind_speeds = np.array([f.metadata.wind_speed or 0.0 for f in primary_frames])
-        wind_directions = np.array([f.metadata.wind_direction or 0.0 for f in primary_frames])
-
-        # Collect timing data
-        frame_start_times = np.array(
-            [interp.times[0] for interp in self._interpolators], dtype="datetime64[ns]"
-        )
-        frame_end_times = np.array(
-            [interp.times[-1] for interp in self._interpolators], dtype="datetime64[ns]"
-        )
-
-        # Count total radials
-        n_radials_total = sum(len(self._all_latitudes[i]) for i in range(n_frames))
-
-        self._projection_result = ProjectionResult(
-            earth_grid=self._earth_grid,
-            ship_speeds=ship_speeds,
-            ship_headings=ship_headings,
-            wind_speeds=wind_speeds,
-            wind_directions=wind_directions,
-            frame_start_times=frame_start_times,
-            frame_end_times=frame_end_times,
-            n_frames=n_frames,
-            n_radials_total=n_radials_total,
-        )
-
-        self._projection_timings["Finalize"] = _time.perf_counter() - t0
-
-        # Clean up memory - delete frame data, interpolators, spatial arrays
-        t_cleanup = _time.perf_counter()
-        self._cleanup_memory()
-        self._projection_timings["Cleanup"] = _time.perf_counter() - t_cleanup
-
-        # Log total projection timing
-        total_time = sum(self._projection_timings.values())
-        logger.info(
-            "Projection complete: %.3fs (grid=%.3fs, project=%.3fs, finalize=%.3fs, cleanup=%.3fs)",
-            total_time,
-            self._projection_timings.get("CreateGrid", 0),
-            self._projection_timings.get("Project", 0),
-            self._projection_timings.get("Finalize", 0),
-            self._projection_timings.get("Cleanup", 0),
-        )
-
-        return self._projection_result
-
-    def _cleanup_memory(self) -> None:
-        """Delete frame data and intermediate results to free memory."""
-        import gc
-
-        # Clear frame pipelines (contains intensity arrays)
-        for fp in self._file_pipelines:
-            for frm in fp.frames:
-                frm._final_intensity = None
-                frm._theta_array = None
-                frm._ground_range = None
-
-        # Clear interpolators
-        self._interpolators.clear()
-
-        # Clear spatial arrays (already copied to result)
-        self._all_latitudes.clear()
-        self._all_longitudes.clear()
-        self._all_headings.clear()
-        self._range_resolutions.clear()
-        self._max_ground_ranges.clear()
-
-        # Clear frame pipeline references
-        self._frame_pipelines.clear()
-        self._file_pipelines.clear()
-
-        # Force garbage collection
-        gc.collect()
-
-        logger.info("Memory cleanup complete")
+        if self._qTiming:
+            print("\nTiming Statistics:")
+            print(f"  Total time:    {self._timings['total']:.2f}s")
+            print(f"  Loading:       {time_loading:.2f}s")
+            print(f"  Interpolating: {time_interpolating:.2f}s")
+            print(f"  Merging:       {time_merging:.2f}s")
+            print(f"  Files processed: {len(file_indices_to_process)}")
+            print(f"  Frames interpolated: {n_interp_completed}")
+            print(f"  Windows merged: {self._n_merged}")
+            print(f"  Max memory: {max_mem:.1f} MB")
 
 
-class ProjectionDiagnostics:
+# ============================================================
+# Output Functions
+# ============================================================
+
+
+def write_merged_netcdf(merged: MergedImage, output_dir: str) -> str:
     """
-    Diagnostic visualization for earth projection results.
+    Write merged image to NetCDF file with CF-1.8 conventions.
 
-    Provides plotting for:
-    - Projected intensity on earth grid
-    - Ship speed and heading polar plots
-    - Wind speed and direction polar plots
-    - Time series of navigation and environmental data
+    Args:
+        merged: MergedImage to write
+        output_dir: Output directory
+
+    Returns:
+        Path to created file
     """
-
-    def __init__(self, result: ProjectionResult) -> None:
-        """
-        Initialize diagnostics viewer.
-
-        Args:
-            result: ProjectionResult from FilesPipeline.finalize_projection()
-        """
-        self._result = result
-        self._grid = result.earth_grid
-
-    @property
-    def result(self) -> ProjectionResult:
-        """Return the projection result."""
-        return self._result
-
-    def plot(
-        self,
-        figsize: tuple[float, float] = (16, 12),
-        cmap: str = "viridis",
-        vmin: float | None = None,
-        vmax: float | None = None,
-    ) -> None:
-        """
-        Create comprehensive diagnostic plot.
-
-        Shows:
-        - Main: Projected intensity on earth grid
-        - Top-right: Ship speed/heading polar plot
-        - Bottom-right: Wind speed/direction polar plot
-
-        Args:
-            figsize: Figure size as (width, height) in inches
-            cmap: Colormap for intensity plot
-            vmin: Minimum intensity value for colormap (auto if None)
-            vmax: Maximum intensity value for colormap (auto if None)
-        """
-        import matplotlib.pyplot as plt
-        from matplotlib.gridspec import GridSpec
-
-        result = self._result
-        grid = self._grid
-
-        # Get intensity data
-        intensity = grid.intensity
-
-        # Auto-scale if not specified
-        if vmin is None:
-            vmin = np.nanpercentile(intensity, 2)
-        if vmax is None:
-            vmax = np.nanpercentile(intensity, 98)
-
-        # Create figure with custom layout
-        fig = plt.figure(figsize=figsize)
-        gs = GridSpec(2, 3, width_ratios=[2, 1, 1], height_ratios=[1, 1], wspace=0.3, hspace=0.3)
-
-        # Main intensity plot (spans left 2 columns)
-        ax_main = fig.add_subplot(gs[:, 0])
-        self._plot_intensity(ax_main, intensity, cmap, vmin, vmax)
-
-        # Ship speed/heading polar plot (top-right)
-        ax_ship = fig.add_subplot(gs[0, 1], projection="polar")
-        self._plot_ship_polar(ax_ship)
-
-        # Wind speed/direction polar plot (bottom-right)
-        ax_wind = fig.add_subplot(gs[1, 1], projection="polar")
-        self._plot_wind_polar(ax_wind)
-
-        # Time series plot (right column, spans both rows)
-        ax_time = fig.add_subplot(gs[:, 2])
-        self._plot_time_series(ax_time)
-
-        # Title
-        start_time = np.datetime_as_string(result.frame_start_times[0], unit="s")
-        end_time = np.datetime_as_string(result.frame_end_times[-1], unit="s")
-        fig.suptitle(
-            f"Earth Projection: {result.n_frames} frames, {result.n_radials_total} radials\n"
-            f"{start_time} to {end_time}",
-            fontsize=12,
-        )
-
-        plt.tight_layout()
-        plt.show()
-
-    def _plot_intensity(
-        self,
-        ax,
-        intensity: np.ndarray,
-        cmap: str,
-        vmin: float,
-        vmax: float,
-    ) -> None:
-        """Plot projected intensity on earth grid."""
-        grid = self._grid
-
-        im = ax.pcolormesh(
-            grid.x_edges, grid.y_edges, intensity, cmap=cmap, vmin=vmin, vmax=vmax, shading="flat"
-        )
-
-        ax.set_xlabel("East (m)")
-        ax.set_ylabel("North (m)")
-        ax.set_title("Projected Intensity")
-        ax.set_aspect("equal")
-
-        # Add colorbar
-        ax.figure.colorbar(im, ax=ax, label="Intensity", shrink=0.8)
-
-        # Add grid info
-        ax.text(
-            0.02,
-            0.98,
-            f"Grid: {grid.n_x}x{grid.n_y}\nSpacing: {grid.grid_spacing:.1f}m",
-            transform=ax.transAxes,
-            verticalalignment="top",
-            fontsize=9,
-            bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
-        )
-
-    def _plot_ship_polar(self, ax) -> None:
-        """
-        Plot ship speed and heading as a polar scatter plot.
-
-        Heading is the angle (0=North, clockwise), speed is the radius.
-        """
-        result = self._result
-
-        # Convert headings to radians (matplotlib polar: 0=East, counter-clockwise)
-        # We want 0=North, clockwise, so: theta = 90 - heading (in degrees) then to radians
-        headings_rad = np.deg2rad(90 - result.ship_headings)
-
-        # Speed is the radius
-        speeds = result.ship_speeds
-
-        # Color by frame index for temporal information
-        colors = np.arange(len(speeds))
-
-        ax.scatter(headings_rad, speeds, c=colors, cmap="viridis", s=20, alpha=0.7)
-
-        # Configure polar plot
-        ax.set_theta_zero_location("N")  # 0 degrees at top
-        ax.set_theta_direction(-1)  # Clockwise
-
-        ax.set_title("Ship Speed/Heading", pad=10)
-        ax.set_xlabel("")
-
-        # Add statistics
-        mean_speed = np.mean(speeds)
-        mean_heading = self._circular_mean(result.ship_headings)
-        ax.text(
-            0.5,
-            -0.15,
-            f"Mean: {mean_speed:.1f} m/s @ {mean_heading:.0f}°",
-            transform=ax.transAxes,
-            ha="center",
-            fontsize=9,
-        )
-
-    def _plot_wind_polar(self, ax) -> None:
-        """
-        Plot wind speed and direction as a polar scatter plot.
-
-        Direction is the angle (0=North, clockwise - direction wind comes FROM),
-        speed is the radius.
-        """
-        result = self._result
-
-        # Convert directions to radians
-        directions_rad = np.deg2rad(90 - result.wind_directions)
-
-        # Speed is the radius
-        speeds = result.wind_speeds
-
-        # Color by frame index
-        colors = np.arange(len(speeds))
-
-        ax.scatter(directions_rad, speeds, c=colors, cmap="coolwarm", s=20, alpha=0.7)
-
-        # Configure polar plot
-        ax.set_theta_zero_location("N")
-        ax.set_theta_direction(-1)
-
-        ax.set_title("Wind Speed/Direction", pad=10)
-
-        # Add statistics
-        mean_speed = np.mean(speeds)
-        mean_dir = self._circular_mean(result.wind_directions)
-        ax.text(
-            0.5,
-            -0.15,
-            f"Mean: {mean_speed:.1f} m/s from {mean_dir:.0f}°",
-            transform=ax.transAxes,
-            ha="center",
-            fontsize=9,
-        )
-
-    def _plot_time_series(self, ax) -> None:
-        """Plot time series of ship and wind data."""
-        result = self._result
-
-        # Convert times to relative seconds from start
-        t0 = result.frame_start_times[0]
-        times = (result.frame_start_times - t0) / np.timedelta64(1, "s")
-
-        # Create twin axis for speeds
-        ax2 = ax.twinx()
-
-        # Plot headings on primary axis
-        ax.plot(times, result.ship_headings, "b-", label="Ship heading", alpha=0.7)
-        ax.plot(times, result.wind_directions, "r-", label="Wind direction", alpha=0.7)
-        ax.set_ylabel("Direction (degrees)")
-        ax.set_ylim(0, 360)
-        ax.legend(loc="upper left", fontsize=8)
-
-        # Plot speeds on secondary axis
-        ax2.plot(times, result.ship_speeds, "b--", label="Ship speed", alpha=0.7)
-        ax2.plot(times, result.wind_speeds, "r--", label="Wind speed", alpha=0.7)
-        ax2.set_ylabel("Speed (m/s)")
-        ax2.legend(loc="upper right", fontsize=8)
-
-        ax.set_xlabel("Time (s)")
-        ax.set_title("Time Series")
-        ax.grid(True, alpha=0.3)
-
-    def _circular_mean(self, angles: np.ndarray) -> float:
-        """Calculate circular mean of angles in degrees."""
-        angles_rad = np.deg2rad(angles)
-        mean_sin = np.mean(np.sin(angles_rad))
-        mean_cos = np.mean(np.cos(angles_rad))
-        return np.rad2deg(np.arctan2(mean_sin, mean_cos)) % 360
-
-    def plot_intensity_only(
-        self,
-        figsize: tuple[float, float] = (12, 10),
-        cmap: str = "viridis",
-        vmin: float | None = None,
-        vmax: float | None = None,
-    ) -> None:
-        """
-        Plot only the projected intensity.
-
-        Args:
-            figsize: Figure size
-            cmap: Colormap name
-            vmin: Minimum intensity value
-            vmax: Maximum intensity value
-        """
-        import matplotlib.pyplot as plt
-
-        grid = self._grid
-        result = self._result
-        intensity = grid.intensity
-
-        if vmin is None:
-            vmin = np.nanpercentile(intensity, 2)
-        if vmax is None:
-            vmax = np.nanpercentile(intensity, 98)
-
-        fig, ax = plt.subplots(figsize=figsize)
-
-        im = ax.pcolormesh(
-            grid.x_edges, grid.y_edges, intensity, cmap=cmap, vmin=vmin, vmax=vmax, shading="flat"
-        )
-
-        ax.set_xlabel("East (m)")
-        ax.set_ylabel("North (m)")
-        ax.set_aspect("equal")
-
-        fig.colorbar(im, ax=ax, label="Intensity", shrink=0.8)
-
-        start_time = np.datetime_as_string(result.frame_start_times[0], unit="s")
-        end_time = np.datetime_as_string(result.frame_end_times[-1], unit="s")
-        ax.set_title(f"Projected Intensity\n{result.n_frames} frames, {start_time} to {end_time}")
-
-        # Add statistics
-        stats_text = (
-            f"Grid: {grid.n_x}x{grid.n_y} ({grid.grid_spacing:.1f}m)\n"
-            f"Extent: [{grid.x_edges[0]:.0f}, {grid.x_edges[-1]:.0f}] x "
-            f"[{grid.y_edges[0]:.0f}, {grid.y_edges[-1]:.0f}] m"
-        )
-        ax.text(
-            0.02,
-            0.98,
-            stats_text,
-            transform=ax.transAxes,
-            verticalalignment="top",
-            fontsize=9,
-            bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
-        )
-
-        plt.tight_layout()
-        plt.show()
-
-    def save_intensity(
-        self,
-        output_path: str,
-        figsize: tuple[float, float] = (12, 10),
-        cmap: str = "viridis",
-        vmin: float | None = None,
-        vmax: float | None = None,
-        dpi: int = 150,
-    ) -> None:
-        """
-        Save projected intensity plot to file.
-
-        Args:
-            output_path: Path to save image (e.g., 'projection.png')
-            figsize: Figure size
-            cmap: Colormap name
-            vmin: Minimum intensity value
-            vmax: Maximum intensity value
-            dpi: Image resolution
-        """
-        import matplotlib.pyplot as plt
-
-        grid = self._grid
-        result = self._result
-        intensity = grid.intensity
-
-        if vmin is None:
-            vmin = np.nanpercentile(intensity, 2)
-        if vmax is None:
-            vmax = np.nanpercentile(intensity, 98)
-
-        fig, ax = plt.subplots(figsize=figsize)
-
-        im = ax.pcolormesh(
-            grid.x_edges, grid.y_edges, intensity, cmap=cmap, vmin=vmin, vmax=vmax, shading="flat"
-        )
-
-        ax.set_xlabel("East (m)")
-        ax.set_ylabel("North (m)")
-        ax.set_aspect("equal")
-
-        fig.colorbar(im, ax=ax, label="Intensity", shrink=0.8)
-
-        start_time = np.datetime_as_string(result.frame_start_times[0], unit="s")
-        end_time = np.datetime_as_string(result.frame_end_times[-1], unit="s")
-        ax.set_title(f"Projected Intensity: {result.n_frames} frames\n{start_time} to {end_time}")
-
-        plt.tight_layout()
-        fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
-        plt.close(fig)
-        logger.info("Saved intensity plot to %s", output_path)
-
-    def __repr__(self) -> str:
-        return (
-            f"ProjectionDiagnostics(frames={self._result.n_frames}, "
-            f"grid={self._grid.n_x}x{self._grid.n_y}, "
-            f"spacing={self._grid.grid_spacing:.1f}m)"
-        )
-
-
-class ProjectionViewer:
-    """
-    Interactive viewer for multiple earth projection results.
-
-    Provides navigation buttons (Back, Play/Pause, Next) and keyboard shortcuts
-    to walk through a sequence of ProjectionResult objects.
-
-    Keyboard shortcuts:
-    - Left arrow: Previous result
-    - Right arrow: Next result
-    - Space: Play/Pause
-    - q/Escape: Close viewer
-    """
-
-    def __init__(
-        self,
-        results: list[ProjectionResult],
-        labels: list[str] | None = None,
-    ) -> None:
-        """
-        Initialize the projection viewer.
-
-        Args:
-            results: List of ProjectionResult objects to display
-            labels: Optional labels for each result (e.g., group periods)
-        """
-        if not results:
-            raise ValueError("No results to display")
-
-        self._results = results
-        self._labels = labels or [f"Result {i + 1}" for i in range(len(results))]
-        self._current_idx = 0
-        self._playing = False
-        self._play_interval = 1000  # milliseconds
-        self._timer = None
-
-        # Plot settings (set during show())
-        self._cmap = "viridis"
-        self._vmin: float | None = None
-        self._vmax: float | None = None
-
-        # Figure and axes (created during show())
-        self._fig = None
-        self._ax_main = None
-        self._ax_ship = None
-        self._ax_wind = None
-        self._ax_time = None
-        self._ax_time_twin = None  # Track twin axis for proper clearing
-        self._colorbar = None
-        self._im = None
-
-    @property
-    def n_results(self) -> int:
-        """Return the number of results."""
-        return len(self._results)
-
-    @property
-    def current_index(self) -> int:
-        """Return the current result index."""
-        return self._current_idx
-
-    @property
-    def current_result(self) -> ProjectionResult:
-        """Return the current result."""
-        return self._results[self._current_idx]
-
-    @property
-    def current_label(self) -> str:
-        """Return the current label."""
-        return self._labels[self._current_idx]
-
-    def show(
-        self,
-        figsize: tuple[float, float] = (16, 10),
-        cmap: str = "viridis",
-        vmin: float | None = None,
-        vmax: float | None = None,
-        play_interval: int = 1000,
-    ) -> None:
-        """
-        Display the interactive viewer.
-
-        Args:
-            figsize: Figure size as (width, height) in inches
-            cmap: Colormap for intensity plot
-            vmin: Minimum intensity value for colormap (auto if None)
-            vmax: Maximum intensity value for colormap (auto if None)
-            play_interval: Interval between frames in play mode (milliseconds)
-        """
-        import matplotlib.pyplot as plt
-        from matplotlib.widgets import Button
-        from matplotlib.gridspec import GridSpec
-
-        self._cmap = cmap
-        self._vmin = vmin
-        self._vmax = vmax
-        self._play_interval = play_interval
-
-        # Compute global vmin/vmax across all results if not specified
-        if self._vmin is None or self._vmax is None:
-            all_intensities = []
-            for r in self._results:
-                intensity = r.earth_grid.intensity
-                all_intensities.append(intensity[~np.isnan(intensity)])
-            combined = np.concatenate(all_intensities)
-            if self._vmin is None:
-                self._vmin = np.percentile(combined, 2)
-            if self._vmax is None:
-                self._vmax = np.percentile(combined, 98)
-
-        # Create figure with custom layout: main plot (left), time series (right)
-        self._fig = plt.figure(figsize=figsize)
-
-        gs_plots = GridSpec(
-            1,
-            2,
-            width_ratios=[2, 1],
-            wspace=0.15,
-            top=0.92,
-            bottom=0.12,
-            left=0.06,
-            right=0.98,
-        )
-
-        # Main intensity plot
-        self._ax_main = self._fig.add_subplot(gs_plots[0, 0])
-
-        # Time series plot (right side)
-        self._ax_time = self._fig.add_subplot(gs_plots[0, 1])
-
-        # Polar insets will be created in _update_plot as they need proper positioning
-
-        # Create navigation buttons
-        btn_width = 0.08
-        btn_height = 0.04
-        btn_y = 0.02
-        center_x = 0.5
-
-        ax_back = self._fig.add_axes([center_x - btn_width * 1.6, btn_y, btn_width, btn_height])
-        ax_play = self._fig.add_axes([center_x - btn_width * 0.5, btn_y, btn_width, btn_height])
-        ax_next = self._fig.add_axes([center_x + btn_width * 0.6, btn_y, btn_width, btn_height])
-
-        self._btn_back = Button(ax_back, "< Back")
-        self._btn_play = Button(ax_play, "Play")
-        self._btn_next = Button(ax_next, "Next >")
-
-        self._btn_back.on_clicked(self._on_back)
-        self._btn_play.on_clicked(self._on_play)
-        self._btn_next.on_clicked(self._on_next)
-
-        # Connect keyboard events
-        self._fig.canvas.mpl_connect("key_press_event", self._on_key)
-        self._fig.canvas.mpl_connect("close_event", self._on_close)
-
-        # Initial plot
-        self._update_plot()
-
-        plt.show()
-
-    def _update_plot(self) -> None:
-        """Update all plots for the current result."""
-        from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-
-        result = self.current_result
-        grid = result.earth_grid
-        intensity = grid.intensity
-
-        # Clear main axis
-        self._ax_main.clear()
-
-        # Clear and remove old polar inset axes if they exist
-        if self._ax_ship is not None:
-            self._ax_ship.remove()
-            self._ax_ship = None
-        if self._ax_wind is not None:
-            self._ax_wind.remove()
-            self._ax_wind = None
-
-        # Clear time series and twin axis
-        self._ax_time.clear()
-        if self._ax_time_twin is not None:
-            self._ax_time_twin.remove()
-            self._ax_time_twin = None
-
-        # Main intensity plot
-        self._im = self._ax_main.pcolormesh(
-            grid.x_edges,
-            grid.y_edges,
-            intensity,
-            cmap=self._cmap,
-            vmin=self._vmin,
-            vmax=self._vmax,
-            shading="flat",
-        )
-
-        self._ax_main.set_xlabel("East (m)")
-        self._ax_main.set_ylabel("North (m)")
-        self._ax_main.set_title("Dewinded Intensity")
-        self._ax_main.set_aspect("equal")
-
-        # Add colorbar (only on first update, then reuse)
-        if self._colorbar is None:
-            self._colorbar = self._fig.colorbar(
-                self._im, ax=self._ax_main, label="Intensity", shrink=0.8
-            )
-        else:
-            self._colorbar.update_normal(self._im)
-
-        # Grid info in SW corner
-        self._ax_main.text(
-            0.02,
-            0.02,
-            f"Grid: {grid.n_x}x{grid.n_y}\nSpacing: {grid.grid_spacing:.1f}m",
-            transform=self._ax_main.transAxes,
-            verticalalignment="bottom",
-            fontsize=9,
-            bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
-        )
-
-        # Create small polar inset for ship in NE corner (top-right of main plot)
-        self._ax_ship = inset_axes(
-            self._ax_main,
-            width="20%",
-            height="20%",
-            loc="upper right",
-            borderpad=1.0,
-            axes_class=None,
-        )
-        # Convert to polar projection by replacing the inset
-        pos = self._ax_ship.get_position()
-        self._ax_ship.remove()
-        self._ax_ship = self._fig.add_axes(pos, projection="polar")
-        self._plot_ship_polar(self._ax_ship, result)
-
-        # Create small polar inset for wind in SE corner (bottom-right of main plot)
-        self._ax_wind = inset_axes(
-            self._ax_main,
-            width="20%",
-            height="20%",
-            loc="lower right",
-            borderpad=1.0,
-            axes_class=None,
-        )
-        # Convert to polar projection
-        pos = self._ax_wind.get_position()
-        self._ax_wind.remove()
-        self._ax_wind = self._fig.add_axes(pos, projection="polar")
-        self._plot_wind_polar(self._ax_wind, result)
-
-        # Time series with twin axis
-        self._plot_time_series(self._ax_time, result)
-
-        # Title with navigation info
-        start_time = np.datetime_as_string(result.frame_start_times[0], unit="s")
-        end_time = np.datetime_as_string(result.frame_end_times[-1], unit="s")
-        play_status = " [Playing]" if self._playing else ""
-        self._fig.suptitle(
-            f"{self.current_label} ({self._current_idx + 1}/{self.n_results}){play_status}\n"
-            f"{result.n_frames} frames, {result.n_radials_total} radials | "
-            f"{start_time} to {end_time}",
-            fontsize=12,
-        )
-
-        self._fig.canvas.draw_idle()
-
-    def _plot_ship_polar(self, ax, result: ProjectionResult) -> None:
-        """Plot ship speed and heading as a polar scatter plot (compact for inset)."""
-        headings_rad = np.deg2rad(90 - result.ship_headings)
-        speeds = result.ship_speeds
-        colors = np.arange(len(speeds))
-
-        ax.scatter(headings_rad, speeds, c=colors, cmap="viridis", s=10, alpha=0.7)
-        ax.set_theta_zero_location("N")
-        ax.set_theta_direction(-1)
-
-        # Compact title inside the plot
-        mean_speed = np.mean(speeds)
-        mean_heading = self._circular_mean(result.ship_headings)
-        ax.set_title(f"Ship\n{mean_speed:.1f}m/s @ {mean_heading:.0f}\u00b0", fontsize=7, pad=2)
-
-        # Make tick labels smaller
-        ax.tick_params(axis="both", labelsize=6)
-        # Reduce radial tick labels
-        ax.set_yticklabels([])
-
-    def _plot_wind_polar(self, ax, result: ProjectionResult) -> None:
-        """Plot wind speed and direction as a polar scatter plot (compact for inset)."""
-        directions_rad = np.deg2rad(90 - result.wind_directions)
-        speeds = result.wind_speeds
-        colors = np.arange(len(speeds))
-
-        ax.scatter(directions_rad, speeds, c=colors, cmap="coolwarm", s=10, alpha=0.7)
-        ax.set_theta_zero_location("N")
-        ax.set_theta_direction(-1)
-
-        # Compact title inside the plot
-        mean_speed = np.mean(speeds)
-        mean_dir = self._circular_mean(result.wind_directions)
-        ax.set_title(f"Wind\n{mean_speed:.1f}m/s from {mean_dir:.0f}\u00b0", fontsize=7, pad=2)
-
-        # Make tick labels smaller
-        ax.tick_params(axis="both", labelsize=6)
-        # Reduce radial tick labels
-        ax.set_yticklabels([])
-
-    def _plot_time_series(self, ax, result: ProjectionResult) -> None:
-        """Plot time series of ship and wind data."""
-        t0 = result.frame_start_times[0]
-        times = (result.frame_start_times - t0) / np.timedelta64(1, "s")
-
-        # Create twin axis and store reference for proper clearing
-        self._ax_time_twin = ax.twinx()
-
-        ax.plot(times, result.ship_headings, "b-", label="Ship heading", alpha=0.7)
-        ax.plot(times, result.wind_directions, "r-", label="Wind direction", alpha=0.7)
-        ax.set_ylabel("Direction (degrees)")
-        ax.set_ylim(0, 360)
-        ax.legend(loc="upper left", fontsize=8)
-
-        self._ax_time_twin.plot(times, result.ship_speeds, "b--", label="Ship speed", alpha=0.7)
-        self._ax_time_twin.plot(times, result.wind_speeds, "r--", label="Wind speed", alpha=0.7)
-        self._ax_time_twin.set_ylabel("Speed (m/s)")
-        self._ax_time_twin.legend(loc="upper right", fontsize=8)
-
-        ax.set_xlabel("Time (s)")
-        ax.set_title("Time Series")
-        ax.grid(True, alpha=0.3)
-
-    def _circular_mean(self, angles: np.ndarray) -> float:
-        """Calculate circular mean of angles in degrees."""
-        angles_rad = np.deg2rad(angles)
-        mean_sin = np.mean(np.sin(angles_rad))
-        mean_cos = np.mean(np.cos(angles_rad))
-        return np.rad2deg(np.arctan2(mean_sin, mean_cos)) % 360
-
-    def _on_back(self, event) -> None:
-        """Handle back button click."""
-        self._go_back()
-
-    def _on_next(self, event) -> None:
-        """Handle next button click."""
-        self._go_next()
-
-    def _on_play(self, event) -> None:
-        """Handle play/pause button click."""
-        self._toggle_play()
-
-    def _on_key(self, event) -> None:
-        """Handle keyboard events."""
-        if event.key == "left":
-            self._go_back()
-        elif event.key == "right":
-            self._go_next()
-        elif event.key == " ":
-            self._toggle_play()
-        elif event.key in ("q", "escape"):
-            self._stop_play()
-            import matplotlib.pyplot as plt
-
-            plt.close(self._fig)
-
-    def _on_close(self, event) -> None:
-        """Handle window close event."""
-        self._stop_play()
-
-    def _go_back(self) -> None:
-        """Go to the previous result."""
-        if self._current_idx > 0:
-            self._current_idx -= 1
-            self._update_plot()
-
-    def _go_next(self) -> None:
-        """Go to the next result."""
-        if self._current_idx < self.n_results - 1:
-            self._current_idx += 1
-            self._update_plot()
-
-    def _toggle_play(self) -> None:
-        """Toggle play/pause mode."""
-        if self._playing:
-            self._stop_play()
-        else:
-            self._start_play()
-
-    def _start_play(self) -> None:
-        """Start auto-play mode."""
-        if self._playing:
-            return
-
-        self._playing = True
-        self._btn_play.label.set_text("Pause")
-
-        # Use matplotlib timer for animation
-        self._timer = self._fig.canvas.new_timer(interval=self._play_interval)
-        self._timer.add_callback(self._play_step)
-        self._timer.start()
-
-        self._update_plot()
-
-    def _stop_play(self) -> None:
-        """Stop auto-play mode."""
-        if not self._playing:
-            return
-
-        self._playing = False
-        self._btn_play.label.set_text("Play")
-
-        if self._timer is not None:
-            self._timer.stop()
-            self._timer = None
-
-        self._update_plot()
-
-    def _play_step(self) -> None:
-        """Advance to next frame during play mode."""
-        if not self._playing:
-            return
-
-        if self._current_idx < self.n_results - 1:
-            self._current_idx += 1
-            self._update_plot()
-        else:
-            # Loop back to start
-            self._current_idx = 0
-            self._update_plot()
-
-    def __repr__(self) -> str:
-        return (
-            f"ProjectionViewer(n_results={self.n_results}, "
-            f"current={self._current_idx + 1}/{self.n_results})"
-        )
-
-
-def _process_group(
-    group_data: tuple[np.datetime64, list[str], int, int],
-    config: "Config",
-    qTiming: bool,
-    tolerance: float,
-    qProject: bool = False,
-) -> dict:
-    """Process a single group and return results with memory usage."""
-    import resource
-
-    period, group_files, n_overlap_before, n_overlap_after = group_data
-
-    fp = FilesPipeline(
-        group_files,
-        config=config,
-        qTiming=qTiming,
-        n_overlap_files_before=n_overlap_before,
-        n_overlap_files_after=n_overlap_after,
-        tolerance=tolerance,
-        qProject=qProject,
+    try:
+        import xarray as xr
+    except ImportError:
+        logger.warning("xarray not installed, skipping NetCDF output")
+        return ""
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Generate filename from time range
+    start_str = (
+        np.datetime_as_string(merged.start_time, unit="s").replace(":", "-").replace("T", "_")
+    )
+    end_str = np.datetime_as_string(merged.end_time, unit="s").replace(":", "-").replace("T", "_")
+    filename = f"merged_{start_str}_to_{end_str}.nc"
+    filepath = output_dir / filename
+
+    # Create xarray Dataset
+    ds = xr.Dataset(
+        data_vars={
+            "intensity": (
+                ["y", "x"],
+                merged.intensity.astype(np.float32),
+                {
+                    "long_name": "Merged radar intensity",
+                    "units": "counts",
+                    "coordinates": "x y",
+                },
+            ),
+        },
+        coords={
+            "x": (
+                ["x"],
+                merged.x_centers,
+                {
+                    "long_name": "Distance east from center",
+                    "units": "m",
+                    "axis": "X",
+                },
+            ),
+            "y": (
+                ["y"],
+                merged.y_centers,
+                {
+                    "long_name": "Distance north from center",
+                    "units": "m",
+                    "axis": "Y",
+                },
+            ),
+            "time_start": merged.start_time,
+            "time_end": merged.end_time,
+        },
+        attrs={
+            "title": "WAMOS merged radar image",
+            "institution": "WAMOS TPW",
+            "source": "wamos files-pipeline",
+            "history": f"Created {np.datetime64('now')}",
+            "Conventions": "CF-1.8",
+            # Grid metadata
+            "grid_spacing_m": merged.grid_spacing,
+            "utm_zone": merged.utm_zone,
+            "hemisphere": merged.hemisphere,
+            "center_latitude": merged.center_lat,
+            "center_longitude": merged.center_lon,
+            "crs": f"EPSG:326{merged.utm_zone:02d}"
+            if merged.hemisphere == "north"
+            else f"EPSG:327{merged.utm_zone:02d}",
+            # Window metadata
+            "n_frames": merged.n_frames,
+            "window_index": merged.window_index,
+            "mean_ship_heading_deg": merged.mean_heading,
+        },
     )
 
-    peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    # Add optional metadata
+    if merged.mean_ship_speed is not None:
+        ds.attrs["mean_ship_speed_m_s"] = merged.mean_ship_speed
+    if merged.mean_wind_speed is not None:
+        ds.attrs["mean_wind_speed_m_s"] = merged.mean_wind_speed
+    if merged.mean_wind_direction is not None:
+        ds.attrs["mean_wind_direction_deg"] = merged.mean_wind_direction
 
-    result = {
-        "period": str(period),
-        "n_files": len(group_files),
-        "n_overlap_before": n_overlap_before,
-        "n_overlap_after": n_overlap_after,
-        "n_primary_frames": fp.n_primary_frames,
-        "n_interpolated": fp.n_interpolated,
-        "n_extrapolated": fp.n_extrapolated,
-        "frame_timings": fp.frame_timings if qTiming else [],
-        "projection_timings": fp.projection_timings if qTiming else {},
-        "projection_result": fp.projection_result,
-        "peak_rss": peak_rss,
+    # Write with compression
+    encoding = {"intensity": {"zlib": True, "complevel": 4, "dtype": "float32"}}
+    ds.to_netcdf(filepath, encoding=encoding)
+
+    logger.debug("Wrote merged image to %s", filepath)
+    return str(filepath)
+
+
+def write_merged_png(
+    merged: MergedImage,
+    output_dir: str,
+    cmap: str = "viridis",
+    vmin: float | None = None,
+    vmax: float | None = None,
+) -> str:
+    """
+    Write merged image to PNG file.
+
+    Args:
+        merged: MergedImage to write
+        output_dir: Output directory
+        cmap: Colormap name
+        vmin: Minimum intensity value (auto if None)
+        vmax: Maximum intensity value (auto if None)
+
+    Returns:
+        Path to created file
+    """
+    import matplotlib.pyplot as plt
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Generate filename
+    start_str = (
+        np.datetime_as_string(merged.start_time, unit="s").replace(":", "-").replace("T", "_")
+    )
+    end_str = np.datetime_as_string(merged.end_time, unit="s").replace(":", "-").replace("T", "_")
+    filename = f"merged_{start_str}_to_{end_str}.png"
+    filepath = output_dir / filename
+
+    # Auto-scale
+    intensity = merged.intensity
+    if vmin is None:
+        vmin = float(np.nanpercentile(intensity, 2))
+    if vmax is None:
+        vmax = float(np.nanpercentile(intensity, 98))
+
+    fig, ax = plt.subplots(figsize=(10, 10))
+
+    im = ax.pcolormesh(
+        merged.x_edges,
+        merged.y_edges,
+        intensity,
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+        shading="flat",
+    )
+
+    ax.set_xlabel("Distance East (m)")
+    ax.set_ylabel("Distance North (m)")
+    ax.set_aspect("equal")
+
+    fig.colorbar(im, ax=ax, label="Intensity", shrink=0.8)
+
+    # Title
+    start_time = np.datetime_as_string(merged.start_time, unit="s")
+    end_time = np.datetime_as_string(merged.end_time, unit="s")
+    ax.set_title(
+        f"Merged Image: {merged.n_frames} frames\n"
+        f"{start_time} to {end_time}\n"
+        f"Center: {abs(merged.center_lat):.4f}°{'N' if merged.center_lat >= 0 else 'S'}, "
+        f"{abs(merged.center_lon):.4f}°{'E' if merged.center_lon >= 0 else 'W'}"
+    )
+
+    plt.tight_layout()
+    fig.savefig(filepath, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    logger.debug("Wrote merged image to %s", filepath)
+    return str(filepath)
+
+
+def write_mp4_movie(
+    merged_images: list[MergedImage],
+    output_path: str,
+    fps: float = 2.0,
+    cmap: str = "viridis",
+    vmin: float | None = None,
+    vmax: float | None = None,
+    dpi: int = 150,
+    figsize: tuple[float, float] = (10, 8),
+    range_rings: bool = True,
+) -> str:
+    """
+    Generate an MP4 movie from merged images.
+
+    Args:
+        merged_images: List of MergedImage objects (in time order)
+        output_path: Output MP4 file path
+        fps: Frames per second (default 2.0)
+        cmap: Colormap name
+        vmin: Minimum intensity value (auto if None)
+        vmax: Maximum intensity value (auto if None)
+        dpi: Output resolution
+        figsize: Figure size in inches
+        range_rings: Draw range rings on frames
+
+    Returns:
+        Path to created file
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.animation import FFMpegWriter
+
+    if not merged_images:
+        logger.warning("No merged images for movie")
+        return ""
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Compute global intensity range
+    if vmin is None or vmax is None:
+        all_valid = []
+        for merged in merged_images:
+            valid_data = merged.intensity[~np.isnan(merged.intensity)]
+            if len(valid_data) > 0:
+                all_valid.extend(valid_data.ravel())
+        if all_valid:
+            if vmin is None:
+                vmin = float(np.percentile(all_valid, 2))
+            if vmax is None:
+                vmax = float(np.percentile(all_valid, 98))
+        else:
+            vmin, vmax = 0, 1
+
+    # Find global data bounds for consistent framing
+    global_bounds = {"xmin": np.inf, "xmax": -np.inf, "ymin": np.inf, "ymax": -np.inf}
+    for merged in merged_images:
+        valid_mask = ~np.isnan(merged.intensity)
+        valid_rows = np.any(valid_mask, axis=1)
+        valid_cols = np.any(valid_mask, axis=0)
+        if np.any(valid_rows) and np.any(valid_cols):
+            row_min, row_max = np.where(valid_rows)[0][[0, -1]]
+            col_min, col_max = np.where(valid_cols)[0][[0, -1]]
+            global_bounds["xmin"] = min(global_bounds["xmin"], merged.x_edges[col_min])
+            global_bounds["xmax"] = max(global_bounds["xmax"], merged.x_edges[col_max + 1])
+            global_bounds["ymin"] = min(global_bounds["ymin"], merged.y_edges[row_min])
+            global_bounds["ymax"] = max(global_bounds["ymax"], merged.y_edges[row_max + 1])
+
+    # Set up figure
+    fig, ax = plt.subplots(figsize=figsize)
+    plt.tight_layout()
+
+    # Create writer
+    writer = FFMpegWriter(fps=fps, metadata={"title": "WAMOS Radar Movie"})
+
+    logger.info("Generating MP4 movie with %d frames at %.1f fps", len(merged_images), fps)
+
+    with writer.saving(fig, str(output_path), dpi=dpi):
+        for i, merged in enumerate(merged_images):
+            ax.clear()
+
+            # Find valid data bounds
+            valid_mask = ~np.isnan(merged.intensity)
+            valid_rows = np.any(valid_mask, axis=1)
+            valid_cols = np.any(valid_mask, axis=0)
+
+            if np.any(valid_rows) and np.any(valid_cols):
+                row_min, row_max = np.where(valid_rows)[0][[0, -1]]
+                col_min, col_max = np.where(valid_cols)[0][[0, -1]]
+                cropped = merged.intensity[row_min : row_max + 1, col_min : col_max + 1]
+                extent = [
+                    merged.x_edges[col_min],
+                    merged.x_edges[col_max + 1],
+                    merged.y_edges[row_min],
+                    merged.y_edges[row_max + 1],
+                ]
+            else:
+                cropped = merged.intensity
+                extent = [
+                    merged.x_edges[0],
+                    merged.x_edges[-1],
+                    merged.y_edges[0],
+                    merged.y_edges[-1],
+                ]
+
+            ax.imshow(
+                cropped,
+                cmap=cmap,
+                vmin=vmin,
+                vmax=vmax,
+                extent=extent,
+                origin="lower",
+                aspect="equal",
+            )
+
+            if range_rings:
+                _draw_range_rings(ax, extent)
+
+            # Use global bounds for consistent framing
+            ax.set_xlim(global_bounds["xmin"], global_bounds["xmax"])
+            ax.set_ylim(global_bounds["ymin"], global_bounds["ymax"])
+
+            ax.set_xlabel("Distance East (m)")
+            ax.set_ylabel("Distance North (m)")
+
+            start_time = np.datetime_as_string(merged.start_time, unit="s")
+            end_time = np.datetime_as_string(merged.end_time, unit="s")
+            ax.set_title(
+                f"Frame {i + 1}/{len(merged_images)}: {merged.n_frames} frames\n"
+                f"{start_time} to {end_time}"
+            )
+
+            writer.grab_frame()
+
+    plt.close(fig)
+    logger.info("Wrote MP4 movie to %s", output_path)
+    return str(output_path)
+
+
+def write_geotiff(
+    merged: MergedImage,
+    output_dir: str,
+    cmap: str = "viridis",
+    vmin: float | None = None,
+    vmax: float | None = None,
+) -> str:
+    """
+    Write merged image as a georeferenced GeoTIFF file.
+
+    Args:
+        merged: MergedImage to write
+        output_dir: Output directory
+        cmap: Colormap name for RGB conversion
+        vmin: Minimum intensity value (auto if None)
+        vmax: Maximum intensity value (auto if None)
+
+    Returns:
+        Path to created file
+    """
+    try:
+        import rasterio
+        from rasterio.crs import CRS
+        from rasterio.transform import from_bounds
+    except ImportError:
+        logger.warning("rasterio not installed, skipping GeoTIFF output")
+        return ""
+
+    import matplotlib.pyplot as plt
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Generate filename
+    start_str = (
+        np.datetime_as_string(merged.start_time, unit="s").replace(":", "-").replace("T", "_")
+    )
+    end_str = np.datetime_as_string(merged.end_time, unit="s").replace(":", "-").replace("T", "_")
+    filename = f"merged_{start_str}_to_{end_str}.tif"
+    filepath = output_dir / filename
+
+    # Get intensity data and compute scaling
+    intensity = merged.intensity.copy()
+    if vmin is None:
+        vmin = float(np.nanpercentile(intensity, 2))
+    if vmax is None:
+        vmax = float(np.nanpercentile(intensity, 98))
+
+    # Normalize to 0-1 range
+    normalized = (intensity - vmin) / (vmax - vmin)
+    normalized = np.clip(normalized, 0, 1)
+
+    # Apply colormap to get RGBA
+    colormap = plt.get_cmap(cmap)
+    rgba = colormap(normalized)  # Shape: (h, w, 4)
+
+    # Convert to uint8
+    rgb = (rgba[:, :, :3] * 255).astype(np.uint8)
+
+    # Handle NaN values - make them transparent
+    mask = np.isnan(intensity)
+    alpha = np.where(mask, 0, 255).astype(np.uint8)
+
+    # Stack RGB + Alpha
+    rgba_uint8 = np.dstack([rgb, alpha])
+
+    # Compute bounds in UTM coordinates
+    # The grid is centered, so we need to convert to absolute UTM
+    from pyproj import CRS as ProjCRS
+    from pyproj import Transformer
+
+    utm_crs = ProjCRS.from_proj4(
+        f"+proj=utm +zone={merged.utm_zone} +{merged.hemisphere} +datum=WGS84"
+    )
+    crs_wgs84 = ProjCRS.from_epsg(4326)
+    transformer = Transformer.from_crs(crs_wgs84, utm_crs, always_xy=True)
+
+    # Get center in UTM
+    center_x, center_y = transformer.transform(merged.center_lon, merged.center_lat)
+
+    # Compute absolute bounds
+    x_min = center_x + merged.x_edges[0]
+    x_max = center_x + merged.x_edges[-1]
+    y_min = center_y + merged.y_edges[0]
+    y_max = center_y + merged.y_edges[-1]
+
+    # Create transform (note: rasterio uses top-left origin, so y is flipped)
+    height, width = intensity.shape
+    transform = from_bounds(x_min, y_min, x_max, y_max, width, height)
+
+    # Determine EPSG code
+    if merged.hemisphere == "north":
+        epsg = 32600 + merged.utm_zone
+    else:
+        epsg = 32700 + merged.utm_zone
+
+    # Write GeoTIFF
+    with rasterio.open(
+        filepath,
+        "w",
+        driver="GTiff",
+        height=height,
+        width=width,
+        count=4,  # RGBA
+        dtype=np.uint8,
+        crs=CRS.from_epsg(epsg),
+        transform=transform,
+        compress="lzw",
+    ) as dst:
+        # Write each band (rasterio expects bands first)
+        for i in range(4):
+            # Flip vertically since rasterio uses top-left origin
+            dst.write(np.flipud(rgba_uint8[:, :, i]), i + 1)
+
+        # Add metadata
+        dst.update_tags(
+            title="WAMOS Merged Radar Image",
+            start_time=str(merged.start_time),
+            end_time=str(merged.end_time),
+            n_frames=str(merged.n_frames),
+            center_lat=str(merged.center_lat),
+            center_lon=str(merged.center_lon),
+        )
+
+    logger.debug("Wrote GeoTIFF to %s", filepath)
+    return str(filepath)
+
+
+def write_kml(
+    merged_images: list[MergedImage],
+    output_path: str,
+    image_dir: str | None = None,
+    image_format: str = "png",
+) -> str:
+    """
+    Write a KML file with ground overlays for merged images.
+
+    If image_dir is provided, generates PNG images for each frame.
+    The KML file references these images as ground overlays with proper
+    geographic positioning.
+
+    Args:
+        merged_images: List of MergedImage objects
+        output_path: Output KML file path
+        image_dir: Directory for overlay images (if None, uses output_path directory)
+        image_format: Image format for overlays ("png" or "tiff")
+
+    Returns:
+        Path to created KML file
+    """
+    from xml.etree.ElementTree import Element, SubElement, ElementTree
+
+    if not merged_images:
+        logger.warning("No merged images for KML")
+        return ""
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if image_dir is None:
+        image_dir = output_path.parent / "images"
+    else:
+        image_dir = Path(image_dir)
+    image_dir.mkdir(parents=True, exist_ok=True)
+
+    # Compute global intensity range for consistent coloring
+    all_valid = []
+    for merged in merged_images:
+        valid_data = merged.intensity[~np.isnan(merged.intensity)]
+        if len(valid_data) > 0:
+            all_valid.extend(valid_data.ravel())
+    if all_valid:
+        vmin = float(np.percentile(all_valid, 2))
+        vmax = float(np.percentile(all_valid, 98))
+    else:
+        vmin, vmax = 0, 1
+
+    # Create KML structure
+    kml = Element("kml", xmlns="http://www.opengis.net/kml/2.2")
+    document = SubElement(kml, "Document")
+
+    # Add document name and description
+    name = SubElement(document, "name")
+    name.text = "WAMOS Radar Images"
+
+    description = SubElement(document, "description")
+    description.text = f"Merged radar images: {len(merged_images)} frames"
+
+    # Create folder for overlays
+    folder = SubElement(document, "Folder")
+    folder_name = SubElement(folder, "name")
+    folder_name.text = "Radar Overlays"
+
+    # Generate images and add overlays
+    for i, merged in enumerate(merged_images):
+        # Generate image filename
+        start_str = (
+            np.datetime_as_string(merged.start_time, unit="s")
+            .replace(":", "-")
+            .replace("T", "_")
+        )
+        image_filename = f"overlay_{i:04d}_{start_str}.png"
+        image_path = image_dir / image_filename
+
+        # Write overlay image (PNG with transparency)
+        _write_overlay_png(merged, image_path, vmin=vmin, vmax=vmax)
+
+        # Compute geographic bounds
+        bounds = _compute_latlon_bounds(merged)
+
+        # Create GroundOverlay element
+        overlay = SubElement(folder, "GroundOverlay")
+
+        overlay_name = SubElement(overlay, "name")
+        overlay_name.text = f"Frame {i + 1}: {start_str}"
+
+        # Time span (for time-enabled KML viewers)
+        timespan = SubElement(overlay, "TimeSpan")
+        begin = SubElement(timespan, "begin")
+        begin.text = np.datetime_as_string(merged.start_time, unit="s")
+        end = SubElement(timespan, "end")
+        end.text = np.datetime_as_string(merged.end_time, unit="s")
+
+        # Icon (image reference)
+        icon = SubElement(overlay, "Icon")
+        href = SubElement(icon, "href")
+        # Use relative path
+        href.text = f"images/{image_filename}"
+
+        # LatLonBox for positioning
+        latlonbox = SubElement(overlay, "LatLonBox")
+        north = SubElement(latlonbox, "north")
+        north.text = str(bounds["north"])
+        south = SubElement(latlonbox, "south")
+        south.text = str(bounds["south"])
+        east = SubElement(latlonbox, "east")
+        east.text = str(bounds["east"])
+        west = SubElement(latlonbox, "west")
+        west.text = str(bounds["west"])
+
+    # Write KML file
+    tree = ElementTree(kml)
+    with open(output_path, "wb") as f:
+        tree.write(f, encoding="utf-8", xml_declaration=True)
+
+    logger.info("Wrote KML file to %s with %d overlays", output_path, len(merged_images))
+    return str(output_path)
+
+
+def write_kmz(
+    merged_images: list[MergedImage],
+    output_path: str,
+) -> str:
+    """
+    Write a KMZ file (compressed KML with embedded images).
+
+    A KMZ file is a ZIP archive containing:
+    - doc.kml: The main KML file
+    - images/: Directory with overlay PNG images
+
+    This creates a self-contained package that can be opened directly
+    in Google Earth without external file dependencies.
+
+    Args:
+        merged_images: List of MergedImage objects
+        output_path: Output KMZ file path
+
+    Returns:
+        Path to created KMZ file
+    """
+    import shutil
+    import tempfile
+    import zipfile
+
+    if not merged_images:
+        logger.warning("No merged images for KMZ")
+        return ""
+
+    output_path = Path(output_path)
+    if not output_path.suffix.lower() == ".kmz":
+        output_path = output_path.with_suffix(".kmz")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Create temporary directory for KML and images
+    temp_dir = Path(tempfile.mkdtemp(prefix="wamos_kmz_"))
+    try:
+        kml_path = temp_dir / "doc.kml"
+        image_dir = temp_dir / "images"
+
+        # Generate KML and images using existing function
+        write_kml(merged_images, str(kml_path), image_dir=str(image_dir))
+
+        # Package into KMZ (ZIP file)
+        with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as kmz:
+            # Add doc.kml at root
+            kmz.write(kml_path, "doc.kml")
+
+            # Add all images in images/ folder
+            for image_file in image_dir.iterdir():
+                if image_file.is_file():
+                    kmz.write(image_file, f"images/{image_file.name}")
+
+        logger.info(
+            "Wrote KMZ file to %s (%d overlays, %.1f MB)",
+            output_path,
+            len(merged_images),
+            output_path.stat().st_size / (1024 * 1024),
+        )
+        return str(output_path)
+
+    finally:
+        # Clean up temporary directory
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _write_overlay_png(
+    merged: MergedImage,
+    output_path: Path,
+    cmap: str = "viridis",
+    vmin: float | None = None,
+    vmax: float | None = None,
+) -> None:
+    """
+    Write a PNG image suitable for KML overlay (with transparency).
+
+    Args:
+        merged: MergedImage to write
+        output_path: Output PNG file path
+        cmap: Colormap name
+        vmin: Minimum intensity value
+        vmax: Maximum intensity value
+    """
+    import matplotlib.pyplot as plt
+
+    intensity = merged.intensity.copy()
+
+    if vmin is None:
+        vmin = float(np.nanpercentile(intensity, 2))
+    if vmax is None:
+        vmax = float(np.nanpercentile(intensity, 98))
+
+    # Normalize to 0-1 range
+    normalized = (intensity - vmin) / (vmax - vmin)
+    normalized = np.clip(normalized, 0, 1)
+
+    # Apply colormap
+    colormap = plt.get_cmap(cmap)
+    rgba = colormap(normalized)
+
+    # Set NaN pixels to transparent
+    mask = np.isnan(intensity)
+    rgba[mask, 3] = 0
+
+    # Convert to uint8
+    rgba_uint8 = (rgba * 255).astype(np.uint8)
+
+    # Flip vertically for correct orientation (image origin is top-left)
+    rgba_uint8 = np.flipud(rgba_uint8)
+
+    # Write PNG
+    try:
+        from PIL import Image
+
+        img = Image.fromarray(rgba_uint8, mode="RGBA")
+        img.save(output_path)
+    except ImportError:
+        # Fallback to matplotlib
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(figsize=(10, 10))
+        ax.imshow(rgba_uint8, origin="upper")
+        ax.axis("off")
+        fig.savefig(output_path, dpi=150, bbox_inches="tight", pad_inches=0, transparent=True)
+        plt.close(fig)
+
+
+def _compute_latlon_bounds(merged: MergedImage) -> dict:
+    """
+    Compute lat/lon bounds for a merged image.
+
+    Args:
+        merged: MergedImage with UTM grid
+
+    Returns:
+        Dictionary with north, south, east, west bounds in degrees
+    """
+    from pyproj import CRS, Transformer
+
+    # Create transformers
+    utm_crs = CRS.from_proj4(
+        f"+proj=utm +zone={merged.utm_zone} +{merged.hemisphere} +datum=WGS84"
+    )
+    crs_wgs84 = CRS.from_epsg(4326)
+    transformer_to_ll = Transformer.from_crs(utm_crs, crs_wgs84, always_xy=True)
+    transformer_to_utm = Transformer.from_crs(crs_wgs84, utm_crs, always_xy=True)
+
+    # Get center in UTM
+    center_x, center_y = transformer_to_utm.transform(merged.center_lon, merged.center_lat)
+
+    # Compute corners in UTM
+    x_min = center_x + merged.x_edges[0]
+    x_max = center_x + merged.x_edges[-1]
+    y_min = center_y + merged.y_edges[0]
+    y_max = center_y + merged.y_edges[-1]
+
+    # Transform corners to lat/lon
+    corners_x = [x_min, x_max, x_min, x_max]
+    corners_y = [y_min, y_min, y_max, y_max]
+    lons, lats = transformer_to_ll.transform(corners_x, corners_y)
+
+    return {
+        "north": max(lats),
+        "south": min(lats),
+        "east": max(lons),
+        "west": min(lons),
     }
-    return result
+
+
+# ============================================================
+# CLI Interface
+# ============================================================
 
 
 def _add_arguments(parser) -> None:
@@ -1605,134 +1902,519 @@ def _add_arguments(parser) -> None:
 
     add_common_arguments(parser)
     parser.add_argument("--config", "-c", type=str, help="Config YAML filename")
-    parser.add_argument("--timing", "-t", action="store_true", help="Show timing statistics")
+
+    # Window configuration
     parser.add_argument(
-        "--groupby",
-        "-g",
-        type=str,
-        default=None,
-        help="Group files by time frequency (e.g., 'h', '30m')",
+        "--window",
+        type=float,
+        default=60.0,
+        help="Window duration in seconds (default: 60)",
     )
     parser.add_argument(
-        "--overlap", type=int, default=1, help="Number of overlap files between groups (default: 1)"
+        "--overlap",
+        type=float,
+        default=0.5,
+        help="Overlap fraction between windows (default: 0.5 = 50%%)",
+    )
+    parser.add_argument(
+        "--min-frames",
+        type=int,
+        default=5,
+        help="Minimum frames per window (default: 5)",
+    )
+
+    # Output options
+    parser.add_argument(
+        "--output-dir",
+        "-o",
+        type=str,
+        default=None,
+        help="Output directory for merged images",
+    )
+    parser.add_argument(
+        "--format",
+        choices=["netcdf", "png", "both"],
+        default="netcdf",
+        help="Output format (default: netcdf)",
+    )
+
+    # Movie and georeferenced output
+    parser.add_argument(
+        "--mp4",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="Generate MP4 movie file (requires ffmpeg)",
+    )
+    parser.add_argument(
+        "--fps",
+        type=float,
+        default=2.0,
+        help="Frames per second for MP4 movie (default: 2.0)",
+    )
+    parser.add_argument(
+        "--geotiff",
+        action="store_true",
+        help="Write georeferenced GeoTIFF files (requires rasterio)",
+    )
+    parser.add_argument(
+        "--kml",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="Generate KML file with ground overlays for Google Earth",
+    )
+    parser.add_argument(
+        "--kmz",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="Generate self-contained KMZ file (KML + images in ZIP archive)",
+    )
+
+    # Processing options
+    parser.add_argument(
+        "--workers",
+        "-w",
+        type=int,
+        default=None,
+        help="Number of parallel workers (default: auto)",
     )
     parser.add_argument(
         "--tolerance",
         type=float,
         default=1.2,
-        help="Time tolerance multiplier for interpolation (default: 1.2)",
+        help="Time tolerance multiplier (default: 1.2)",
     )
-    parser.add_argument(
-        "--workers", "-w", type=int, default=None, help="Number of parallel workers (default: auto)"
+    parser.add_argument("--timing", "-t", action="store_true", help="Show timing statistics")
+    parser.add_argument("--plot", action="store_true", help="Show interactive viewer")
+
+    # Progress bar options (mutually exclusive)
+    progress_group = parser.add_mutually_exclusive_group()
+    progress_group.add_argument(
+        "--progress", dest="progress", action="store_true", default=True,
+        help="Show progress bars (default)"
+    )
+    progress_group.add_argument(
+        "--no-progress", dest="progress", action="store_false",
+        help="Hide progress bars"
     )
 
-    # Pool type selection (mutually exclusive)
-    pool_group = parser.add_mutually_exclusive_group()
-    pool_group.add_argument("--threadpool", action="store_true", help="Use only ThreadPoolExecutor")
-    pool_group.add_argument(
-        "--processpool", action="store_true", help="Use only ProcessPoolExecutor"
-    )
-    pool_group.add_argument(
-        "--bothpools", action="store_true", help="Run both ThreadPool and ProcessPool (default)"
+
+def _draw_range_rings(ax, extent: list, ring_interval: float = 1000.0) -> None:
+    """
+    Draw range rings centered at origin.
+
+    Args:
+        ax: Matplotlib axes
+        extent: [xmin, xmax, ymin, ymax] of the plot
+        ring_interval: Distance between rings in meters (default 1000m)
+    """
+    from matplotlib.patches import Circle
+
+    xmin, xmax, ymin, ymax = extent
+
+    # Compute max range needed to cover the plot
+    max_range = max(
+        abs(xmin), abs(xmax), abs(ymin), abs(ymax),
+        np.sqrt(xmin**2 + ymin**2),
+        np.sqrt(xmax**2 + ymin**2),
+        np.sqrt(xmin**2 + ymax**2),
+        np.sqrt(xmax**2 + ymax**2),
     )
 
-    parser.add_argument("--project", "-p", action="store_true", help="Project frames to earth grid")
-    parser.add_argument(
-        "--plot", action="store_true", help="Show diagnostic plots (implies --project)"
-    )
-    parser.add_argument(
-        "--save-plot",
-        type=str,
-        default=None,
-        metavar="FILE",
-        help="Save intensity plot to file (implies --project)",
-    )
-    parser.add_argument(
-        "--cmap", type=str, default="viridis", help="Colormap for intensity plot (default: viridis)"
-    )
-    parser.add_argument(
-        "--vmin", type=float, default=None, help="Minimum intensity value for colormap"
-    )
-    parser.add_argument(
-        "--vmax", type=float, default=None, help="Maximum intensity value for colormap"
-    )
-    parser.add_argument(
-        "--play-interval",
-        type=int,
-        default=1000,
-        help="Interval between frames in play mode (milliseconds, default: 1000)",
-    )
+    # Draw rings at regular intervals
+    n_rings = int(max_range / ring_interval) + 1
+    for i in range(1, n_rings + 1):
+        radius = i * ring_interval
+        circle = Circle(
+            (0, 0), radius,
+            fill=False,
+            edgecolor='white',
+            linewidth=0.5,
+            alpha=0.5,
+            linestyle='--',
+        )
+        ax.add_patch(circle)
+
+        # Add range label at top of circle (if visible)
+        if -radius <= xmax and radius >= xmin and radius <= ymax:
+            ax.text(
+                0, radius, f"{radius/1000:.0f}km",
+                ha='center', va='bottom',
+                fontsize=7, color='white', alpha=0.7,
+            )
 
 
 def add_subparser(subparsers) -> None:
     """Register the 'files-pipeline' subcommand."""
     p = subparsers.add_parser(
         "files-pipeline",
-        help="Process multiple polar files with interpolation",
-        description="Test files processing pipeline with frame interpolation",
+        help="Merge frames into motion-corrected composite images",
+        description="Process radar files and merge into time-windowed composite images",
     )
     _add_arguments(p)
     p.set_defaults(func=run)
 
 
-def _display_projection_stats(
-    result: ProjectionResult,
-    label: str = "",
-) -> None:
-    """Display projection statistics for a single result (grid and frame info only)."""
-    grid = result.earth_grid
+def _show_single_image(merged: MergedImage) -> None:
+    """
+    Display a single merged image in a non-blocking window.
 
-    if label:
-        logging.info("")
-        logging.info("  %s:", label)
+    Used to show the first image while processing continues.
+    """
+    import matplotlib.pyplot as plt
 
-    logging.info("    Grid: %dx%d cells (%.1fm spacing)", grid.n_x, grid.n_y, grid.grid_spacing)
-    logging.info(
-        "    Extent: [%.0f, %.0f] x [%.0f, %.0f] m",
-        grid.x_edges[0],
-        grid.x_edges[-1],
-        grid.y_edges[0],
-        grid.y_edges[-1],
+    # Find bounds of actual data (non-NaN values)
+    valid_mask = ~np.isnan(merged.intensity)
+    valid_rows = np.any(valid_mask, axis=1)
+    valid_cols = np.any(valid_mask, axis=0)
+
+    if np.any(valid_rows) and np.any(valid_cols):
+        row_min, row_max = np.where(valid_rows)[0][[0, -1]]
+        col_min, col_max = np.where(valid_cols)[0][[0, -1]]
+
+        cropped = merged.intensity[row_min:row_max + 1, col_min:col_max + 1]
+        extent = [
+            merged.x_edges[col_min], merged.x_edges[col_max + 1],
+            merged.y_edges[row_min], merged.y_edges[row_max + 1]
+        ]
+    else:
+        cropped = merged.intensity
+        extent = [
+            merged.x_edges[0], merged.x_edges[-1],
+            merged.y_edges[0], merged.y_edges[-1]
+        ]
+
+    # Compute intensity range
+    valid_data = cropped[~np.isnan(cropped)]
+    if len(valid_data) > 0:
+        vmin = float(np.percentile(valid_data, 2))
+        vmax = float(np.percentile(valid_data, 98))
+    else:
+        vmin, vmax = 0, 1
+
+    # Enable interactive mode
+    plt.ion()
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    im = ax.imshow(
+        cropped,
+        cmap="viridis",
+        vmin=vmin,
+        vmax=vmax,
+        extent=extent,
+        origin="lower",
+        aspect="equal",
     )
-    logging.info("    Frames: %d, Radials: %d", result.n_frames, result.n_radials_total)
+
+    # Add range rings
+    _draw_range_rings(ax, extent)
+
+    ax.set_xlabel("Distance East (m)")
+    ax.set_ylabel("Distance North (m)")
+
+    start_time = np.datetime_as_string(merged.start_time, unit="s")
+    end_time = np.datetime_as_string(merged.end_time, unit="s")
+
+    ax.set_title(
+        f"First Merged Image: {merged.n_frames} frames\n"
+        f"{start_time} to {end_time}"
+    )
+
+    fig.colorbar(im, ax=ax, label="Intensity", shrink=0.8)
+
+    # Force draw and show non-blocking
+    fig.canvas.draw()
+    fig.canvas.flush_events()
+    plt.show(block=False)
+    plt.pause(0.5)  # Give time to render
 
 
-def _display_projection_timing_stats(all_timings: dict[str, list[float]]) -> None:
-    """Display aggregated projection timing statistics."""
-    if not all_timings:
+def _show_merged_viewer(merged_images: list[MergedImage], interval_ms: int = 500) -> None:
+    """
+    Show an interactive viewer for merged images.
+
+    Simple matplotlib-based viewer with navigation between windows.
+    Includes play/stop button for automatic playback.
+
+    Args:
+        merged_images: List of merged images to display
+        interval_ms: Playback interval in milliseconds (default 500ms = 2 fps)
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.animation import FuncAnimation
+    from matplotlib.widgets import Button
+
+    # Turn off interactive mode for blocking display
+    plt.ioff()
+    # Close any existing figures from single image preview
+    plt.close('all')
+
+    if not merged_images:
+        logger.warning("No merged images to display")
         return
 
-    total_time = sum(sum(vals) for vals in all_timings.values())
+    # Compute global intensity range across all images
+    all_valid = []
+    for merged in merged_images:
+        valid_data = merged.intensity[~np.isnan(merged.intensity)]
+        if len(valid_data) > 0:
+            all_valid.extend(valid_data.ravel())
 
-    logging.info("")
-    logging.info("  Projection timing statistics:")
-    header = f"    {'Step':<12} {'Mean (ms)':>10} {'Std (ms)':>10} {'Min (ms)':>10} {'Max (ms)':>10} {'%':>6}"
-    logging.info(header)
-    logging.info("    " + "-" * (len(header) - 4))
-    for key, vals in all_timings.items():
-        arr = np.array(vals) * 1000  # Convert to ms
-        pct = (sum(vals) / total_time * 100) if total_time > 0 else 0
-        logging.info(
-            f"    {key:<12} {arr.mean():>10.2f} {arr.std():>10.2f} "
-            f"{arr.min():>10.2f} {arr.max():>10.2f} {pct:>6.1f}"
+    if not all_valid:
+        logger.warning("All merged images have no valid data")
+        # Still show the empty images for debugging
+        vmin, vmax = 0, 1
+    else:
+        vmin = float(np.percentile(all_valid, 2))
+        vmax = float(np.percentile(all_valid, 98))
+
+    # Compute max speeds for consistent polar plot scaling
+    max_ship_speed = 0.0
+    max_wind_speed = 0.0
+    for merged in merged_images:
+        if merged.mean_ship_speed is not None:
+            max_ship_speed = max(max_ship_speed, merged.mean_ship_speed)
+        if merged.mean_wind_speed is not None:
+            max_wind_speed = max(max_wind_speed, merged.mean_wind_speed)
+
+    # Use reasonable defaults if no data
+    if max_ship_speed == 0:
+        max_ship_speed = 10.0  # m/s
+    if max_wind_speed == 0:
+        max_wind_speed = 20.0  # m/s
+
+    # Create figure with explicit axes positioning
+    # Use square figure for equal aspect ratio
+    fig = plt.figure(figsize=(12, 11))
+
+    # Main axes: make it square in figure coordinates
+    # Height: 0.78 of figure (11 inches) = 8.58 inches
+    # Width: 8.58/12 = 0.715 of figure width
+    ax = fig.add_axes((0.08, 0.12, 0.715, 0.78))
+
+    # Colorbar axes (fixed position, won't affect main axes)
+    cax = fig.add_axes((0.82, 0.12, 0.03, 0.78))
+
+    # Mutable containers for inset axes (recreated on each update since ax.clear() removes them)
+    inset_axes = {"ship": None, "wind": None}
+
+    current_idx = [0]  # Mutable container for callback
+    is_playing = [False]  # Mutable container for play state
+    animation = [None]  # Mutable container for animation object
+
+    def create_polar_insets():
+        """Create polar inset axes inside the main plot."""
+        # Position: [left, bottom, width, height] relative to parent axes (0-1)
+        # 70% of original size (0.14 vs 0.20), positioned closer to corners
+        ax_ship = ax.inset_axes((0.85, 0.85, 0.14, 0.14), projection="polar")
+        ax_wind = ax.inset_axes((0.85, 0.01, 0.14, 0.14), projection="polar")
+        inset_axes["ship"] = ax_ship
+        inset_axes["wind"] = ax_wind
+        return ax_ship, ax_wind
+
+    def update_polar_plots(merged):
+        """Update the ship and wind polar inset plots."""
+        ax_ship = inset_axes["ship"]
+        ax_wind = inset_axes["wind"]
+
+        # Ship plot (NE corner of main plot, label in NW corner of polar plot)
+        ax_ship.clear()
+        ax_ship.set_facecolor((1, 1, 1, 0.85))  # White with transparency
+        ax_ship.set_theta_zero_location("N")
+        ax_ship.set_theta_direction(-1)
+        ax_ship.set_yticklabels([])
+        ax_ship.set_xticklabels([])  # No N/E/S/W labels
+        ax_ship.set_ylim(0, max_ship_speed * 1.1)
+
+        if merged.mean_ship_speed is not None and merged.mean_ship_speed > 0:
+            heading_rad = np.radians(merged.mean_heading)
+            ax_ship.annotate(
+                "",
+                xy=(heading_rad, merged.mean_ship_speed),
+                xytext=(0, 0),
+                arrowprops={"arrowstyle": "-|>", "color": "blue", "lw": 2},
+            )
+            label_text = f"Ship\n{merged.mean_ship_speed:.1f} m/s"
+        else:
+            label_text = "Ship\nN/A"
+        # Label in NW corner of polar plot
+        ax_ship.text(
+            0.02, 0.98, label_text, transform=ax_ship.transAxes,
+            fontsize=8, ha="left", va="top", color="blue"
         )
+
+        # Wind plot (SE corner of main plot, label in SW corner of polar plot)
+        ax_wind.clear()
+        ax_wind.set_facecolor((1, 1, 1, 0.85))  # White with transparency
+        ax_wind.set_theta_zero_location("N")
+        ax_wind.set_theta_direction(-1)
+        ax_wind.set_yticklabels([])
+        ax_wind.set_xticklabels([])  # No N/E/S/W labels
+        ax_wind.set_ylim(0, max_wind_speed * 1.1)
+
+        if merged.mean_wind_speed is not None and merged.mean_wind_speed > 0:
+            # Wind direction is where wind comes FROM, arrow points in that direction
+            wind_dir_rad = np.radians(merged.mean_wind_direction or 0)
+            ax_wind.annotate(
+                "",
+                xy=(wind_dir_rad, merged.mean_wind_speed),
+                xytext=(0, 0),
+                arrowprops={"arrowstyle": "-|>", "color": "green", "lw": 2},
+            )
+            label_text = f"Wind\n{merged.mean_wind_speed:.1f} m/s"
+        else:
+            label_text = "Wind\nN/A"
+        # Label in SW corner of polar plot
+        ax_wind.text(
+            0.02, 0.02, label_text, transform=ax_wind.transAxes,
+            fontsize=8, ha="left", va="bottom", color="green"
+        )
+
+    def update_plot():
+        merged = merged_images[current_idx[0]]
+        ax.clear()
+
+        # Recreate inset axes (cleared by ax.clear())
+        create_polar_insets()
+
+        # Find bounds of actual data (non-NaN values)
+        valid_mask = ~np.isnan(merged.intensity)
+        valid_rows = np.any(valid_mask, axis=1)
+        valid_cols = np.any(valid_mask, axis=0)
+
+        if np.any(valid_rows) and np.any(valid_cols):
+            row_min, row_max = np.where(valid_rows)[0][[0, -1]]
+            col_min, col_max = np.where(valid_cols)[0][[0, -1]]
+
+            # Crop to valid data region
+            cropped = merged.intensity[row_min:row_max + 1, col_min:col_max + 1]
+            extent = [
+                merged.x_edges[col_min], merged.x_edges[col_max + 1],
+                merged.y_edges[row_min], merged.y_edges[row_max + 1]
+            ]
+        else:
+            # No valid data, show full extent
+            cropped = merged.intensity
+            extent = [
+                merged.x_edges[0], merged.x_edges[-1],
+                merged.y_edges[0], merged.y_edges[-1]
+            ]
+
+        im = ax.imshow(
+            cropped,
+            cmap="viridis",
+            vmin=vmin,
+            vmax=vmax,
+            extent=extent,
+            origin="lower",
+            aspect="equal",  # Fill the axes
+        )
+
+        # Add range rings
+        _draw_range_rings(ax, extent)
+
+        ax.set_xlabel("Distance East (m)")
+        ax.set_ylabel("Distance North (m)")
+
+        start_time = np.datetime_as_string(merged.start_time, unit="s")
+        end_time = np.datetime_as_string(merged.end_time, unit="s")
+
+        ax.set_title(
+            f"Window {current_idx[0] + 1}/{len(merged_images)}: {merged.n_frames} frames\n"
+            f"{start_time} to {end_time}"
+        )
+
+        # Update colorbar (using dedicated axes so it doesn't resize main plot)
+        if not hasattr(fig, "_colorbar"):
+            fig._colorbar = fig.colorbar(im, cax=cax, label="Intensity")
+        else:
+            fig._colorbar.update_normal(im)
+
+        # Update polar inset plots
+        update_polar_plots(merged)
+
+        fig.canvas.draw_idle()
+
+    def on_prev(event):
+        if current_idx[0] > 0:
+            current_idx[0] -= 1
+            update_plot()
+
+    def on_next(event):
+        if current_idx[0] < len(merged_images) - 1:
+            current_idx[0] += 1
+            update_plot()
+
+    def animate_frame(frame_num):
+        """Animation callback - advance to next frame."""
+        if is_playing[0]:
+            if current_idx[0] < len(merged_images) - 1:
+                current_idx[0] += 1
+            else:
+                # Loop back to start
+                current_idx[0] = 0
+            update_plot()
+
+    def on_play(event):
+        """Toggle play/stop state."""
+        is_playing[0] = not is_playing[0]
+
+        if is_playing[0]:
+            btn_play.label.set_text("Stop")
+            # Start animation
+            animation[0] = FuncAnimation(
+                fig,
+                animate_frame,
+                interval=interval_ms,
+                cache_frame_data=False,
+            )
+        else:
+            btn_play.label.set_text("Play")
+            # Stop animation
+            if animation[0] is not None:
+                animation[0].event_source.stop()
+                animation[0] = None
+
+        fig.canvas.draw_idle()
+
+    def on_key(event):
+        if event.key == "left":
+            on_prev(event)
+        elif event.key == "right":
+            on_next(event)
+        elif event.key == " ":  # Spacebar toggles play
+            on_play(event)
+
+    # Add navigation buttons using explicit figure reference
+    ax_prev = fig.add_axes((0.2, 0.02, 0.12, 0.05))
+    ax_play = fig.add_axes((0.37, 0.02, 0.12, 0.05))
+    ax_next = fig.add_axes((0.54, 0.02, 0.12, 0.05))
+
+    btn_prev = Button(ax_prev, "Previous")
+    btn_play = Button(ax_play, "Play")
+    btn_next = Button(ax_next, "Next")
+
+    btn_prev.on_clicked(on_prev)
+    btn_play.on_clicked(on_play)
+    btn_next.on_clicked(on_next)
+
+    # Key bindings
+    fig.canvas.mpl_connect("key_press_event", on_key)
+
+    # Initial plot
+    update_plot()
+
+    # Show with blocking
+    plt.show(block=True)
 
 
 def run(args) -> None:
-    """Execute the 'files-pipeline' command with parallel processing."""
-    import os
-    from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-    from functools import partial
-
+    """Execute the 'files-pipeline' command."""
     from wamos_tpw.config import Config
     from wamos_tpw.filenames import Filenames
-    from wamos_tpw.parallel_runner import (
-        aggregate_timings,
-        display_benchmark_header,
-        display_memory_stats,
-        display_timing_stats,
-        run_with_executor,
-    )
 
     config = Config(args.config) if args.config else Config()
 
@@ -1741,207 +2423,95 @@ def run(args) -> None:
 
     if not files:
         logging.warning(
-            "No files found in %s for time range %s to %s", args.polar_path, args.stime, args.etime
+            "No files found in %s for time range %s to %s",
+            args.polar_path,
+            args.stime,
+            args.etime,
         )
         return
 
     logging.info("Found %d files", len(files))
 
-    # Check if projection/plotting requested
-    do_project = args.project or args.plot or args.save_plot
+    # Create window config
+    window_config = TimeWindowConfig(
+        window_seconds=args.window,
+        overlap_fraction=args.overlap,
+        min_frames_per_window=args.min_frames,
+    )
 
-    if not args.groupby:
-        # Non-grouped mode: process all files sequentially
-        fp = FilesPipeline(
-            files,
-            config=config,
-            qTiming=args.timing,
-            tolerance=args.tolerance,
-            qProject=do_project,
-        )
-
-        logging.info("Processed %d files, %d frames", len(files), fp.total_frames)
-        logging.info(
-            "Interpolation: %d interpolated, %d extrapolated, %d skipped",
-            fp.n_interpolated,
-            fp.n_extrapolated,
-            fp.n_skipped,
-        )
-
-        if args.timing and fp.frame_timings:
-            all_timings = aggregate_timings(
-                [{"frame_timings": fp.frame_timings}],
-                get_timings=lambda r: r["frame_timings"],
-            )
-            display_timing_stats(all_timings)
-
-        # Display projection results and plots
-        if do_project and fp.projection_result is not None:
-            logging.info("")
-            logging.info("=" * 60)
-            logging.info("Earth Projection")
-            logging.info("=" * 60)
-
-            _display_projection_stats(fp.projection_result)
-
-            # Display projection timing statistics
-            if args.timing and fp.projection_timings:
-                # Convert single timing dict to aggregated format
-                proj_timings = {k: [v] for k, v in fp.projection_timings.items()}
-                _display_projection_timing_stats(proj_timings)
-
-            # Create diagnostics and plot
-            diag = ProjectionDiagnostics(fp.projection_result)
-
-            if args.save_plot:
-                diag.save_intensity(
-                    args.save_plot,
-                    cmap=args.cmap,
-                    vmin=args.vmin,
-                    vmax=args.vmax,
-                )
-
-            if args.plot:
-                diag.plot(cmap=args.cmap, vmin=args.vmin, vmax=args.vmax)
-
-        return
-
-    # Grouped mode with parallel processing
-    groups = create_overlapping_groups(filenames, args.groupby, overlap=args.overlap)
     logging.info(
-        "Created %d groups with %d overlap file(s) on each side", len(groups), args.overlap
+        "Window config: %.1fs duration, %.0f%% overlap, min %d frames",
+        window_config.window_seconds,
+        window_config.overlap_fraction * 100,
+        window_config.min_frames_per_window,
     )
 
-    process_func = partial(
-        _process_group,
+    # Create output directory if specified
+    if args.output_dir:
+        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+        logging.info("Output directory: %s", args.output_dir)
+
+    # Create pipeline
+    pipeline = FilesMergePipeline(
+        filenames=files,
         config=config,
-        qTiming=args.timing,
+        window_config=window_config,
+        n_workers=args.workers,
         tolerance=args.tolerance,
-        qProject=do_project,
+        qTiming=args.timing,
+        qProgress=args.progress,
     )
 
-    # Determine number of workers
-    n_workers = args.workers
-    if n_workers is None:
-        n_workers = min(len(groups), os.cpu_count() or 1)
+    logging.info("Created %d time windows", pipeline.n_windows)
 
-    # Select executor(s) based on arguments
-    executors: list[tuple[str, type]] = []
-    if args.threadpool:
-        executors = [("ThreadPool", ThreadPoolExecutor)]
-    elif args.processpool:
-        executors = [("ProcessPool", ProcessPoolExecutor)]
-    else:
-        # Default: run both (--bothpools or no option specified)
-        executors = [
-            ("ThreadPool", ThreadPoolExecutor),
-            ("ProcessPool", ProcessPoolExecutor),
-        ]
+    # Collect merged images
+    merged_images = []
+    first_shown = False
 
-    for executor_name, Executor in executors:
-        logging.info("")
-        logging.info("=" * 60)
-        logging.info("Running with %s (%d workers)", executor_name, n_workers)
-        logging.info("=" * 60)
+    for merged in pipeline.iter_merged():
+        merged_images.append(merged)
 
-        bench = run_with_executor(
-            executor_name=executor_name,
-            Executor=Executor,
-            items=groups,
-            process_func=process_func,
-            n_workers=n_workers,
-            item_desc="group",
-            get_rss=lambda r: r["peak_rss"],
-        )
-        # Aggregate statistics
-        total_frames = sum(r["n_primary_frames"] for r in bench.results)
-        total_interpolated = sum(r["n_interpolated"] for r in bench.results)
-        total_extrapolated = sum(r["n_extrapolated"] for r in bench.results)
-        total_skipped = total_frames - total_interpolated - total_extrapolated
+        # Show first image immediately if --plot is requested
+        if args.plot and not first_shown:
+            first_shown = True
+            # logging.info("Displaying first merged image (processing continues)...")
+            _show_single_image(merged)
 
-        display_benchmark_header(
-            executor_name=bench.executor_name,
-            n_items=len(groups),
-            item_label="Groups",
-            total_count=total_frames,
-            count_label="Frames",
-            elapsed=bench.elapsed,
-            n_workers=bench.n_workers,
-            extra_lines=[
-                f"Interpolated: {total_interpolated}, "
-                f"Extrapolated: {total_extrapolated}, "
-                f"Skipped: {total_skipped}"
-            ],
-        )
+        # Write output files
+        if args.output_dir:
+            if args.format in ("netcdf", "both"):
+                write_merged_netcdf(merged, args.output_dir)
+            if args.format in ("png", "both"):
+                write_merged_png(merged, args.output_dir)
+            if args.geotiff:
+                write_geotiff(merged, args.output_dir)
 
-        if args.timing:
-            all_timings = aggregate_timings(
-                bench.results,
-                get_timings=lambda r: r["frame_timings"],
-            )
-            display_timing_stats(all_timings)
+    logging.info("Created %d merged images", len(merged_images))
 
-        display_memory_stats(bench.max_worker_rss)
+    # Generate MP4 movie if requested
+    if args.mp4 and merged_images:
+        write_mp4_movie(merged_images, args.mp4, fps=args.fps)
 
-        # Display projection results and plots for each group
-        if do_project:
-            # Collect valid projection results, labels, and timings
-            proj_results = []
-            proj_labels = []
-            all_proj_timings: dict[str, list[float]] = {}
+    # Generate KML file with ground overlays if requested
+    if args.kml and merged_images:
+        write_kml(merged_images, args.kml)
 
-            for r in bench.results:
-                proj_result = r.get("projection_result")
-                if proj_result is not None:
-                    proj_results.append(proj_result)
-                    proj_labels.append(f"Group {r['period']}")
+    # Generate KMZ file (self-contained package) if requested
+    if args.kmz and merged_images:
+        write_kmz(merged_images, args.kmz)
 
-                    # Collect projection timings for aggregation
-                    proj_timings = r.get("projection_timings", {})
-                    for key, val in proj_timings.items():
-                        if key not in all_proj_timings:
-                            all_proj_timings[key] = []
-                        all_proj_timings[key].append(val)
-
-            # Display aggregated projection timing statistics
-            if args.timing and all_proj_timings:
-                _display_projection_timing_stats(all_proj_timings)
-
-            # Save plots for each group
-            if args.save_plot:
-                for i, (proj_result, r) in enumerate(zip(proj_results, bench.results)):
-                    diag = ProjectionDiagnostics(proj_result)
-                    # Generate unique filename for each group
-                    base, ext = (
-                        args.save_plot.rsplit(".", 1)
-                        if "." in args.save_plot
-                        else (args.save_plot, "png")
-                    )
-                    group_file = f"{base}_{r['period'].replace(':', '-')}.{ext}"
-                    diag.save_intensity(
-                        group_file,
-                        cmap=args.cmap,
-                        vmin=args.vmin,
-                        vmax=args.vmax,
-                    )
-
-            # Show interactive viewer with all groups
-            if args.plot and proj_results:
-                viewer = ProjectionViewer(proj_results, labels=proj_labels)
-                viewer.show(
-                    cmap=args.cmap,
-                    vmin=args.vmin,
-                    vmax=args.vmax,
-                    play_interval=args.play_interval,
-                )
+    # Show full viewer if requested (after all images collected)
+    if args.plot and merged_images:
+        _show_merged_viewer(merged_images)
 
 
 def main() -> None:
     """Standalone CLI entry point."""
     from argparse import ArgumentParser
+
     from wamos_tpw.logging_config import add_logging_arguments, setup_logging
 
-    parser = ArgumentParser(description="Test files processing pipeline")
+    parser = ArgumentParser(description="Merge frames into composite images")
     add_logging_arguments(parser)
     _add_arguments(parser)
     args = parser.parse_args()

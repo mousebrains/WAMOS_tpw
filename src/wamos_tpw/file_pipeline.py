@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Iterator
 
 if TYPE_CHECKING:
     from wamos_tpw.config import Config
+    from wamos_tpw.priority_executor import Result
 
 from wamos_tpw.polarfile import PolarFile
 from wamos_tpw.frame_pipeline import FramePipeline
@@ -103,20 +104,48 @@ class FilePipeline:
         return self._frames
 
 
-def _process_file(filepath: str, config: "Config", qTiming: bool, qSave: bool) -> dict:
-    """Process a single file and return results with memory usage."""
+# ============================================================
+# Worker functions for priority executor (must be at module level)
+# ============================================================
+
+def _do_process_file(task) -> "Result":
+    """
+    Process a single polar file (worker function for priority executor).
+
+    This is the task handler for the "process_file" task type.
+    """
     import resource
+    from wamos_tpw.priority_executor import Result
+
+    filepath, config_dict, qTiming, qSave = task.data
+
+    # Reconstruct config from dict (configs aren't directly picklable)
+    from wamos_tpw.config import Config
+    config = Config()
+    if config_dict:
+        config._config = config_dict
 
     fp = FilePipeline(filepath, config=config, qTiming=qTiming, qSave=qSave)
     frame_timings = [frm.timings for frm in fp.frames] if qTiming else []
     peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    return {
-        "filepath": filepath,
-        "n_frames": len(fp),
-        "file_timings": fp.timings,
-        "frame_timings": frame_timings,
-        "peak_rss": peak_rss,
-    }
+
+    return Result(
+        task_type="process_file",
+        task_id=task.task_id,
+        data={
+            "filepath": filepath,
+            "n_frames": len(fp),
+            "file_timings": fp.timings,
+            "frame_timings": frame_timings,
+            "peak_rss": peak_rss,
+        },
+    )
+
+
+# Task handlers registry for priority executor
+TASK_HANDLERS = {
+    "process_file": _do_process_file,
+}
 
 
 def _add_arguments(parser) -> None:
@@ -129,6 +158,17 @@ def _add_arguments(parser) -> None:
     parser.add_argument("--save", "-s", action="store_true", help="Save intermediate results")
     parser.add_argument(
         "--workers", "-w", type=int, default=None, help="Number of parallel workers (default: auto)"
+    )
+
+    # Progress bar options (mutually exclusive)
+    progress_group = parser.add_mutually_exclusive_group()
+    progress_group.add_argument(
+        "--progress", dest="progress", action="store_true", default=True,
+        help="Show progress bar (default)"
+    )
+    progress_group.add_argument(
+        "--no-progress", dest="progress", action="store_false",
+        help="Hide progress bar"
     )
 
 
@@ -145,16 +185,18 @@ def add_subparser(subparsers) -> None:
 
 def run(args) -> None:
     """Execute the 'file-pipeline' command with parallel processing."""
-    from functools import partial
+    import os
+
+    from tqdm import tqdm
 
     from wamos_tpw.config import Config
     from wamos_tpw.filenames import Filenames
+    from wamos_tpw.priority_executor import Priority, PriorityProcessExecutor
     from wamos_tpw.parallel_runner import (
         aggregate_timings,
         display_benchmark_header,
         display_memory_stats,
         display_timing_stats,
-        run_benchmark,
     )
 
     config = Config(args.config) if args.config else Config()
@@ -170,44 +212,76 @@ def run(args) -> None:
 
     logging.info("Found %d files to process", len(files))
 
-    process_func = partial(
-        _process_file,
-        config=config,
-        qTiming=args.timing,
-        qSave=args.save,
+    n_workers = args.workers
+    if n_workers is None:
+        n_workers = min(len(files), os.cpu_count() or 1)
+
+    # Serialize config for passing to workers
+    config_dict = config._config if config else None
+
+    executor = PriorityProcessExecutor(
+        max_workers=n_workers,
+        task_handlers=TASK_HANDLERS,
+    )
+    executor.start()
+
+    logging.info("Processing with %d workers", n_workers)
+
+    t0 = time.perf_counter()
+    pending = 0
+    results = []
+    max_rss = 0
+
+    # Submit all files at same priority (single-stage for now)
+    for filepath in files:
+        task_data = (filepath, config_dict, args.timing, args.save)
+        executor.submit(Priority.MEDIUM, "process_file", task_data)
+        pending += 1
+
+    # Progress bar
+    pbar = tqdm(total=len(files), desc="Processing files", unit="file", disable=not args.progress)
+
+    # Collect results
+    while pending > 0:
+        result = executor.get_result(timeout=0.1)
+        if result:
+            pending -= 1
+            pbar.update(1)
+            if result.error:
+                logging.error("Error processing file: %s", result.error)
+            else:
+                results.append(result.data)
+                max_rss = max(max_rss, result.data["peak_rss"])
+
+    pbar.close()
+
+    elapsed = time.perf_counter() - t0
+    executor.shutdown()
+
+    # Display results
+    total_frames = sum(r["n_frames"] for r in results)
+    for r in results:
+        if r["n_frames"] == 0:
+            logging.warning("No frames in %s", r["filepath"])
+
+    display_benchmark_header(
+        executor_name="PriorityProcess",
+        n_items=len(files),
+        item_label="Files",
+        total_count=total_frames,
+        count_label="Frames",
+        elapsed=elapsed,
+        n_workers=n_workers,
     )
 
-    for bench in run_benchmark(
-        items=files,
-        process_func=process_func,
-        n_workers=args.workers,
-        item_desc="file",
-        get_rss=lambda r: r["peak_rss"],
-    ):
-        # Count total frames
-        total_frames = sum(r["n_frames"] for r in bench.results)
-        for r in bench.results:
-            if r["n_frames"] == 0:
-                logging.warning("No frames in %s", r["filepath"])
-
-        display_benchmark_header(
-            executor_name=bench.executor_name,
-            n_items=len(files),
-            item_label="Files",
-            total_count=total_frames,
-            count_label="Frames",
-            elapsed=bench.elapsed,
-            n_workers=bench.n_workers,
+    if args.timing:
+        all_timings = aggregate_timings(
+            results,
+            get_timings=lambda r: r["frame_timings"],
         )
+        display_timing_stats(all_timings)
 
-        if args.timing:
-            all_timings = aggregate_timings(
-                bench.results,
-                get_timings=lambda r: r["frame_timings"],
-            )
-            display_timing_stats(all_timings)
-
-        display_memory_stats(bench.max_worker_rss)
+    display_memory_stats(max_rss)
 
 
 def main() -> None:

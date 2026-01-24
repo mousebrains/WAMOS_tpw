@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import time as _time
 
+import cv2
 import numpy as np
 from scipy import ndimage
 
@@ -74,16 +75,23 @@ class Destreak:
         max_gap_length = config.get("destreak.max_gap_length", self._MAX_GAP_LENGTH)
         threshold_sigma = config.get("destreak.threshold_sigma", self._THRESHOLD_SIGMA)
 
-        # 2D convolution kernel for streak detection
+        # 2D convolution kernels for streak detection (symmetric, so no flip needed)
         kernel = np.array([[-1, -1, -1], [2, 2, 2], [-1, -1, -1]], dtype=np.float32)
         kAdjacent = np.array([[1, 1, 1], [0, 0, 0], [1, 1, 1]], dtype=np.float32)
         kAdjacent = kAdjacent / kAdjacent.sum()  # Normalize
 
         t0 = _time.perf_counter()
-        intensity = frame.intensity.astype(np.float32)  # Signed for calculation
-        # scipy.ndimage.convolve supports mode='wrap' directly
-        a = ndimage.convolve(intensity, kernel, mode="wrap")
-        b = ndimage.convolve(intensity, kAdjacent, mode="wrap")
+        intensity = frame.intensity.astype(np.float32)
+        # cv2.filter2D doesn't support BORDER_WRAP, so manually wrap bearing dimension
+        # Pad top/bottom with wrapped rows for circular bearing handling
+        pad = 1  # Kernel radius
+        padded = np.vstack([intensity[-pad:], intensity, intensity[:pad]])
+        # Apply filter with BORDER_REFLECT for range dimension (columns)
+        a_padded = cv2.filter2D(padded, -1, kernel, borderType=cv2.BORDER_REFLECT)
+        b_padded = cv2.filter2D(padded, -1, kAdjacent, borderType=cv2.BORDER_REFLECT)
+        # Remove padding
+        a = a_padded[pad:-pad]
+        b = b_padded[pad:-pad]
         self._timing["convolve"] = _time.perf_counter() - t0
 
         t0 = _time.perf_counter()
