@@ -1615,7 +1615,7 @@ def write_kml(
     Returns:
         Path to created KML file
     """
-    from xml.etree.ElementTree import Element, SubElement, ElementTree
+    from xml.etree.ElementTree import Element, SubElement, ElementTree  # nosec B405
 
     if not merged_images:
         logger.warning("No merged images for KML")
