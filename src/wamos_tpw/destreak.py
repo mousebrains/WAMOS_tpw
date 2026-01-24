@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 import time as _time
 
-import cv2
 import numpy as np
 from scipy import ndimage
 
@@ -82,13 +81,15 @@ class Destreak:
 
         t0 = _time.perf_counter()
         intensity = frame.intensity.astype(np.float32)
-        # cv2.filter2D doesn't support BORDER_WRAP, so manually wrap bearing dimension
-        # Pad top/bottom with wrapped rows for circular bearing handling
+        # Use scipy.ndimage.convolve with wrap mode for bearing (axis 0) and reflect for range (axis 1)
+        # For symmetric kernels, convolve and correlate are equivalent
+        # We need different border modes for each axis, so handle manually
         pad = 1  # Kernel radius
+        # Wrap bearing dimension (top/bottom)
         padded = np.vstack([intensity[-pad:], intensity, intensity[:pad]])
-        # Apply filter with BORDER_REFLECT for range dimension (columns)
-        a_padded = cv2.filter2D(padded, -1, kernel, borderType=cv2.BORDER_REFLECT)
-        b_padded = cv2.filter2D(padded, -1, kAdjacent, borderType=cv2.BORDER_REFLECT)
+        # Apply convolution with reflect mode for range dimension (columns)
+        a_padded = ndimage.convolve(padded, kernel, mode="reflect")
+        b_padded = ndimage.convolve(padded, kAdjacent, mode="reflect")
         # Remove padding
         a = a_padded[pad:-pad]
         b = b_padded[pad:-pad]
