@@ -477,6 +477,23 @@ def _parse_timestamp(ts: str) -> np.datetime64:
     if "-" in ts:
         # Normalize space separator to T
         ts = ts.replace(" ", "T")
+
+        # Check if time part needs colons (e.g., 2022-03-28T0000 -> 2022-03-28T00:00)
+        if "T" in ts:
+            date_part, time_part = ts.split("T", 1)
+            # If time part has no colons but has digits, normalize it
+            if ":" not in time_part and time_part.replace(".", "").isdigit():
+                # Remove any existing fractional part for processing
+                frac = ""
+                if "." in time_part:
+                    time_part, frac = time_part.split(".", 1)
+                    frac = "." + frac
+
+                # Pad time to at least 6 digits (HHmmss)
+                time_digits = time_part.ljust(6, "0")
+                time_part = f"{time_digits[:2]}:{time_digits[2:4]}:{time_digits[4:6]}{frac}"
+                ts = f"{date_part}T{time_part}"
+
         try:
             return np.datetime64(ts)
         except ValueError:
