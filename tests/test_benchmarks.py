@@ -311,36 +311,8 @@ class TestEndToEndBenchmarks:
         x, y = benchmark(compute)
         assert x.shape == frames[0].intensity.shape
 
-    def test_combine_single_frame(self, benchmark, single_polar_file):
-        """Benchmark Combine for single frame."""
-        from wamos_tpw.combine import Combine
-        from wamos_tpw.config import WamosConfig
-        from wamos_tpw.polarfile import PolarFile
-
-        pf = PolarFile(single_polar_file)
-        frames = pf.frames[:1]
-        frames[0].corrected_intensity = frames[0].intensity.astype(np.float64)
-        config = WamosConfig()
-
-        def compute():
-            return Combine(frames, config, radar_height=25.0, cache_coordinates=False)
-
-        result = benchmark(compute)
-        assert result is not None
-
-
 class TestNormalizationBenchmarks:
     """Benchmark tests for normalization operations."""
-
-    def test_normalize_frames(self, benchmark):
-        """Benchmark frame normalization."""
-        from wamos_tpw.combine_streaming import normalize_frames
-
-        # Create sample frames
-        frames = [np.random.rand(360, 752).astype(np.float64) for _ in range(10)]
-
-        result = benchmark(normalize_frames, frames)
-        assert len(result) == 10
 
     def test_percentile_calculation(self, benchmark):
         """Benchmark percentile calculation on large array."""

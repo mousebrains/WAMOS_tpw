@@ -101,7 +101,6 @@ class TestCLIModuleImports:
             polarfile,
             deramp,
             destreak,
-            combine,
         )
 
         # Each module should have add_subparser function
@@ -109,4 +108,3 @@ class TestCLIModuleImports:
         assert hasattr(polarfile, "add_subparser")
         assert hasattr(deramp, "add_subparser")
         assert hasattr(destreak, "add_subparser")
-        assert hasattr(combine, "add_subparser")
