@@ -25,6 +25,121 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 
+def _draw_ship_wind_inset(
+    fig,
+    ax_main,
+    heading: float | None,
+    ship_speed: float | None,
+    wind_direction: float | None,
+    wind_speed: float | None,
+    position: str = "lower left",
+) -> None:
+    """
+    Draw inset polar plots for ship heading and wind information.
+
+    Args:
+        fig: Matplotlib figure
+        ax_main: Main axes (for positioning reference)
+        heading: Ship heading in degrees (0=N, 90=E)
+        ship_speed: Ship speed in m/s
+        wind_direction: Wind direction in degrees (direction wind is coming FROM)
+        wind_speed: Wind speed in m/s
+        position: Position of inset ("lower left", "lower right", "upper left", "upper right")
+    """
+    import matplotlib.patches as mpatches
+    from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+
+    # Determine inset position
+    if position == "lower left":
+        bbox = (0.02, 0.02, 0.2, 0.2)
+    elif position == "lower right":
+        bbox = (0.78, 0.02, 0.2, 0.2)
+    elif position == "upper left":
+        bbox = (0.02, 0.78, 0.2, 0.2)
+    else:  # upper right
+        bbox = (0.78, 0.78, 0.2, 0.2)
+
+    # Create inset polar axes
+    ax_inset = inset_axes(
+        ax_main,
+        width="100%",
+        height="100%",
+        bbox_to_anchor=bbox,
+        bbox_transform=ax_main.transAxes,
+        loc="center",
+        axes_class=None,
+    )
+
+    # Make it a polar plot manually by drawing a circle and vectors
+    ax_inset.set_xlim(-1.5, 1.5)
+    ax_inset.set_ylim(-1.5, 1.5)
+    ax_inset.set_aspect("equal")
+    ax_inset.axis("off")
+
+    # Draw compass circle
+    circle = mpatches.Circle((0, 0), 1.0, fill=False, edgecolor="white", linewidth=1, alpha=0.7)
+    ax_inset.add_patch(circle)
+
+    # Draw compass points
+    for angle, label in [(0, "N"), (90, "E"), (180, "S"), (270, "W")]:
+        rad = np.radians(90 - angle)  # Convert to math convention (0=E, 90=N)
+        x, y = 1.15 * np.cos(rad), 1.15 * np.sin(rad)
+        ax_inset.text(x, y, label, ha="center", va="center", fontsize=7, color="white", alpha=0.8)
+
+    # Draw ship heading arrow (blue)
+    if heading is not None:
+        rad = np.radians(90 - heading)  # Convert to math convention
+        dx, dy = 0.8 * np.cos(rad), 0.8 * np.sin(rad)
+        ax_inset.annotate(
+            "",
+            xy=(dx, dy),
+            xytext=(0, 0),
+            arrowprops=dict(arrowstyle="->", color="cyan", lw=2),
+        )
+        # Label
+        speed_str = f"{ship_speed:.1f} m/s" if ship_speed is not None else ""
+        ax_inset.text(
+            0,
+            -1.4,
+            f"Ship: {heading:.0f}° {speed_str}",
+            ha="center",
+            va="top",
+            fontsize=6,
+            color="cyan",
+        )
+
+    # Draw wind direction arrow (yellow) - note: wind direction is where wind comes FROM
+    if wind_direction is not None:
+        # Arrow points in direction wind is blowing TO (opposite of FROM)
+        wind_to = (wind_direction + 180) % 360
+        rad = np.radians(90 - wind_to)
+        dx, dy = 0.7 * np.cos(rad), 0.7 * np.sin(rad)
+        # Start from edge of circle where wind comes from
+        from_rad = np.radians(90 - wind_direction)
+        sx, sy = 0.4 * np.cos(from_rad), 0.4 * np.sin(from_rad)
+        ax_inset.annotate(
+            "",
+            xy=(dx, dy),
+            xytext=(sx, sy),
+            arrowprops=dict(arrowstyle="->", color="yellow", lw=1.5),
+        )
+        # Label
+        speed_str = f"{wind_speed:.1f} m/s" if wind_speed is not None else ""
+        ax_inset.text(
+            0,
+            1.4,
+            f"Wind: {wind_direction:.0f}° {speed_str}",
+            ha="center",
+            va="bottom",
+            fontsize=6,
+            color="yellow",
+        )
+
+    # Add semi-transparent background
+    ax_inset.patch.set_facecolor("black")
+    ax_inset.patch.set_alpha(0.5)
+
+
 def _draw_range_rings(ax, extent: list, ring_interval: float = 1000.0) -> None:
     """
     Draw range rings centered at origin.
@@ -297,6 +412,8 @@ def write_merged_png(
     cmap: str = "viridis",
     vmin: float | None = None,
     vmax: float | None = None,
+    show_inset: bool = True,
+    range_rings: bool = True,
 ) -> str:
     """
     Write merged image to PNG file.
@@ -307,6 +424,8 @@ def write_merged_png(
         cmap: Colormap name
         vmin: Minimum intensity value (auto if None)
         vmax: Maximum intensity value (auto if None)
+        show_inset: Show ship heading and wind direction inset
+        range_rings: Draw range rings on the image
 
     Returns:
         Path to created file
@@ -331,7 +450,7 @@ def write_merged_png(
     if vmax is None:
         vmax = float(np.nanpercentile(intensity, 98))
 
-    fig, ax = plt.subplots(figsize=(10, 10))
+    fig, ax = plt.subplots(figsize=(12, 10))
 
     im = ax.pcolormesh(
         merged.x_edges,
@@ -347,17 +466,39 @@ def write_merged_png(
     ax.set_ylabel("Distance North (m)")
     ax.set_aspect("equal")
 
+    # Draw range rings
+    if range_rings:
+        extent = [
+            merged.x_edges[0],
+            merged.x_edges[-1],
+            merged.y_edges[0],
+            merged.y_edges[-1],
+        ]
+        _draw_range_rings(ax, extent)
+
     fig.colorbar(im, ax=ax, label="Intensity", shrink=0.8)
 
     # Title
     start_time = np.datetime_as_string(merged.start_time, unit="s")
     end_time = np.datetime_as_string(merged.end_time, unit="s")
     ax.set_title(
-        f"Merged Image: {merged.n_frames} frames\n"
+        f"WAMOS Radar - Merged Image ({merged.n_frames} frames)\n"
         f"{start_time} to {end_time}\n"
         f"Center: {abs(merged.center_lat):.4f}°{'N' if merged.center_lat >= 0 else 'S'}, "
         f"{abs(merged.center_lon):.4f}°{'E' if merged.center_lon >= 0 else 'W'}"
     )
+
+    # Add ship/wind inset
+    if show_inset:
+        _draw_ship_wind_inset(
+            fig,
+            ax,
+            heading=merged.mean_heading,
+            ship_speed=merged.mean_ship_speed,
+            wind_direction=merged.mean_wind_direction,
+            wind_speed=merged.mean_wind_speed,
+            position="lower left",
+        )
 
     plt.tight_layout()
     fig.savefig(filepath, dpi=150, bbox_inches="tight")
@@ -380,8 +521,10 @@ def write_mp4_movie(
     vmin: float | None = None,
     vmax: float | None = None,
     dpi: int = 150,
-    figsize: tuple[float, float] = (10, 8),
+    figsize: tuple[float, float] = (12, 10),
     range_rings: bool = True,
+    show_inset: bool = True,
+    title: str | None = None,
 ) -> str:
     """
     Generate an MP4 movie from merged images.
@@ -396,6 +539,8 @@ def write_mp4_movie(
         dpi: Output resolution
         figsize: Figure size in inches
         range_rings: Draw range rings on frames
+        show_inset: Show ship heading and wind direction inset
+        title: Movie title (auto-generated if None)
 
     Returns:
         Path to created file
@@ -439,12 +584,19 @@ def write_mp4_movie(
             global_bounds["ymin"] = min(global_bounds["ymin"], merged.y_edges[row_min])
             global_bounds["ymax"] = max(global_bounds["ymax"], merged.y_edges[row_max + 1])
 
+    # Generate title if not provided
+    if title is None:
+        first = merged_images[0]
+        last = merged_images[-1]
+        start_str = np.datetime_as_string(first.start_time, unit="s")
+        end_str = np.datetime_as_string(last.end_time, unit="s")
+        title = f"WAMOS Radar: {start_str} to {end_str}"
+
     # Set up figure
     fig, ax = plt.subplots(figsize=figsize)
-    plt.tight_layout()
 
     # Create writer
-    writer = FFMpegWriter(fps=fps, metadata={"title": "WAMOS Radar Movie"})
+    writer = FFMpegWriter(fps=fps, metadata={"title": title})
 
     logger.info("Generating MP4 movie with %d frames at %.1f fps", len(merged_images), fps)
 
@@ -496,13 +648,31 @@ def write_mp4_movie(
             ax.set_xlabel("Distance East (m)")
             ax.set_ylabel("Distance North (m)")
 
+            # Build title with all available info
             start_time = np.datetime_as_string(merged.start_time, unit="s")
             end_time = np.datetime_as_string(merged.end_time, unit="s")
-            ax.set_title(
-                f"Frame {i + 1}/{len(merged_images)}: {merged.n_frames} frames\n"
-                f"{start_time} to {end_time}"
-            )
 
+            title_lines = [
+                f"WAMOS Radar - Frame {i + 1}/{len(merged_images)} ({merged.n_frames} frames merged)",
+                f"{start_time} to {end_time}",
+                f"Center: {abs(merged.center_lat):.4f}°{'N' if merged.center_lat >= 0 else 'S'}, "
+                f"{abs(merged.center_lon):.4f}°{'E' if merged.center_lon >= 0 else 'W'}",
+            ]
+            ax.set_title("\n".join(title_lines), fontsize=10)
+
+            # Add ship/wind inset
+            if show_inset:
+                _draw_ship_wind_inset(
+                    fig,
+                    ax,
+                    heading=merged.mean_heading,
+                    ship_speed=merged.mean_ship_speed,
+                    wind_direction=merged.mean_wind_direction,
+                    wind_speed=merged.mean_wind_speed,
+                    position="lower left",
+                )
+
+            plt.tight_layout()
             writer.grab_frame()
 
     plt.close(fig)
