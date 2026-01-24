@@ -698,3 +698,44 @@ class TripletCollector:
     def files_complete(self) -> int:
         """Number of files marked as complete."""
         return len(self._file_frame_counts)
+
+    def prune_emitted(self) -> int:
+        """
+        Remove items that have been emitted and are no longer needed as neighbors.
+
+        An item is safe to remove when:
+        - It has been emitted as 'current'
+        - Its previous neighbor has been emitted (so it's not needed as 'next')
+        - Its next neighbor has been emitted (so it's not needed as 'prev')
+
+        Returns:
+            Number of items removed
+        """
+        to_remove = []
+
+        for key in list(self._emitted):
+            file_idx, frame_idx = key
+
+            # Check if prev neighbor has been emitted
+            prev_key = self._get_prev_key(file_idx, frame_idx)
+            if prev_key is None:
+                continue  # Can't determine yet
+            if prev_key != "FIRST" and prev_key not in self._emitted:
+                continue  # Prev not emitted yet, this item may be needed as 'next'
+
+            # Check if next neighbor has been emitted
+            next_key = self._get_next_key(file_idx, frame_idx)
+            if next_key is None:
+                continue  # Can't determine yet
+            if next_key != "LAST" and next_key not in self._emitted:
+                continue  # Next not emitted yet, this item may be needed as 'prev'
+
+            # Safe to remove
+            to_remove.append(key)
+
+        for key in to_remove:
+            if key in self._items:
+                del self._items[key]
+            self._emitted.discard(key)
+
+        return len(to_remove)

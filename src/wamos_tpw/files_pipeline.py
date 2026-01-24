@@ -319,6 +319,8 @@ class FilesMergePipeline:
         # Track how many frames each file has and how many are interpolated
         file_frame_counts: dict[int, int] = {}
         file_frames_interpolated: dict[int, int] = defaultdict(int)
+        # Track shared memory names per file for cleanup
+        file_shm_names: dict[int, list[str]] = defaultdict(list)
 
         # Progress bars
         pbar_files = tqdm(
@@ -396,12 +398,16 @@ class FilesMergePipeline:
                 for frame_data in data["frames"]:
                     triplet_collector.add(frame_data)
 
+                    # Register shared memory and track for later cleanup
                     if frame_data.theta_shm:
                         shm_manager.register(frame_data.theta_shm[0], refcount=1)
+                        file_shm_names[file_idx].append(frame_data.theta_shm[0])
                     if frame_data.ground_range_shm:
                         shm_manager.register(frame_data.ground_range_shm[0], refcount=1)
+                        file_shm_names[file_idx].append(frame_data.ground_range_shm[0])
                     if frame_data.intensity_shm:
                         shm_manager.register(frame_data.intensity_shm[0], refcount=1)
+                        file_shm_names[file_idx].append(frame_data.intensity_shm[0])
 
                 triplet_collector.file_complete(file_idx, len(data["frames"]))
 
@@ -435,6 +441,14 @@ class FilesMergePipeline:
                     file_frames_interpolated[file_idx] += 1
                     if file_frames_interpolated[file_idx] >= file_frame_counts.get(file_idx, 0):
                         files_with_all_frames_interpolated.add(file_idx)
+
+                        # Release shared memory for this file's frames
+                        if file_idx in file_shm_names:
+                            shm_manager.release_many(file_shm_names[file_idx])
+                            del file_shm_names[file_idx]
+
+                        # Prune triplet collector to free memory
+                        triplet_collector.prune_emitted()
 
                     # Route this frame to all windows that need it
                     for window_idx in file_to_windows[file_idx]:
@@ -489,8 +503,16 @@ class FilesMergePipeline:
         pbar_interp.close()
         pbar_merged.close()
 
+        # Get memory stats before cleanup
+        shm_stats = shm_manager.stats
+        triplet_stats = {
+            "items": triplet_collector.item_count,
+            "emitted": triplet_collector.emitted_count,
+            "pending": triplet_collector.pending_count,
+        }
+
         # Clean up
-        shm_manager.cleanup()
+        remaining_shm = shm_manager.cleanup()
         executor.shutdown()
 
         self._timings["total"] = time.perf_counter() - t0_total
@@ -513,6 +535,12 @@ class FilesMergePipeline:
             print(f"  Frames interpolated: {n_interp_completed}")
             print(f"  Windows merged: {self._n_merged}")
             print(f"  Max memory: {max_mem:.1f} MB")
+            print("\nMemory Management:")
+            print(f"  SharedMem registered: {shm_stats['registered']}")
+            print(f"  SharedMem released:   {shm_stats['released']}")
+            print(f"  SharedMem orphaned:   {remaining_shm}")
+            print(f"  Triplet items remaining: {triplet_stats['items']}")
+            print(f"  Triplet pending:      {triplet_stats['pending']}")
 
 
 # ============================================================
