@@ -365,18 +365,9 @@ def run(args) -> None:
             diag.plot()
 
 
-def main() -> None:
-    """Standalone CLI entry point."""
-    from argparse import ArgumentParser
-    from wamos_tpw.logging_config import add_logging_arguments, setup_logging
+from wamos_tpw.cli_utils import create_standalone_main  # noqa: E402
 
-    parser = ArgumentParser(description="Test destreak algorithm")
-    add_logging_arguments(parser)
-    _add_arguments(parser)
-    args = parser.parse_args()
-    setup_logging(args)
-    run(args)
-
+main = create_standalone_main(_add_arguments, run, "Test destreak algorithm")
 
 if __name__ == "__main__":
     main()

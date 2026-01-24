@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from pathlib import Path
 
-from wamos_tpw.filenames import Filenames, _parse_timestamp, _extract_file_timestamp
+from wamos_tpw.filenames import Filenames, _parse_timestamp, extract_file_timestamp
 
 
 class TestParseTimestamp:
@@ -72,22 +72,22 @@ class TestParseTimestamp:
 
 
 class TestExtractFileTimestamp:
-    """Tests for _extract_file_timestamp function."""
+    """Tests for extract_file_timestamp function."""
 
     def test_valid_filename(self):
         """Test extraction from valid filename."""
-        ts = _extract_file_timestamp("20220328031530abc.pol")
+        ts = extract_file_timestamp("20220328031530abc.pol")
         assert ts is not None
         assert "2022-03-28T03:15:30" in str(ts)
 
     def test_short_filename(self):
         """Test short filename returns None."""
-        ts = _extract_file_timestamp("short.pol")
+        ts = extract_file_timestamp("short.pol")
         assert ts is None
 
     def test_non_digit_prefix(self):
         """Test non-digit prefix returns None."""
-        ts = _extract_file_timestamp("abcd0328031530.pol")
+        ts = extract_file_timestamp("abcd0328031530.pol")
         assert ts is None
 
 

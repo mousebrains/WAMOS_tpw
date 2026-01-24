@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from matplotlib.image import AxesImage
     from matplotlib.colorbar import Colorbar
     from wamos_tpw.frame import Frame
-    from wamos_tpw.multi_theta import MultiTheta as Theta, MultiBearing as Bearing
+    from wamos_tpw.bearing import MultiTheta as Theta, MultiBearing as Bearing
 
 
 # -----------------------------------------------------------------------------

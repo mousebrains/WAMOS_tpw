@@ -92,7 +92,7 @@ Examples:
     from wamos_tpw import files, bearing, theta
     from wamos_tpw import filenames, polarfile, config
     from wamos_tpw import deramp, destreak, shadow, dewind, pps
-    from wamos_tpw import frame_pipeline, file_pipeline, files_pipeline, interpolator
+    from wamos_tpw import frame_pipeline, files_pipeline, interpolator
     from wamos_tpw import range as range_module  # Avoid shadowing builtin
     from wamos_tpw import list_frames
 
@@ -109,7 +109,6 @@ Examples:
     dewind.add_subparser(subparsers)  # wamos dewind
     pps.add_subparser(subparsers)  # wamos PPS
     frame_pipeline.add_subparser(subparsers)  # wamos frame-pipeline
-    file_pipeline.add_subparser(subparsers)  # wamos file-pipeline
     files_pipeline.add_subparser(subparsers)  # wamos files-pipeline
     interpolator.add_subparser(subparsers)  # wamos interpolator
     list_frames.add_subparser(subparsers)  # wamos list-frames

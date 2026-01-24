@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from wamos_tpw.constants import C_AIR
 from wamos_tpw.exceptions import ValidationError
 
 if TYPE_CHECKING:
@@ -20,9 +21,6 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
-
-# Conversion constant
-KNOTS_TO_MS = 0.514444  # 1 knot = 0.514444 m/s
 
 
 @dataclass
@@ -80,17 +78,6 @@ class Frame:
     _MASK_BIT13 = np.uint16(0x2000)  # Bit 13 (Bearing pulse)
     _MASK_BIT14 = np.uint16(0x4000)  # Bit 14
     _MASK_BIT15 = np.uint16(0x8000)  # Bit 15
-
-    # Physical constants for range calculations
-    _C_VACUUM = 299_792_458.0  # Speed of light in vacuum (m/s)
-
-    # Refractive index of air at standard conditions:
-    # 20°C, 50% relative humidity, 1013.25 hPa
-    # Based on Ciddor equation approximation
-    _N_AIR_STANDARD = 1.000273
-
-    # Speed of light in air at standard conditions (m/s)
-    _C_AIR = _C_VACUUM / _N_AIR_STANDARD  # ~299,710,639 m/s
 
     def __init__(
         self,
@@ -473,7 +460,7 @@ class Frame:
         sfreq_hz = sfreq_mhz * 1e6
         # Round-trip time per sample = 1/sfreq
         # One-way distance = c_air * t / 2 = c_air / (2 * sfreq)
-        return self._C_AIR / (2.0 * sfreq_hz)
+        return C_AIR / (2.0 * sfreq_hz)
 
     def slant_range(self, bin_indices: np.ndarray | None = None) -> np.ndarray:
         """
@@ -658,8 +645,10 @@ def main() -> None:
 
     # Test range calculations
     print("\n--- Range Calculations ---")
-    print(f"Speed of light in air: {Frame._C_AIR:.0f} m/s")
-    print(f"Refractive index (20°C, 50% RH): {Frame._N_AIR_STANDARD}")
+    from wamos_tpw.constants import N_AIR_STANDARD
+
+    print(f"Speed of light in air: {C_AIR:.0f} m/s")
+    print(f"Refractive index (20°C, 50% RH): {N_AIR_STANDARD}")
     print(f"Range resolution: {frame.range_resolution:.4f} m/bin")
 
     # Slant ranges

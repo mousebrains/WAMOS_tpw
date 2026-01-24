@@ -70,18 +70,9 @@ def run(args) -> None:
             logging.info("%s Frame(%d): PPS indices: %s", fn, index, pps.indices)
 
 
-def main() -> None:
-    """Standalone CLI entry point."""
-    from argparse import ArgumentParser
-    from wamos_tpw.logging_config import add_logging_arguments, setup_logging
+from wamos_tpw.cli_utils import create_standalone_main  # noqa: E402
 
-    parser = ArgumentParser(description="Test PPS on a polar file")
-    add_logging_arguments(parser)
-    _add_arguments(parser)
-    args = parser.parse_args()
-    setup_logging(args)
-    run(args)
-
+main = create_standalone_main(_add_arguments, run, "Test PPS on a polar file")
 
 if __name__ == "__main__":
     main()

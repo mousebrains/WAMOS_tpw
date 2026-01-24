@@ -20,8 +20,9 @@ import time as _time
 import numpy as np
 import zstandard as zstd
 
-from wamos_tpw.frame import Frame, FrameMetadata, KNOTS_TO_MS
-from wamos_tpw.filenames import _extract_file_timestamp
+from wamos_tpw.constants import KNOTS_TO_MS
+from wamos_tpw.frame import Frame, FrameMetadata
+from wamos_tpw.filenames import extract_file_timestamp
 from wamos_tpw.config import Config
 
 
@@ -401,7 +402,7 @@ class PolarFile:
     def _build_metadata_from_header(self) -> FrameMetadata:
         """Build FrameMetadata from header when no frame section exists."""
         # Try to get timestamp from filename
-        timestamp = _extract_file_timestamp(str(self._filepath))
+        timestamp = extract_file_timestamp(str(self._filepath))
         if timestamp is None:
             timestamp = np.datetime64("NaT")
 
@@ -719,18 +720,9 @@ def run(args) -> None:
             logging.error("Failed to parse %s: %s", filepath, e)
 
 
-def main() -> None:
-    """Standalone CLI entry point."""
-    from argparse import ArgumentParser
-    from wamos_tpw.logging_config import add_logging_arguments, setup_logging
+from wamos_tpw.cli_utils import create_standalone_main  # noqa: E402
 
-    parser = ArgumentParser(description="Parse WAMOS polar file")
-    add_logging_arguments(parser)
-    _add_arguments(parser)
-    args = parser.parse_args()
-    setup_logging(args)
-    run(args)
-
+main = create_standalone_main(_add_arguments, run, "Parse WAMOS polar file")
 
 if __name__ == "__main__":
     main()

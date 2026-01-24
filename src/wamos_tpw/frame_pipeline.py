@@ -266,6 +266,39 @@ class FramePipeline:
         return f"<FramePipeline timestamp={self._metadata.timestamp}>"
 
 
+def process_polar_file(
+    filename: str,
+    config: "Config | None" = None,
+    qSave: bool = False,
+    qTiming: bool = False,
+) -> list[FramePipeline]:
+    """
+    Process all frames in a polar file through the pipeline.
+
+    This is a convenience function that processes each frame in a polar file
+    through the FramePipeline.
+
+    Args:
+        filename: Path to the polar file to process
+        config: Optional YAML configuration object
+        qSave: Save intermediate results for debugging
+        qTiming: Time each processing step
+
+    Returns:
+        List of FramePipeline objects, one per frame in the file
+
+    Example:
+        >>> from wamos_tpw.frame_pipeline import process_polar_file
+        >>> frames = process_polar_file("20241215103045.pol.gz")
+        >>> for fp in frames:
+        ...     print(fp.timestamp, fp.final_intensity.shape)
+    """
+    from wamos_tpw.polarfile import PolarFile
+
+    pf = PolarFile(filename, config=config)
+    return [FramePipeline(frame, config=config, qSave=qSave, qTiming=qTiming) for frame in pf]
+
+
 def _process_frame(
     filepath: str, frame_index: int, config: "Config", qTiming: bool, qSave: bool
 ) -> dict:
@@ -391,18 +424,9 @@ def run(args) -> None:
         display_memory_stats(bench.max_worker_rss)
 
 
-def main() -> None:
-    """Standalone CLI entry point."""
-    from argparse import ArgumentParser
-    from wamos_tpw.logging_config import add_logging_arguments, setup_logging
+from wamos_tpw.cli_utils import create_standalone_main  # noqa: E402
 
-    parser = ArgumentParser(description="Test single frame processing pipeline")
-    add_logging_arguments(parser)
-    _add_arguments(parser)
-    args = parser.parse_args()
-    setup_logging(args)
-    run(args)
-
+main = create_standalone_main(_add_arguments, run, "Test single frame processing pipeline")
 
 if __name__ == "__main__":
     main()

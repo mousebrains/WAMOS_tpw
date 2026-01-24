@@ -93,6 +93,7 @@ Contents
 
    architecture
    configuration
+   deployment
    examples
    performance
 

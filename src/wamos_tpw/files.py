@@ -14,7 +14,7 @@ from typing import Iterator, Callable, Any
 
 import numpy as np
 
-from wamos_tpw.multi_theta import MultiTheta as Theta, MultiBearing as Bearing
+from wamos_tpw.bearing import MultiTheta as Theta, MultiBearing as Bearing
 from wamos_tpw.config import Config
 from wamos_tpw.filenames import Filenames, _parse_timestamp
 from wamos_tpw.frame import Frame
@@ -1058,18 +1058,9 @@ def run(args) -> None:
                         plt.show()
 
 
-def main() -> None:
-    """Standalone CLI entry point."""
-    from argparse import ArgumentParser
-    from wamos_tpw.logging_config import add_logging_arguments, setup_logging
+from wamos_tpw.cli_utils import create_standalone_main  # noqa: E402
 
-    parser = ArgumentParser(description="Load WAMOS polar files in time-based groups")
-    add_logging_arguments(parser)
-    _add_arguments(parser)
-    args = parser.parse_args()
-    setup_logging(args)
-    run(args)
-
+main = create_standalone_main(_add_arguments, run, "Load WAMOS polar files in time-based groups")
 
 if __name__ == "__main__":
     main()

@@ -279,7 +279,7 @@ class TestEndToEndBenchmarks:
 
     def test_theta_calculation(self, benchmark, single_polar_file):
         """Benchmark Theta calculation."""
-        from wamos_tpw.multi_theta import MultiTheta as Theta
+        from wamos_tpw.bearing import MultiTheta as Theta
         from wamos_tpw.config import WamosConfig
         from wamos_tpw.polarfile import PolarFile
 
@@ -295,7 +295,7 @@ class TestEndToEndBenchmarks:
 
     def test_bearing_calculation(self, benchmark, single_polar_file):
         """Benchmark Bearing coordinate calculation."""
-        from wamos_tpw.multi_theta import MultiTheta as Theta, MultiBearing as Bearing
+        from wamos_tpw.bearing import MultiTheta as Theta, MultiBearing as Bearing
         from wamos_tpw.config import WamosConfig
         from wamos_tpw.polarfile import PolarFile
 

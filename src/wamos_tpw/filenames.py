@@ -15,7 +15,7 @@ from typing import Iterator
 from functools import partial
 
 
-def _extract_file_timestamp(filepath: str) -> np.datetime64 | None:
+def extract_file_timestamp(filepath: str) -> np.datetime64 | None:
     """
     Extract timestamp from a filename.
 
@@ -304,7 +304,7 @@ class Filenames:
         groups: dict[np.datetime64, list[str]] = {}
 
         for filepath in self.files:
-            ts = _extract_file_timestamp(filepath)
+            ts = extract_file_timestamp(filepath)
             if ts is None:
                 continue
             # Truncate to the specified frequency (calendar-aligned)
@@ -416,7 +416,7 @@ class Filenames:
         stime_ns = self.stime.astype(np.int64)
 
         for filepath in self.files:
-            ts = _extract_file_timestamp(filepath)
+            ts = extract_file_timestamp(filepath)
             if ts is None:
                 continue
 
@@ -648,23 +648,20 @@ def run(args) -> None:
     logging.info(f"Found {len(filenames)} files in {t1 - t0:.3f}s")
 
 
-def main() -> None:
-    """Standalone CLI entry point."""
-    from argparse import ArgumentParser
-    from wamos_tpw.logging_config import add_logging_arguments, setup_logging
+from wamos_tpw.cli_utils import create_standalone_main  # noqa: E402
 
-    parser = ArgumentParser(
-        description="Extract WAMOS polar data files between two timestamps.",
-        epilog="Timestamp formats: YYYY, YYYYMM, YYYYMMDD, YYYYMMDDHH, YYYYMMDDHHmm, "
-        "YYYYMMDDHHmmss, YYYYMMDDHHmmssSSS (ms), YYYYMMDDHHmmssSSSSSS (us), "
-        "or ISO format (YYYY-MM-DD, YYYY-MM-DDTHH:mm:ss, etc.)",
-    )
-    add_logging_arguments(parser)
-    _add_arguments(parser)
-    args = parser.parse_args()
-    setup_logging(args)
-    run(args)
+_TIMESTAMP_EPILOG = (
+    "Timestamp formats: YYYY, YYYYMM, YYYYMMDD, YYYYMMDDHH, YYYYMMDDHHmm, "
+    "YYYYMMDDHHmmss, YYYYMMDDHHmmssSSS (ms), YYYYMMDDHHmmssSSSSSS (us), "
+    "or ISO format (YYYY-MM-DD, YYYY-MM-DDTHH:mm:ss, etc.)"
+)
 
+main = create_standalone_main(
+    _add_arguments,
+    run,
+    "Extract WAMOS polar data files between two timestamps.",
+    epilog=_TIMESTAMP_EPILOG,
+)
 
 if __name__ == "__main__":
     main()

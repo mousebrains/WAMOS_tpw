@@ -115,18 +115,9 @@ def run(args) -> None:
     print_frames(args.stime, args.etime, args.polar_path, config)
 
 
-def main() -> None:
-    """Standalone CLI entry point."""
-    from argparse import ArgumentParser
-    from wamos_tpw.logging_config import add_logging_arguments, setup_logging
+from wamos_tpw.cli_utils import create_standalone_main  # noqa: E402
 
-    parser = ArgumentParser(description="List frame timestamps and repeat times")
-    add_logging_arguments(parser)
-    _add_arguments(parser)
-    args = parser.parse_args()
-    setup_logging(args)
-    run(args)
-
+main = create_standalone_main(_add_arguments, run, "List frame timestamps and repeat times")
 
 if __name__ == "__main__":
     main()

@@ -12,6 +12,7 @@ import logging
 import numpy as np
 
 from wamos_tpw.config import Config
+from wamos_tpw.constants import C_AIR
 from wamos_tpw.frame import Frame
 
 
@@ -45,16 +46,6 @@ class Range:
         >>> rng = Range(frame)
         >>> print(f"Ground range: [{rng.ground_range.min():.1f}, {rng.ground_range.max():.1f}] m")
     """
-
-    # Physical constants for range calculations
-    _C_VACUUM = 299_792_458.0  # Speed of light in vacuum (m/s)
-
-    # Refractive index of air at standard conditions:
-    # 20°C, 50% relative humidity, 1013.25 hPa
-    _N_AIR_STANDARD = 1.000273
-
-    # Speed of light in air at standard conditions (m/s)
-    _C_AIR = _C_VACUUM / _N_AIR_STANDARD  # ~299,710,639 m/s
 
     def __init__(self, frame: Frame) -> None:
         """
@@ -94,7 +85,7 @@ class Range:
         sfreq_hz = sfreq_mhz * 1e6
         # Round-trip time per sample = 1/sfreq
         # One-way distance = c_air * t / 2 = c_air / (2 * sfreq)
-        return self._C_AIR / (2.0 * sfreq_hz)
+        return C_AIR / (2.0 * sfreq_hz)
 
     def _calculate_slant_range(self) -> np.ndarray:
         """
@@ -267,18 +258,9 @@ def run(args) -> None:
         )
 
 
-def main() -> None:
-    """Standalone CLI entry point."""
-    from argparse import ArgumentParser
-    from wamos_tpw.logging_config import add_logging_arguments, setup_logging
+from wamos_tpw.cli_utils import create_standalone_main  # noqa: E402
 
-    parser = ArgumentParser(description="Calculate radar range from polar file")
-    add_logging_arguments(parser)
-    _add_arguments(parser)
-    args = parser.parse_args()
-    setup_logging(args)
-    run(args)
-
+main = create_standalone_main(_add_arguments, run, "Calculate radar range from polar file")
 
 if __name__ == "__main__":
     main()
