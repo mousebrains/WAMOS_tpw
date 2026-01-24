@@ -1,11 +1,7 @@
 #! /usr/bin/env python3
 """Integration tests for wamos_tpw.files_pipeline module."""
 
-import tempfile
-from pathlib import Path
-
 import numpy as np
-import pytest
 
 from wamos_tpw.config import Config
 from wamos_tpw.files_pipeline import FilesMergePipeline
@@ -464,23 +460,17 @@ class TestEndToEndWorkflow:
         # Frame 1: all 10s
         intensity1 = np.ones((10, 10), dtype=np.float64) * 10
         count1 = np.ones((10, 10), dtype=np.int32)
-        accumulator.add_projected(
-            intensity1, count1, np.datetime64("2022-01-01T00:00:00"), 180.0
-        )
+        accumulator.add_projected(intensity1, count1, np.datetime64("2022-01-01T00:00:00"), 180.0)
 
         # Frame 2: all 20s
         intensity2 = np.ones((10, 10), dtype=np.float64) * 20
         count2 = np.ones((10, 10), dtype=np.int32)
-        accumulator.add_projected(
-            intensity2, count2, np.datetime64("2022-01-01T00:00:10"), 180.0
-        )
+        accumulator.add_projected(intensity2, count2, np.datetime64("2022-01-01T00:00:10"), 180.0)
 
         # Frame 3: all 30s
         intensity3 = np.ones((10, 10), dtype=np.float64) * 30
         count3 = np.ones((10, 10), dtype=np.int32)
-        accumulator.add_projected(
-            intensity3, count3, np.datetime64("2022-01-01T00:00:20"), 180.0
-        )
+        accumulator.add_projected(intensity3, count3, np.datetime64("2022-01-01T00:00:20"), 180.0)
 
         merged = accumulator.finalize()
 
@@ -510,12 +500,8 @@ class TestCircularMeanHeading:
         count = np.ones((10, 10), dtype=np.int32)
 
         # Add frames with headings around 0/360
-        accumulator.add_projected(
-            intensity, count, np.datetime64("2022-01-01T00:00:00"), 355.0
-        )
-        accumulator.add_projected(
-            intensity, count, np.datetime64("2022-01-01T00:00:10"), 5.0
-        )
+        accumulator.add_projected(intensity, count, np.datetime64("2022-01-01T00:00:00"), 355.0)
+        accumulator.add_projected(intensity, count, np.datetime64("2022-01-01T00:00:10"), 5.0)
 
         merged = accumulator.finalize()
 
@@ -541,12 +527,8 @@ class TestCircularMeanHeading:
         count = np.ones((10, 10), dtype=np.int32)
 
         # Add frames with headings 90 and 270 (opposite)
-        accumulator.add_projected(
-            intensity, count, np.datetime64("2022-01-01T00:00:00"), 90.0
-        )
-        accumulator.add_projected(
-            intensity, count, np.datetime64("2022-01-01T00:00:10"), 270.0
-        )
+        accumulator.add_projected(intensity, count, np.datetime64("2022-01-01T00:00:00"), 90.0)
+        accumulator.add_projected(intensity, count, np.datetime64("2022-01-01T00:00:10"), 270.0)
 
         merged = accumulator.finalize()
 

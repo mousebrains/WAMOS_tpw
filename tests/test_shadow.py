@@ -168,7 +168,6 @@ class TestShadowWithConfig:
         frame = pf[0]
 
         # Create a theta with the empty config
-        from wamos_tpw.frame import Frame
 
         # Override the frame's config to use our empty shadow config
         frame._config = config

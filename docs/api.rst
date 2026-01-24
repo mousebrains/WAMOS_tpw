@@ -95,12 +95,12 @@ High-level file loading interface with grouping.
 Pipelines
 ---------
 
-File Pipeline
-~~~~~~~~~~~~~
+Frame Pipeline
+~~~~~~~~~~~~~~
 
-Single file processing pipeline.
+Per-frame processing pipeline.
 
-.. automodule:: wamos_tpw.file_pipeline
+.. automodule:: wamos_tpw.frame_pipeline
    :members:
    :undoc-members:
    :show-inheritance:
@@ -115,12 +115,52 @@ Multi-file processing pipeline with time windowing.
    :undoc-members:
    :show-inheritance:
 
-Frame Pipeline
+Grid
+~~~~
+
+UTM grid computation and projection.
+
+.. automodule:: wamos_tpw.grid
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Window
+~~~~~~
+
+Time window creation and frame accumulation.
+
+.. automodule:: wamos_tpw.window
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Merged Image
+~~~~~~~~~~~~
+
+Data structures for merged radar images.
+
+.. automodule:: wamos_tpw.merged_image
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Merged Viewer
+~~~~~~~~~~~~~
+
+Visualization for merged images.
+
+.. automodule:: wamos_tpw.merged_viewer
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Output Writers
 ~~~~~~~~~~~~~~
 
-Per-frame processing pipeline.
+Output format writers (NetCDF, PNG, GeoTIFF, KML/KMZ).
 
-.. automodule:: wamos_tpw.frame_pipeline
+.. automodule:: wamos_tpw.output_writers
    :members:
    :undoc-members:
    :show-inheritance:
@@ -137,6 +177,26 @@ Multi-frame interpolation for motion correction.
 
 Utilities
 ---------
+
+Constants
+~~~~~~~~~
+
+Physical constants for radar calculations.
+
+.. automodule:: wamos_tpw.constants
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+CLI Utilities
+~~~~~~~~~~~~~
+
+CLI boilerplate utilities.
+
+.. automodule:: wamos_tpw.cli_utils
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
 Logging
 ~~~~~~~

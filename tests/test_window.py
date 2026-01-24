@@ -83,7 +83,9 @@ class TestCreateTimeWindows:
         ]
         files = self.create_test_files(temp_dir, timestamps)
 
-        config = TimeWindowConfig(window_seconds=60.0, overlap_fraction=0.0, min_frames_per_window=3)
+        config = TimeWindowConfig(
+            window_seconds=60.0, overlap_fraction=0.0, min_frames_per_window=3
+        )
         windows = create_time_windows(files, config)
 
         assert len(windows) >= 1
@@ -162,7 +164,9 @@ class TestCreateTimeWindows:
         ]
         files = self.create_test_files(temp_dir, timestamps)
 
-        config = TimeWindowConfig(window_seconds=60.0, overlap_fraction=0.0, min_frames_per_window=1)
+        config = TimeWindowConfig(
+            window_seconds=60.0, overlap_fraction=0.0, min_frames_per_window=1
+        )
         windows = create_time_windows(files, config)
 
         # Check first window boundaries
@@ -478,7 +482,9 @@ class TestWindowIntegration:
             files.append(str(filepath))
 
         # Create windows
-        config = TimeWindowConfig(window_seconds=40.0, overlap_fraction=0.5, min_frames_per_window=3)
+        config = TimeWindowConfig(
+            window_seconds=40.0, overlap_fraction=0.5, min_frames_per_window=3
+        )
         windows = create_time_windows(files, config)
 
         assert len(windows) >= 2
@@ -503,7 +509,7 @@ class TestWindowIntegration:
         for i, idx in enumerate(file_indices):
             intensity = np.random.rand(2, 2).astype(np.float64)
             count = np.ones((2, 2), dtype=np.int32)
-            timestamp = np.datetime64(f"2024-01-15T10:00:{i*10:02d}")
+            timestamp = np.datetime64(f"2024-01-15T10:00:{i * 10:02d}")
 
             acc.add_projected(
                 projected_intensity=intensity,
