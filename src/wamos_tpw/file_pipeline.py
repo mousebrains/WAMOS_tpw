@@ -108,6 +108,7 @@ class FilePipeline:
 # Worker functions for priority executor (must be at module level)
 # ============================================================
 
+
 def _do_process_file(task) -> "Result":
     """
     Process a single polar file (worker function for priority executor).
@@ -121,6 +122,7 @@ def _do_process_file(task) -> "Result":
 
     # Reconstruct config from dict (configs aren't directly picklable)
     from wamos_tpw.config import Config
+
     config = Config()
     if config_dict:
         config._config = config_dict
@@ -163,12 +165,14 @@ def _add_arguments(parser) -> None:
     # Progress bar options (mutually exclusive)
     progress_group = parser.add_mutually_exclusive_group()
     progress_group.add_argument(
-        "--progress", dest="progress", action="store_true", default=True,
-        help="Show progress bar (default)"
+        "--progress",
+        dest="progress",
+        action="store_true",
+        default=True,
+        help="Show progress bar (default)",
     )
     progress_group.add_argument(
-        "--no-progress", dest="progress", action="store_false",
-        help="Hide progress bar"
+        "--no-progress", dest="progress", action="store_false", help="Hide progress bar"
     )
 
 

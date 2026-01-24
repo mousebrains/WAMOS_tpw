@@ -311,6 +311,7 @@ class TestEndToEndBenchmarks:
         x, y = benchmark(compute)
         assert x.shape == frames[0].intensity.shape
 
+
 class TestNormalizationBenchmarks:
     """Benchmark tests for normalization operations."""
 

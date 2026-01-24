@@ -200,9 +200,7 @@ class UTMGrid:
         y_edges_centered = self.y_edges - y_center
 
         # Get center lat/lon
-        center_lat, center_lon = self.to_latlon(
-            np.array([x_center]), np.array([y_center])
-        )
+        center_lat, center_lon = self.to_latlon(np.array([x_center]), np.array([y_center]))
         center_lat = float(center_lat[0])
         center_lon = float(center_lon[0])
 
@@ -429,13 +427,7 @@ def project_to_utm(
     values_flat = intensity.ravel()
 
     # Filter valid indices
-    valid = (
-        (x_flat >= 0)
-        & (x_flat < n_x)
-        & (y_flat >= 0)
-        & (y_flat < n_y)
-        & ~np.isnan(values_flat)
-    )
+    valid = (x_flat >= 0) & (x_flat < n_x) & (y_flat >= 0) & (y_flat < n_y) & ~np.isnan(values_flat)
 
     n_valid = np.sum(valid)
     if n_valid > 0:
@@ -1743,6 +1735,7 @@ class InterpolatorViewer:
     def wait(self) -> None:
         """Block until the viewer is closed (call after loading is complete)."""
         import matplotlib.pyplot as plt
+
         plt.ioff()  # Disable interactive mode
         plt.show()  # This blocks
 
@@ -1760,9 +1753,13 @@ class InterpolatorViewer:
             if self._expected_total:
                 loading_msg = f"Loading... (0/{self._expected_total})"
             self._ax_main.text(
-                0.5, 0.5, loading_msg,
+                0.5,
+                0.5,
+                loading_msg,
                 transform=self._ax_main.transAxes,
-                ha="center", va="center", fontsize=14
+                ha="center",
+                va="center",
+                fontsize=14,
             )
             self._fig.canvas.draw_idle()
             self._fig.canvas.flush_events()
@@ -1788,8 +1785,10 @@ class InterpolatorViewer:
 
         # Add range rings every 1km
         max_extent = max(
-            abs(params["x_edges"][0]), abs(params["x_edges"][-1]),
-            abs(params["y_edges"][0]), abs(params["y_edges"][-1])
+            abs(params["x_edges"][0]),
+            abs(params["x_edges"][-1]),
+            abs(params["y_edges"][0]),
+            abs(params["y_edges"][-1]),
         )
         for r in range(1000, int(max_extent) + 1000, 1000):
             circle = plt.Circle((0, 0), r, fill=False, color="white", linewidth=0.5, alpha=0.5)
@@ -1799,9 +1798,14 @@ class InterpolatorViewer:
             label_y = r * 0.707
             if label_x < max_extent * 0.9 and label_y < max_extent * 0.9:
                 self._ax_main.text(
-                    label_x, label_y, f"{r // 1000}km",
-                    color="white", fontsize=8, alpha=0.7,
-                    ha="center", va="center"
+                    label_x,
+                    label_y,
+                    f"{r // 1000}km",
+                    color="white",
+                    fontsize=8,
+                    alpha=0.7,
+                    ha="center",
+                    va="center",
                 )
 
         # Add colorbar (only on first update)
@@ -1905,6 +1909,7 @@ class InterpolatorViewer:
         elif event.key in ("q", "escape"):
             self._stop_play()
             import matplotlib.pyplot as plt
+
             plt.close(self._fig)
 
     def _on_close(self, event) -> None:

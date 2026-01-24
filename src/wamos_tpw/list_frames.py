@@ -84,9 +84,7 @@ def print_frames(
         else:
             gap_str = ""
 
-        print(
-            f"{np.datetime_as_string(ts, unit='ms')}  repeat={repeat:.3f}s{gap_str}"
-        )
+        print(f"{np.datetime_as_string(ts, unit='ms')}  repeat={repeat:.3f}s{gap_str}")
         prev_ts = ts
 
 

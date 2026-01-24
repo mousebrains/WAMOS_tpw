@@ -498,13 +498,7 @@ def project_frame_to_common_grid(
     values_flat = intensity.ravel()
 
     # Filter valid indices
-    valid = (
-        (x_flat >= 0)
-        & (x_flat < n_x)
-        & (y_flat >= 0)
-        & (y_flat < n_y)
-        & ~np.isnan(values_flat)
-    )
+    valid = (x_flat >= 0) & (x_flat < n_x) & (y_flat >= 0) & (y_flat < n_y) & ~np.isnan(values_flat)
 
     if np.sum(valid) > 0:
         linear_idx = y_flat[valid] * n_x + x_flat[valid]
@@ -852,12 +846,8 @@ class FilesMergePipeline:
                         grid_params["n_y"],
                     )
                 else:
-                    frame_sum = np.zeros(
-                        (grid_params["n_y"], grid_params["n_x"]), dtype=np.float64
-                    )
-                    frame_count = np.zeros(
-                        (grid_params["n_y"], grid_params["n_x"]), dtype=np.int32
-                    )
+                    frame_sum = np.zeros((grid_params["n_y"], grid_params["n_x"]), dtype=np.float64)
+                    frame_count = np.zeros((grid_params["n_y"], grid_params["n_x"]), dtype=np.int32)
                     if proj_intensity.shape == frame_sum.shape:
                         valid = ~np.isnan(proj_intensity)
                         frame_sum[valid] = proj_intensity[valid]
@@ -871,12 +861,8 @@ class FilesMergePipeline:
                     frame_data.get("file_index", -1),
                     frame_data.get("frame_index", -1),
                 )
-                frame_sum = np.zeros(
-                    (grid_params["n_y"], grid_params["n_x"]), dtype=np.float64
-                )
-                frame_count = np.zeros(
-                    (grid_params["n_y"], grid_params["n_x"]), dtype=np.int32
-                )
+                frame_sum = np.zeros((grid_params["n_y"], grid_params["n_x"]), dtype=np.float64)
+                frame_count = np.zeros((grid_params["n_y"], grid_params["n_x"]), dtype=np.int32)
 
             accumulator.add_projected(
                 projected_intensity=frame_sum,
@@ -975,16 +961,19 @@ class FilesMergePipeline:
         # Progress bars
         # Interpolation count approximates file count (one frame per file typically)
         pbar_files = tqdm(
-            total=len(file_indices_to_process), desc="Loading files", unit="file",
-            disable=not self._qProgress
+            total=len(file_indices_to_process),
+            desc="Loading files",
+            unit="file",
+            disable=not self._qProgress,
         )
         pbar_interp = tqdm(
-            total=len(file_indices_to_process), desc="Interpolating", unit="frame",
-            disable=not self._qProgress
+            total=len(file_indices_to_process),
+            desc="Interpolating",
+            unit="frame",
+            disable=not self._qProgress,
         )
         pbar_merged = tqdm(
-            total=len(self._windows), desc="Merging", unit="window",
-            disable=not self._qProgress
+            total=len(self._windows), desc="Merging", unit="window", disable=not self._qProgress
         )
 
         # Track interpolation count for timing statistics
@@ -993,9 +982,11 @@ class FilesMergePipeline:
         # Memory tracking
         try:
             import resource
+
             def get_max_memory_mb():
                 return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 * 1024)
         except ImportError:
+
             def get_max_memory_mb():
                 return 0.0
 
@@ -1670,9 +1661,7 @@ def write_kml(
     for i, merged in enumerate(merged_images):
         # Generate image filename
         start_str = (
-            np.datetime_as_string(merged.start_time, unit="s")
-            .replace(":", "-")
-            .replace("T", "_")
+            np.datetime_as_string(merged.start_time, unit="s").replace(":", "-").replace("T", "_")
         )
         image_filename = f"overlay_{i:04d}_{start_str}.png"
         image_path = image_dir / image_filename
@@ -1862,9 +1851,7 @@ def _compute_latlon_bounds(merged: MergedImage) -> dict:
     from pyproj import CRS, Transformer
 
     # Create transformers
-    utm_crs = CRS.from_proj4(
-        f"+proj=utm +zone={merged.utm_zone} +{merged.hemisphere} +datum=WGS84"
-    )
+    utm_crs = CRS.from_proj4(f"+proj=utm +zone={merged.utm_zone} +{merged.hemisphere} +datum=WGS84")
     crs_wgs84 = CRS.from_epsg(4326)
     transformer_to_ll = Transformer.from_crs(utm_crs, crs_wgs84, always_xy=True)
     transformer_to_utm = Transformer.from_crs(crs_wgs84, utm_crs, always_xy=True)
@@ -1992,12 +1979,14 @@ def _add_arguments(parser) -> None:
     # Progress bar options (mutually exclusive)
     progress_group = parser.add_mutually_exclusive_group()
     progress_group.add_argument(
-        "--progress", dest="progress", action="store_true", default=True,
-        help="Show progress bars (default)"
+        "--progress",
+        dest="progress",
+        action="store_true",
+        default=True,
+        help="Show progress bars (default)",
     )
     progress_group.add_argument(
-        "--no-progress", dest="progress", action="store_false",
-        help="Hide progress bars"
+        "--no-progress", dest="progress", action="store_false", help="Hide progress bars"
     )
 
 
@@ -2016,7 +2005,10 @@ def _draw_range_rings(ax, extent: list, ring_interval: float = 1000.0) -> None:
 
     # Compute max range needed to cover the plot
     max_range = max(
-        abs(xmin), abs(xmax), abs(ymin), abs(ymax),
+        abs(xmin),
+        abs(xmax),
+        abs(ymin),
+        abs(ymax),
         np.sqrt(xmin**2 + ymin**2),
         np.sqrt(xmax**2 + ymin**2),
         np.sqrt(xmin**2 + ymax**2),
@@ -2028,21 +2020,27 @@ def _draw_range_rings(ax, extent: list, ring_interval: float = 1000.0) -> None:
     for i in range(1, n_rings + 1):
         radius = i * ring_interval
         circle = Circle(
-            (0, 0), radius,
+            (0, 0),
+            radius,
             fill=False,
-            edgecolor='white',
+            edgecolor="white",
             linewidth=0.5,
             alpha=0.5,
-            linestyle='--',
+            linestyle="--",
         )
         ax.add_patch(circle)
 
         # Add range label at top of circle (if visible)
         if -radius <= xmax and radius >= xmin and radius <= ymax:
             ax.text(
-                0, radius, f"{radius/1000:.0f}km",
-                ha='center', va='bottom',
-                fontsize=7, color='white', alpha=0.7,
+                0,
+                radius,
+                f"{radius / 1000:.0f}km",
+                ha="center",
+                va="bottom",
+                fontsize=7,
+                color="white",
+                alpha=0.7,
             )
 
 
@@ -2074,17 +2072,16 @@ def _show_single_image(merged: MergedImage) -> None:
         row_min, row_max = np.where(valid_rows)[0][[0, -1]]
         col_min, col_max = np.where(valid_cols)[0][[0, -1]]
 
-        cropped = merged.intensity[row_min:row_max + 1, col_min:col_max + 1]
+        cropped = merged.intensity[row_min : row_max + 1, col_min : col_max + 1]
         extent = [
-            merged.x_edges[col_min], merged.x_edges[col_max + 1],
-            merged.y_edges[row_min], merged.y_edges[row_max + 1]
+            merged.x_edges[col_min],
+            merged.x_edges[col_max + 1],
+            merged.y_edges[row_min],
+            merged.y_edges[row_max + 1],
         ]
     else:
         cropped = merged.intensity
-        extent = [
-            merged.x_edges[0], merged.x_edges[-1],
-            merged.y_edges[0], merged.y_edges[-1]
-        ]
+        extent = [merged.x_edges[0], merged.x_edges[-1], merged.y_edges[0], merged.y_edges[-1]]
 
     # Compute intensity range
     valid_data = cropped[~np.isnan(cropped)]
@@ -2118,10 +2115,7 @@ def _show_single_image(merged: MergedImage) -> None:
     start_time = np.datetime_as_string(merged.start_time, unit="s")
     end_time = np.datetime_as_string(merged.end_time, unit="s")
 
-    ax.set_title(
-        f"First Merged Image: {merged.n_frames} frames\n"
-        f"{start_time} to {end_time}"
-    )
+    ax.set_title(f"First Merged Image: {merged.n_frames} frames\n{start_time} to {end_time}")
 
     fig.colorbar(im, ax=ax, label="Intensity", shrink=0.8)
 
@@ -2150,7 +2144,7 @@ def _show_merged_viewer(merged_images: list[MergedImage], interval_ms: int = 500
     # Turn off interactive mode for blocking display
     plt.ioff()
     # Close any existing figures from single image preview
-    plt.close('all')
+    plt.close("all")
 
     if not merged_images:
         logger.warning("No merged images to display")
@@ -2242,8 +2236,14 @@ def _show_merged_viewer(merged_images: list[MergedImage], interval_ms: int = 500
             label_text = "Ship\nN/A"
         # Label in NW corner of polar plot
         ax_ship.text(
-            0.02, 0.98, label_text, transform=ax_ship.transAxes,
-            fontsize=8, ha="left", va="top", color="blue"
+            0.02,
+            0.98,
+            label_text,
+            transform=ax_ship.transAxes,
+            fontsize=8,
+            ha="left",
+            va="top",
+            color="blue",
         )
 
         # Wind plot (SE corner of main plot, label in SW corner of polar plot)
@@ -2269,8 +2269,14 @@ def _show_merged_viewer(merged_images: list[MergedImage], interval_ms: int = 500
             label_text = "Wind\nN/A"
         # Label in SW corner of polar plot
         ax_wind.text(
-            0.02, 0.02, label_text, transform=ax_wind.transAxes,
-            fontsize=8, ha="left", va="bottom", color="green"
+            0.02,
+            0.02,
+            label_text,
+            transform=ax_wind.transAxes,
+            fontsize=8,
+            ha="left",
+            va="bottom",
+            color="green",
         )
 
     def update_plot():
@@ -2290,18 +2296,17 @@ def _show_merged_viewer(merged_images: list[MergedImage], interval_ms: int = 500
             col_min, col_max = np.where(valid_cols)[0][[0, -1]]
 
             # Crop to valid data region
-            cropped = merged.intensity[row_min:row_max + 1, col_min:col_max + 1]
+            cropped = merged.intensity[row_min : row_max + 1, col_min : col_max + 1]
             extent = [
-                merged.x_edges[col_min], merged.x_edges[col_max + 1],
-                merged.y_edges[row_min], merged.y_edges[row_max + 1]
+                merged.x_edges[col_min],
+                merged.x_edges[col_max + 1],
+                merged.y_edges[row_min],
+                merged.y_edges[row_max + 1],
             ]
         else:
             # No valid data, show full extent
             cropped = merged.intensity
-            extent = [
-                merged.x_edges[0], merged.x_edges[-1],
-                merged.y_edges[0], merged.y_edges[-1]
-            ]
+            extent = [merged.x_edges[0], merged.x_edges[-1], merged.y_edges[0], merged.y_edges[-1]]
 
         im = ax.imshow(
             cropped,

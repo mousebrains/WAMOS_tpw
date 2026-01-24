@@ -545,23 +545,35 @@ def _write_frame_netcdf(
     # Create xarray Dataset
     ds = xr.Dataset(
         data_vars={
-            "intensity": (["y", "x"], projected_intensity, {
-                "long_name": "Projected radar intensity",
-                "units": "counts",
-                "coordinates": "x y",
-            }),
+            "intensity": (
+                ["y", "x"],
+                projected_intensity,
+                {
+                    "long_name": "Projected radar intensity",
+                    "units": "counts",
+                    "coordinates": "x y",
+                },
+            ),
         },
         coords={
-            "x": (["x"], x_centers, {
-                "long_name": "Distance east from center",
-                "units": "m",
-                "axis": "X",
-            }),
-            "y": (["y"], y_centers, {
-                "long_name": "Distance north from center",
-                "units": "m",
-                "axis": "Y",
-            }),
+            "x": (
+                ["x"],
+                x_centers,
+                {
+                    "long_name": "Distance east from center",
+                    "units": "m",
+                    "axis": "X",
+                },
+            ),
+            "y": (
+                ["y"],
+                y_centers,
+                {
+                    "long_name": "Distance north from center",
+                    "units": "m",
+                    "axis": "Y",
+                },
+            ),
             "time": timestamp,
         },
         attrs={
@@ -576,8 +588,9 @@ def _write_frame_netcdf(
             "hemisphere": grid_params["hemisphere"],
             "center_latitude": grid_params["center_lat"],
             "center_longitude": grid_params["center_lon"],
-            "crs": f"EPSG:326{grid_params['utm_zone']:02d}" if grid_params["hemisphere"] == "north"
-                   else f"EPSG:327{grid_params['utm_zone']:02d}",
+            "crs": f"EPSG:326{grid_params['utm_zone']:02d}"
+            if grid_params["hemisphere"] == "north"
+            else f"EPSG:327{grid_params['utm_zone']:02d}",
             # Frame indices
             "file_index": file_index,
             "frame_index": frame_index,
@@ -691,7 +704,9 @@ def _do_interpolate(task) -> "Result":
         def __init__(self, frame_data: FrameData):
             self._data = frame_data
             self._metadata = _MetadataProxy(frame_data)
-            self._pps = _PPSProxy(frame_data.pps_indices) if frame_data.pps_indices is not None else None
+            self._pps = (
+                _PPSProxy(frame_data.pps_indices) if frame_data.pps_indices is not None else None
+            )
 
         @property
         def metadata(self):
@@ -791,9 +806,11 @@ def _do_interpolate(task) -> "Result":
             values_flat = intensity.ravel()
 
             valid = (
-                (x_flat >= 0) & (x_flat < n_x) &
-                (y_flat >= 0) & (y_flat < n_y) &
-                ~np.isnan(values_flat)
+                (x_flat >= 0)
+                & (x_flat < n_x)
+                & (y_flat >= 0)
+                & (y_flat < n_y)
+                & ~np.isnan(values_flat)
             )
 
             if np.sum(valid) > 0:
@@ -943,19 +960,24 @@ def _add_arguments(parser) -> None:
         "--plot", action="store_true", help="Plot the projected intensity (requires --project)"
     )
     parser.add_argument(
-        "--netcdf-dir", "-o", type=str, default=None,
-        help="Output directory for per-frame NetCDF files (requires --project)"
+        "--netcdf-dir",
+        "-o",
+        type=str,
+        default=None,
+        help="Output directory for per-frame NetCDF files (requires --project)",
     )
 
     # Progress bar options (mutually exclusive)
     progress_group = parser.add_mutually_exclusive_group()
     progress_group.add_argument(
-        "--progress", dest="progress", action="store_true", default=True,
-        help="Show progress bars (default)"
+        "--progress",
+        dest="progress",
+        action="store_true",
+        default=True,
+        help="Show progress bars (default)",
     )
     progress_group.add_argument(
-        "--no-progress", dest="progress", action="store_false",
-        help="Hide progress bars"
+        "--no-progress", dest="progress", action="store_false", help="Hide progress bars"
     )
 
 
@@ -1049,18 +1071,17 @@ def run(args) -> None:
 
     # Progress bars
     pbar_files = tqdm(
-        total=len(files), desc="Loading files", unit="file",
-        disable=not args.progress
+        total=len(files), desc="Loading files", unit="file", disable=not args.progress
     )
     pbar_interp = tqdm(
-        total=len(files), desc="Interpolating", unit="frame",
-        disable=not args.progress
+        total=len(files), desc="Interpolating", unit="frame", disable=not args.progress
     )
 
     # Create streaming viewer if plotting requested (shows first frame immediately)
     viewer = None
     if args.plot:
         from wamos_tpw.projection import InterpolatorViewer
+
         viewer = InterpolatorViewer()
         viewer.show()
 
