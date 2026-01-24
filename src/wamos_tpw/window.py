@@ -18,6 +18,44 @@ if TYPE_CHECKING:
     from wamos_tpw.merged_image import MergedImage, TimeWindowConfig
 
 
+def _interpolate_nan_gaps(intensity: np.ndarray, max_distance: int = 3) -> np.ndarray:
+    """
+    Fill small NaN gaps in intensity array using nearest neighbor interpolation.
+
+    Only fills NaN pixels that are within max_distance of a valid pixel.
+    Large NaN regions (shadows, outside radar) are preserved.
+
+    Args:
+        intensity: 2D array with NaN values for missing data
+        max_distance: Maximum distance (in pixels) to interpolate across
+
+    Returns:
+        Array with small NaN gaps filled by interpolation
+    """
+    from scipy.ndimage import distance_transform_edt
+
+    # Find NaN mask
+    nan_mask = np.isnan(intensity)
+    if not np.any(nan_mask):
+        return intensity  # No gaps to fill
+
+    valid_mask = ~nan_mask
+    if not np.any(valid_mask):
+        return intensity  # No valid data to interpolate from
+
+    # Get distance to nearest valid pixel and indices
+    distances, indices = distance_transform_edt(nan_mask, return_indices=True)
+
+    # Only fill NaN pixels within max_distance of valid data
+    fill_mask = nan_mask & (distances <= max_distance)
+
+    # Copy values from nearest valid pixels (only for small gaps)
+    result = intensity.copy()
+    result[fill_mask] = intensity[indices[0, fill_mask], indices[1, fill_mask]]
+
+    return result
+
+
 def create_time_windows(
     files: list[str],
     window_config: "TimeWindowConfig",
@@ -179,12 +217,13 @@ class WindowAccumulator:
         if wind_direction is not None:
             self.wind_directions.append(wind_direction)
 
-    def finalize(self, window_index: int = 0) -> "MergedImage":
+    def finalize(self, window_index: int = 0, interpolate_gaps: bool = False) -> "MergedImage":
         """
         Compute averaged intensity and return MergedImage.
 
         Args:
             window_index: Index of this window in the sequence
+            interpolate_gaps: Fill NaN gaps using nearest neighbor interpolation
 
         Returns:
             MergedImage with averaged data and metadata
@@ -194,6 +233,10 @@ class WindowAccumulator:
         with np.errstate(invalid="ignore"):
             intensity = self.intensity_sum / self.intensity_count
         intensity[self.intensity_count == 0] = np.nan
+
+        # Interpolate gaps if requested
+        if interpolate_gaps:
+            intensity = _interpolate_nan_gaps(intensity)
 
         # Compute circular mean for heading
         headings_rad = np.deg2rad(self.headings)

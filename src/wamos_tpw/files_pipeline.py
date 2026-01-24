@@ -135,6 +135,7 @@ class FilesMergePipeline:
             longitudes=longitudes,
             max_ranges=max_ranges,
             range_resolutions=range_resolutions,
+            resolution_scale=self._window_config.resolution_scale,
         )
 
         # Create accumulator
@@ -218,7 +219,10 @@ class FilesMergePipeline:
             )
 
         if accumulator.n_frames >= self._window_config.min_frames_per_window:
-            return accumulator.finalize(window_index=window_idx)
+            return accumulator.finalize(
+                window_index=window_idx,
+                interpolate_gaps=self._window_config.interpolate_gaps,
+            )
         return None
 
     def iter_merged(self) -> Iterator[MergedImage]:
@@ -574,6 +578,17 @@ def _add_arguments(parser) -> None:
         default=5,
         help="Minimum frames per window (default: 5)",
     )
+    parser.add_argument(
+        "--resolution-scale",
+        type=float,
+        default=1.0,
+        help="Grid resolution multiplier (2.0 = 2x finer grid, default: 1.0)",
+    )
+    parser.add_argument(
+        "--interpolate",
+        action="store_true",
+        help="Fill NaN gaps using nearest neighbor interpolation",
+    )
 
     # Output options
     parser.add_argument(
@@ -701,13 +716,17 @@ def run(args) -> None:
         window_seconds=args.window,
         overlap_fraction=args.overlap,
         min_frames_per_window=args.min_frames,
+        resolution_scale=args.resolution_scale,
+        interpolate_gaps=args.interpolate,
     )
 
     logging.info(
-        "Window config: %.1fs duration, %.0f%% overlap, min %d frames",
+        "Window config: %.1fs duration, %.0f%% overlap, min %d frames, %.1fx resolution%s",
         window_config.window_seconds,
         window_config.overlap_fraction * 100,
         window_config.min_frames_per_window,
+        window_config.resolution_scale,
+        ", interpolate gaps" if window_config.interpolate_gaps else "",
     )
 
     # Create output directory if specified

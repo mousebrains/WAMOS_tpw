@@ -17,6 +17,7 @@ def compute_common_grid(
     max_ranges: list[float],
     range_resolutions: list[float],
     padding: float = 1.1,
+    resolution_scale: float = 1.0,
 ) -> dict:
     """
     Compute a common UTM grid that covers all frames.
@@ -27,6 +28,7 @@ def compute_common_grid(
         max_ranges: Maximum ground range per frame in meters
         range_resolutions: Range resolution per frame in meters
         padding: Multiplier for max range to add margin
+        resolution_scale: Grid resolution multiplier (2.0 = 2x finer grid)
 
     Returns:
         Dictionary with grid parameters:
@@ -55,8 +57,8 @@ def compute_common_grid(
     # Transform all positions to UTM
     all_x, all_y = transformer.transform(all_lons, all_lats)
 
-    # Grid spacing from average range resolution
-    grid_spacing = float(np.mean(range_resolutions))
+    # Grid spacing from average range resolution, scaled by resolution_scale
+    grid_spacing = float(np.mean(range_resolutions)) / resolution_scale
 
     # Grid extent: data extent + max radar range + padding
     max_range = float(np.max(max_ranges)) * padding

@@ -49,6 +49,30 @@ class TestComputeCommonGrid:
 
         assert result["grid_spacing"] == pytest.approx(7.5)
 
+    def test_resolution_scale_increases_grid_density(self):
+        """Test that resolution_scale creates finer grid."""
+        latitudes = [np.array([45.0])]
+        longitudes = [np.array([-122.0])]
+        max_ranges = [500.0]
+        range_resolutions = [10.0]
+
+        # Default resolution scale (1.0)
+        result1 = compute_common_grid(
+            latitudes, longitudes, max_ranges, range_resolutions, resolution_scale=1.0
+        )
+
+        # Double resolution (2.0x)
+        result2 = compute_common_grid(
+            latitudes, longitudes, max_ranges, range_resolutions, resolution_scale=2.0
+        )
+
+        # Grid spacing should be halved
+        assert result2["grid_spacing"] == pytest.approx(result1["grid_spacing"] / 2)
+
+        # Grid should have approximately 2x more cells in each dimension
+        assert result2["n_x"] >= result1["n_x"] * 1.8
+        assert result2["n_y"] >= result1["n_y"] * 1.8
+
     def test_utm_zone_northern_hemisphere(self):
         """Test UTM zone calculation for northern hemisphere."""
         latitudes = [np.array([45.0])]

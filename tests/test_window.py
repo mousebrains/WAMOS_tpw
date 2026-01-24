@@ -524,3 +524,170 @@ class TestWindowIntegration:
         assert merged.n_frames == len(file_indices)
         assert merged.intensity.shape == (2, 2)
         assert not np.all(np.isnan(merged.intensity))
+
+
+class TestTimeWindowConfigNewFields:
+    """Tests for new resolution_scale and interpolate_gaps fields."""
+
+    def test_resolution_scale_default(self):
+        """Test default resolution_scale is 1.0."""
+        config = TimeWindowConfig()
+        assert config.resolution_scale == 1.0
+
+    def test_resolution_scale_custom(self):
+        """Test custom resolution_scale value."""
+        config = TimeWindowConfig(resolution_scale=2.0)
+        assert config.resolution_scale == 2.0
+
+    def test_resolution_scale_validation(self):
+        """Test that invalid resolution_scale raises ValueError."""
+        with pytest.raises(ValueError, match="resolution_scale must be positive"):
+            TimeWindowConfig(resolution_scale=0)
+        with pytest.raises(ValueError, match="resolution_scale must be positive"):
+            TimeWindowConfig(resolution_scale=-1)
+
+    def test_interpolate_gaps_default(self):
+        """Test default interpolate_gaps is False."""
+        config = TimeWindowConfig()
+        assert config.interpolate_gaps is False
+
+    def test_interpolate_gaps_custom(self):
+        """Test custom interpolate_gaps value."""
+        config = TimeWindowConfig(interpolate_gaps=True)
+        assert config.interpolate_gaps is True
+
+
+class TestInterpolateNanGaps:
+    """Tests for _interpolate_nan_gaps function."""
+
+    def test_no_gaps(self):
+        """Test that array with no NaNs is unchanged."""
+        from wamos_tpw.window import _interpolate_nan_gaps
+
+        intensity = np.array([[1.0, 2.0], [3.0, 4.0]])
+        result = _interpolate_nan_gaps(intensity)
+        np.testing.assert_array_equal(result, intensity)
+
+    def test_all_nan(self):
+        """Test that all-NaN array returns NaNs (no valid data)."""
+        from wamos_tpw.window import _interpolate_nan_gaps
+
+        intensity = np.array([[np.nan, np.nan], [np.nan, np.nan]])
+        result = _interpolate_nan_gaps(intensity)
+        assert np.all(np.isnan(result))
+
+    def test_single_nan_gap(self):
+        """Test filling a single NaN with nearest neighbor."""
+        from wamos_tpw.window import _interpolate_nan_gaps
+
+        intensity = np.array([[1.0, np.nan], [3.0, 4.0]])
+        result = _interpolate_nan_gaps(intensity)
+
+        assert not np.any(np.isnan(result))
+        # The NaN at [0,1] should be filled from nearest neighbor
+        # Could be 1.0 (left) or 4.0 (below-right) depending on distance_transform
+        assert result[0, 1] in [1.0, 4.0]
+
+    def test_center_nan_gap(self):
+        """Test filling center NaN surrounded by values."""
+        from wamos_tpw.window import _interpolate_nan_gaps
+
+        intensity = np.array([[1.0, 2.0, 3.0], [4.0, np.nan, 6.0], [7.0, 8.0, 9.0]])
+        result = _interpolate_nan_gaps(intensity)
+
+        assert not np.any(np.isnan(result))
+        # Center value should be filled from one of the 4-neighbors
+        assert result[1, 1] in [2.0, 4.0, 6.0, 8.0]
+
+    def test_corner_valid_rest_nan(self):
+        """Test filling from a single valid corner value."""
+        from wamos_tpw.window import _interpolate_nan_gaps
+
+        intensity = np.array([[1.0, np.nan], [np.nan, np.nan]])
+        result = _interpolate_nan_gaps(intensity)
+
+        assert not np.any(np.isnan(result))
+        # All NaNs should be filled with the corner value
+        np.testing.assert_array_equal(result, np.array([[1.0, 1.0], [1.0, 1.0]]))
+
+    def test_large_gap_preserved(self):
+        """Test that large NaN regions (shadows, outside radar) are preserved."""
+        from wamos_tpw.window import _interpolate_nan_gaps
+
+        # Create array with valid data on left, large NaN gap on right
+        intensity = np.full((10, 20), np.nan)
+        intensity[:, :5] = 1.0  # Valid data on left 5 columns
+
+        result = _interpolate_nan_gaps(intensity, max_distance=3)
+
+        # Left side should be valid
+        assert not np.any(np.isnan(result[:, :5]))
+        # Columns 5-7 (within 3 pixels) should be filled
+        assert not np.any(np.isnan(result[:, 5:8]))
+        # Columns 8+ (more than 3 pixels away) should still be NaN
+        assert np.all(np.isnan(result[:, 9:]))
+
+
+class TestFinalizeWithInterpolation:
+    """Tests for finalize with interpolate_gaps=True."""
+
+    @pytest.fixture
+    def accumulator_with_gaps(self):
+        """Create an accumulator with gaps in the data."""
+        x_edges = np.array([-150.0, -50.0, 50.0, 150.0])  # 3 bins
+        y_edges = np.array([-150.0, -50.0, 50.0, 150.0])  # 3 bins
+        return WindowAccumulator(
+            x_edges=x_edges,
+            y_edges=y_edges,
+            grid_spacing=100.0,
+            utm_zone=10,
+            hemisphere="north",
+            center_lat=45.0,
+            center_lon=-122.0,
+        )
+
+    def test_finalize_without_interpolation(self, accumulator_with_gaps):
+        """Test finalize without interpolation leaves NaNs."""
+        acc = accumulator_with_gaps
+
+        # Add data with gaps (some cells with count=0)
+        intensity = np.array([[1.0, 2.0, 0.0], [3.0, 0.0, 0.0], [0.0, 0.0, 0.0]], dtype=np.float64)
+        count = np.array([[1, 1, 0], [1, 0, 0], [0, 0, 0]], dtype=np.int32)
+
+        acc.add_projected(
+            projected_intensity=intensity,
+            projected_count=count,
+            timestamp=np.datetime64("2024-01-15T10:00:00"),
+            heading=0.0,
+        )
+
+        merged = acc.finalize(interpolate_gaps=False)
+
+        # Should have NaNs where count was 0
+        assert np.isnan(merged.intensity[0, 2])
+        assert np.isnan(merged.intensity[1, 1])
+        assert np.isnan(merged.intensity[2, 2])
+
+    def test_finalize_with_interpolation(self, accumulator_with_gaps):
+        """Test finalize with interpolation fills NaNs."""
+        acc = accumulator_with_gaps
+
+        # Add data with gaps
+        intensity = np.array([[1.0, 2.0, 0.0], [3.0, 0.0, 0.0], [0.0, 0.0, 0.0]], dtype=np.float64)
+        count = np.array([[1, 1, 0], [1, 0, 0], [0, 0, 0]], dtype=np.int32)
+
+        acc.add_projected(
+            projected_intensity=intensity,
+            projected_count=count,
+            timestamp=np.datetime64("2024-01-15T10:00:00"),
+            heading=0.0,
+        )
+
+        merged = acc.finalize(interpolate_gaps=True)
+
+        # Should have no NaNs
+        assert not np.any(np.isnan(merged.intensity))
+        # Original values should be preserved
+        assert merged.intensity[0, 0] == 1.0
+        assert merged.intensity[0, 1] == 2.0
+        assert merged.intensity[1, 0] == 3.0

@@ -32,10 +32,13 @@ def _draw_ship_wind_inset(
     ship_speed: float | None,
     wind_direction: float | None,
     wind_speed: float | None,
-    position: str = "lower left",
+    position: str = "lower left",  # Unused, kept for API compatibility
 ) -> None:
     """
-    Draw inset polar plots for ship heading and wind information.
+    Draw separate inset polar plots for ship heading and wind information.
+
+    Ship inset is in the northeast (upper right) corner.
+    Wind inset is in the southeast (lower right) corner.
 
     Args:
         fig: Matplotlib figure
@@ -44,100 +47,114 @@ def _draw_ship_wind_inset(
         ship_speed: Ship speed in m/s
         wind_direction: Wind direction in degrees (direction wind is coming FROM)
         wind_speed: Wind speed in m/s
-        position: Position of inset ("lower left", "lower right", "upper left", "upper right")
+        position: Unused, kept for API compatibility
     """
     import matplotlib.patches as mpatches
     from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
-    # Determine inset position
-    if position == "lower left":
-        bbox = (0.02, 0.02, 0.2, 0.2)
-    elif position == "lower right":
-        bbox = (0.78, 0.02, 0.2, 0.2)
-    elif position == "upper left":
-        bbox = (0.02, 0.78, 0.2, 0.2)
-    else:  # upper right
-        bbox = (0.78, 0.78, 0.2, 0.2)
+    # Speed scale: outer ring = max_speed m/s
+    max_speed = 10.0  # Outer ring represents 10 m/s
 
-    # Create inset polar axes
-    ax_inset = inset_axes(
-        ax_main,
-        width="100%",
-        height="100%",
-        bbox_to_anchor=bbox,
-        bbox_transform=ax_main.transAxes,
-        loc="center",
-        axes_class=None,
-    )
+    def create_polar_inset(bbox):
+        """Create a polar-style inset axes with speed rings."""
+        ax = inset_axes(
+            ax_main,
+            width="100%",
+            height="100%",
+            bbox_to_anchor=bbox,
+            bbox_transform=ax_main.transAxes,
+            loc="center",
+            axes_class=None,
+        )
+        ax.set_xlim(-1.3, 1.3)
+        ax.set_ylim(-1.3, 1.3)
+        ax.set_aspect("equal")
+        ax.axis("off")
 
-    # Make it a polar plot manually by drawing a circle and vectors
-    ax_inset.set_xlim(-1.5, 1.5)
-    ax_inset.set_ylim(-1.5, 1.5)
-    ax_inset.set_aspect("equal")
-    ax_inset.axis("off")
+        # Semi-transparent white background for visibility
+        ax.patch.set_facecolor("white")
+        ax.patch.set_alpha(0.7)
 
-    # Draw compass circle
-    circle = mpatches.Circle((0, 0), 1.0, fill=False, edgecolor="white", linewidth=1, alpha=0.7)
-    ax_inset.add_patch(circle)
+        # Draw speed rings (at 5 and 10 m/s)
+        for speed_ring in [5.0, 10.0]:
+            radius = speed_ring / max_speed
+            circle = mpatches.Circle(
+                (0, 0), radius, fill=False, edgecolor="black", linewidth=0.8, alpha=0.6
+            )
+            ax.add_patch(circle)
 
-    # Draw compass points
-    for angle, label in [(0, "N"), (90, "E"), (180, "S"), (270, "W")]:
-        rad = np.radians(90 - angle)  # Convert to math convention (0=E, 90=N)
-        x, y = 1.15 * np.cos(rad), 1.15 * np.sin(rad)
-        ax_inset.text(x, y, label, ha="center", va="center", fontsize=7, color="white", alpha=0.8)
+        # Add cross-hairs for grid (black)
+        ax.plot([-1, 1], [0, 0], "k-", linewidth=0.5, alpha=0.4)
+        ax.plot([0, 0], [-1, 1], "k-", linewidth=0.5, alpha=0.4)
 
-    # Draw ship heading arrow (blue)
+        return ax
+
+    # Ship heading inset - northeast corner (tight to corner)
     if heading is not None:
-        rad = np.radians(90 - heading)  # Convert to math convention
-        dx, dy = 0.8 * np.cos(rad), 0.8 * np.sin(rad)
-        ax_inset.annotate(
+        bbox_ship = (0.88, 0.88, 0.11, 0.11)
+        ax_ship = create_polar_inset(bbox_ship)
+
+        # Arrow length proportional to speed (capped at max_speed)
+        speed = min(ship_speed, max_speed) if ship_speed is not None else max_speed * 0.7
+        arrow_len = speed / max_speed
+
+        # Draw ship heading arrow from center (blue)
+        rad = np.radians(90 - heading)  # Convert to math convention (0=E, 90=N)
+        dx, dy = arrow_len * np.cos(rad), arrow_len * np.sin(rad)
+        ax_ship.annotate(
             "",
             xy=(dx, dy),
             xytext=(0, 0),
-            arrowprops=dict(arrowstyle="->", color="cyan", lw=2),
-        )
-        # Label
-        speed_str = f"{ship_speed:.1f} m/s" if ship_speed is not None else ""
-        ax_inset.text(
-            0,
-            -1.4,
-            f"Ship: {heading:.0f}° {speed_str}",
-            ha="center",
-            va="top",
-            fontsize=6,
-            color="cyan",
+            arrowprops=dict(arrowstyle="-|>", color="blue", lw=2),
         )
 
-    # Draw wind direction arrow (yellow) - note: wind direction is where wind comes FROM
+        # Label to northwest of inset (right justified)
+        speed_str = f" {ship_speed:.1f} m/s" if ship_speed is not None else ""
+        ax_ship.text(
+            -1.1,
+            1.1,
+            f"Ship {heading:.0f}°{speed_str}",
+            ha="right",
+            va="top",
+            fontsize=7,
+            color="blue",
+            fontweight="bold",
+        )
+
+    # Wind direction inset - southeast corner (tight to corner)
     if wind_direction is not None:
+        bbox_wind = (0.88, 0.01, 0.11, 0.11)
+        ax_wind = create_polar_inset(bbox_wind)
+
+        # Arrow length proportional to speed (capped at max_speed)
+        speed = min(wind_speed, max_speed) if wind_speed is not None else max_speed * 0.7
+        arrow_len = speed / max_speed
+
+        # Draw wind direction arrow from center (orange)
         # Arrow points in direction wind is blowing TO (opposite of FROM)
         wind_to = (wind_direction + 180) % 360
         rad = np.radians(90 - wind_to)
-        dx, dy = 0.7 * np.cos(rad), 0.7 * np.sin(rad)
-        # Start from edge of circle where wind comes from
-        from_rad = np.radians(90 - wind_direction)
-        sx, sy = 0.4 * np.cos(from_rad), 0.4 * np.sin(from_rad)
-        ax_inset.annotate(
+        dx, dy = arrow_len * np.cos(rad), arrow_len * np.sin(rad)
+
+        ax_wind.annotate(
             "",
             xy=(dx, dy),
-            xytext=(sx, sy),
-            arrowprops=dict(arrowstyle="->", color="yellow", lw=1.5),
-        )
-        # Label
-        speed_str = f"{wind_speed:.1f} m/s" if wind_speed is not None else ""
-        ax_inset.text(
-            0,
-            1.4,
-            f"Wind: {wind_direction:.0f}° {speed_str}",
-            ha="center",
-            va="bottom",
-            fontsize=6,
-            color="yellow",
+            xytext=(0, 0),
+            arrowprops=dict(arrowstyle="-|>", color="darkorange", lw=2),
         )
 
-    # Add semi-transparent background
-    ax_inset.patch.set_facecolor("black")
-    ax_inset.patch.set_alpha(0.5)
+        # Label to southwest of inset (right justified)
+        speed_str = f" {wind_speed:.1f} m/s" if wind_speed is not None else ""
+        ax_wind.text(
+            -1.1,
+            -1.1,
+            f"Wind {wind_direction:.0f}°{speed_str}",
+            ha="right",
+            va="bottom",
+            fontsize=7,
+            color="darkorange",
+            fontweight="bold",
+        )
 
 
 def _draw_range_rings(ax, extent: list, ring_interval: float = 1000.0) -> None:
@@ -450,17 +467,37 @@ def write_merged_png(
     if vmax is None:
         vmax = float(np.nanpercentile(intensity, 98))
 
+    # Find valid data bounds (crop to non-NaN region)
+    valid_mask = ~np.isnan(intensity)
+    valid_rows = np.any(valid_mask, axis=1)
+    valid_cols = np.any(valid_mask, axis=0)
+
+    if np.any(valid_rows) and np.any(valid_cols):
+        row_min, row_max = np.where(valid_rows)[0][[0, -1]]
+        col_min, col_max = np.where(valid_cols)[0][[0, -1]]
+        x_min, x_max = merged.x_edges[col_min], merged.x_edges[col_max + 1]
+        y_min, y_max = merged.y_edges[row_min], merged.y_edges[row_max + 1]
+    else:
+        x_min, x_max = merged.x_edges[0], merged.x_edges[-1]
+        y_min, y_max = merged.y_edges[0], merged.y_edges[-1]
+
     fig, ax = plt.subplots(figsize=(12, 10))
 
-    im = ax.pcolormesh(
-        merged.x_edges,
-        merged.y_edges,
+    # Use imshow with nearest interpolation (avoids artifacts at NaN boundaries)
+    im = ax.imshow(
         intensity,
         cmap=cmap,
         vmin=vmin,
         vmax=vmax,
-        shading="flat",
+        extent=[merged.x_edges[0], merged.x_edges[-1], merged.y_edges[0], merged.y_edges[-1]],
+        origin="lower",
+        aspect="equal",
+        interpolation="nearest",
     )
+
+    # Set axis limits to valid data bounds
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
 
     ax.set_xlabel("Distance East (m)")
     ax.set_ylabel("Distance North (m)")
@@ -468,12 +505,7 @@ def write_merged_png(
 
     # Draw range rings
     if range_rings:
-        extent = [
-            merged.x_edges[0],
-            merged.x_edges[-1],
-            merged.y_edges[0],
-            merged.y_edges[-1],
-        ]
+        extent = [x_min, x_max, y_min, y_max]
         _draw_range_rings(ax, extent)
 
     fig.colorbar(im, ax=ax, label="Intensity", shrink=0.8)
@@ -499,8 +531,10 @@ def write_merged_png(
             wind_speed=merged.mean_wind_speed,
             position="lower left",
         )
+    else:
+        # Only use tight_layout when no inset (inset axes are incompatible)
+        plt.tight_layout()
 
-    plt.tight_layout()
     fig.savefig(filepath, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
@@ -602,6 +636,9 @@ def write_mp4_movie(
 
     with writer.saving(fig, str(output_path), dpi=dpi):
         for i, merged in enumerate(merged_images):
+            # Remove all axes except the main one (clears inset axes from previous frame)
+            for extra_ax in fig.axes[1:]:
+                extra_ax.remove()
             ax.clear()
 
             # Find valid data bounds
@@ -636,6 +673,7 @@ def write_mp4_movie(
                 extent=extent,
                 origin="lower",
                 aspect="equal",
+                interpolation="nearest",
             )
 
             if range_rings:
@@ -671,8 +709,10 @@ def write_mp4_movie(
                     wind_speed=merged.mean_wind_speed,
                     position="lower left",
                 )
+            else:
+                # Only use tight_layout when no inset (inset axes are incompatible)
+                plt.tight_layout()
 
-            plt.tight_layout()
             writer.grab_frame()
 
     plt.close(fig)

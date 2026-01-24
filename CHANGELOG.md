@@ -70,7 +70,7 @@ Initial release of the wamos_tpw package.
   - Codecov integration for coverage reporting
 
 ### Technical Details
-- Python 3.13+ required
+- Python 3.12+ required
 - Uses speed of light in air: c_air = c_vacuum / 1.000273
 - Bit 13 encoding: 0 = even degree, 1 = odd degree
 - All bearings normalized to [0, 360)

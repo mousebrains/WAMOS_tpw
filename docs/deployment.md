@@ -17,7 +17,7 @@ Processing is CPU-bound and benefits from multiple cores for parallel frame proc
 
 ### Software
 
-- **Python**: 3.13 or later
+- **Python**: 3.12 or later
 - **Operating System**: Linux (recommended), macOS, or Windows
 - **FFmpeg**: Required for movie generation (`wamos combine --movie`)
 
@@ -199,7 +199,7 @@ For periodic batch processing:
 Dockerfile:
 
 ```dockerfile
-FROM python:3.13-slim
+FROM python:3.12-slim
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \

@@ -18,6 +18,8 @@ class TimeWindowConfig:
     window_seconds: float = 60.0  # Window duration in seconds
     overlap_fraction: float = 0.5  # Overlap between consecutive windows (0.0-1.0)
     min_frames_per_window: int = 5  # Minimum frames required to produce output
+    resolution_scale: float = 1.0  # Grid resolution multiplier (2.0 = 2x finer grid)
+    interpolate_gaps: bool = False  # Fill NaN gaps with interpolated values
 
     @property
     def stride_seconds(self) -> float:
@@ -31,6 +33,8 @@ class TimeWindowConfig:
             raise ValueError("overlap_fraction must be in [0, 1)")
         if self.min_frames_per_window < 1:
             raise ValueError("min_frames_per_window must be at least 1")
+        if self.resolution_scale <= 0:
+            raise ValueError("resolution_scale must be positive")
 
 
 @dataclass

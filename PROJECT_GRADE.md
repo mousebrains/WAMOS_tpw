@@ -13,7 +13,7 @@
 | Test Functions | 169 | **264** | +95 (+56%) |
 | Type Hint Coverage | 80%+ | 80%+ | — |
 | CI Platforms | 3 | 3 | — |
-| Python Version | 3.13+ | 3.13+ | — |
+| Python Version | 3.12+ | 3.12+ | — |
 
 ## Strengths
 
@@ -25,7 +25,7 @@
 - **NEW:** Extracted reusable components (grid.py, window.py, merged_image.py)
 
 ### Code Quality
-- Modern Python 3.13+ with comprehensive type hints
+- Modern Python 3.12+ with comprehensive type hints
 - Custom exception hierarchy with contextual error info
 - Consistent logging infrastructure
 - Vectorized numpy operations for performance
