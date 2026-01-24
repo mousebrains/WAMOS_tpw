@@ -32,6 +32,7 @@ dependencies = [
     "pandas>=2.0",
     "zstandard>=0.20",
     "pyproj>=3.6",
+    "opencv-python>=4.8",
 ]
 
 [project.urls]
