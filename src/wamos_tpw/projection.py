@@ -54,19 +54,7 @@ def get_utm_crs(latitude: float, longitude: float) -> CRS:
 
 @dataclass
 class UTMGrid:
-    """
-    UTM-referenced Cartesian coordinate system for projected radar data.
-
-    Attributes:
-        x_edges: Easting bin edges in meters
-        y_edges: Northing bin edges in meters
-        grid_spacing: Grid cell size in meters
-        utm_zone: UTM zone number (1-60)
-        hemisphere: 'north' or 'south'
-        crs: pyproj CRS object
-        intensity_sum: Accumulated intensity values
-        intensity_count: Count of values per cell
-    """
+    """UTM-referenced Cartesian coordinate system for projected radar data."""
 
     # Grid definition
     x_edges: np.ndarray  # Easting bin edges in meters

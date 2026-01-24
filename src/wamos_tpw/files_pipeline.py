@@ -698,7 +698,8 @@ class FilesMergePipeline:
     Processes frames in parallel, projects them onto a common UTM grid,
     and accumulates them into time-windowed composites.
 
-    Usage:
+    Example::
+
         pipeline = FilesMergePipeline(files, config, window_config)
         for merged in pipeline.iter_merged():
             # Process merged image (display, save, etc.)
