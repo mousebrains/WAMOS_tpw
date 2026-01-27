@@ -30,8 +30,19 @@ try:
     import numba
 
     @numba.njit(cache=True)
-    def _project_numba(sin_bearing, cos_bearing, ground_range, ship_x, ship_y,
-                       intensity, x_min, y_min, inv_spacing, n_x, n_y):
+    def _project_numba(
+        sin_bearing,
+        cos_bearing,
+        ground_range,
+        ship_x,
+        ship_y,
+        intensity,
+        x_min,
+        y_min,
+        inv_spacing,
+        n_x,
+        n_y,
+    ):
         """Single-pass projection: no intermediate arrays, all work in compiled loop."""
         grid_size = n_x * n_y
         out_sum = np.zeros(grid_size, dtype=np.float64)
@@ -460,34 +471,52 @@ def _do_interpolate(task) -> "Result":
         if _HAS_NUMBA:
             # Single compiled loop — no intermediate arrays
             out_sum, out_cnt = _project_numba(
-                sin_bearing, cos_bearing, ground_range, ship_x, ship_y,
-                intensity, x_min, y_min, inv_spacing, n_x, n_y)
+                sin_bearing,
+                cos_bearing,
+                ground_range,
+                ship_x,
+                ship_y,
+                intensity,
+                x_min,
+                y_min,
+                inv_spacing,
+                n_x,
+                n_y,
+            )
             intensity_sum.ravel()[:] = out_sum
             intensity_count.ravel()[:] = out_cnt
         else:
             # Numpy fallback: fused coordinate → grid index computation.
             # Eliminates intermediate float64 x_coords/y_coords arrays.
-            x_idx = ((np.outer(sin_bearing, ground_range)
-                      + (ship_x[:, np.newaxis] - x_min)) * inv_spacing).astype(np.int32).ravel()
-            y_idx = ((np.outer(cos_bearing, ground_range)
-                      + (ship_y[:, np.newaxis] - y_min)) * inv_spacing).astype(np.int32).ravel()
+            x_idx = (
+                (
+                    (np.outer(sin_bearing, ground_range) + (ship_x[:, np.newaxis] - x_min))
+                    * inv_spacing
+                )
+                .astype(np.int32)
+                .ravel()
+            )
+            y_idx = (
+                (
+                    (np.outer(cos_bearing, ground_range) + (ship_y[:, np.newaxis] - y_min))
+                    * inv_spacing
+                )
+                .astype(np.int32)
+                .ravel()
+            )
 
             values_flat = intensity.ravel()
             valid = (
-                (x_idx >= 0)
-                & (x_idx < n_x)
-                & (y_idx >= 0)
-                & (y_idx < n_y)
-                & ~np.isnan(values_flat)
+                (x_idx >= 0) & (x_idx < n_x) & (y_idx >= 0) & (y_idx < n_y) & ~np.isnan(values_flat)
             )
 
             if np.any(valid):
                 linear_idx = y_idx[valid] * n_x + x_idx[valid]
                 grid_size = n_x * n_y
                 intensity_sum.ravel()[:] += np.bincount(
-                    linear_idx, weights=values_flat[valid], minlength=grid_size)
-                intensity_count.ravel()[:] += np.bincount(
-                    linear_idx, minlength=grid_size)
+                    linear_idx, weights=values_flat[valid], minlength=grid_size
+                )
+                intensity_count.ravel()[:] += np.bincount(linear_idx, minlength=grid_size)
 
         t6 = time.perf_counter()
         timings["proj_bincount"] = t6 - t3  # projection loop total
@@ -563,8 +592,12 @@ def _do_interpolate(task) -> "Result":
         "wind_speed": current_data.wind_speed,
         "wind_direction": current_data.wind_direction,
         # Ground range metadata for merge pipeline
-        "ground_range_max": float(ground_range[-1]) if ground_range is not None and len(ground_range) > 0 else 3000.0,
-        "range_resolution": float(ground_range[1] - ground_range[0]) if ground_range is not None and len(ground_range) > 1 else 7.5,
+        "ground_range_max": float(ground_range[-1])
+        if ground_range is not None and len(ground_range) > 0
+        else 3000.0,
+        "range_resolution": float(ground_range[1] - ground_range[0])
+        if ground_range is not None and len(ground_range) > 1
+        else 7.5,
         # Projected data (if do_projection=True)
         "projected_intensity": projected_intensity,
         "grid_params": grid_params,

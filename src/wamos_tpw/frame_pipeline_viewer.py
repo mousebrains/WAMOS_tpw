@@ -71,7 +71,8 @@ class PipelineDiagnosticViewer:
         # Create figure with 3x4 grid of plots + button row
         self._fig = plt.figure(figsize=(16, 12))
         gs = self._fig.add_gridspec(
-            4, 4,
+            4,
+            4,
             height_ratios=[1, 1, 1, 0.06],
             hspace=0.3,
             wspace=0.2,
@@ -153,7 +154,9 @@ class PipelineDiagnosticViewer:
             pf = self._PolarFile(fn, config=self._config)
             frames = list(pf)
             if self._frame_index >= len(frames):
-                logger.warning("Frame %d not in %s (has %d frames)", self._frame_index, fn, len(frames))
+                logger.warning(
+                    "Frame %d not in %s (has %d frames)", self._frame_index, fn, len(frames)
+                )
                 return None
 
             frame = frames[self._frame_index]
@@ -214,8 +217,12 @@ class PipelineDiagnosticViewer:
             ax.imshow(mask, aspect="auto", cmap="Reds", origin="lower", vmin=0, vmax=1)
             if fp.shadow.theta_bias is not None:
                 ax.text(
-                    0.02, 0.98, f"bias: {fp.shadow.theta_bias:.1f}",
-                    transform=ax.transAxes, fontsize=8, va="top",
+                    0.02,
+                    0.98,
+                    f"bias: {fp.shadow.theta_bias:.1f}",
+                    transform=ax.transAxes,
+                    fontsize=8,
+                    va="top",
                     bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
                 )
         ax.set_title("Shadow Mask", fontsize=10)
@@ -236,9 +243,12 @@ class PipelineDiagnosticViewer:
             mean_step = np.mean(dtheta)
             median_step = np.median(dtheta)
             ax.text(
-                0.02, 0.98,
+                0.02,
+                0.98,
                 f"$\\delta\\theta$\nmean: {mean_step:.3f}\u00b0\nmedian: {median_step:.3f}\u00b0",
-                transform=ax.transAxes, fontsize=8, va="top",
+                transform=ax.transAxes,
+                fontsize=8,
+                va="top",
                 bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
             )
         ax.set_title("Theta", fontsize=10)
@@ -437,7 +447,8 @@ class PolarDiagnosticViewer:
         # Create figure with 2x2 grid of polar plots + buttons
         self._fig = plt.figure(figsize=(12, 12))
         gs = self._fig.add_gridspec(
-            3, 2,
+            3,
+            2,
             height_ratios=[1, 1, 0.04],
             hspace=0.12,
             wspace=0.15,
@@ -506,7 +517,9 @@ class PolarDiagnosticViewer:
             pf = self._PolarFile(fn, config=self._config)
             frames = list(pf)
             if self._frame_index >= len(frames):
-                logger.warning("Frame %d not in %s (has %d frames)", self._frame_index, fn, len(frames))
+                logger.warning(
+                    "Frame %d not in %s (has %d frames)", self._frame_index, fn, len(frames)
+                )
                 return None
 
             frame = frames[self._frame_index]
@@ -527,7 +540,9 @@ class PolarDiagnosticViewer:
             logger.exception("Failed to load %s", fn)
             return None
 
-    def _plot_polar(self, ax, intensity: np.ndarray, theta: np.ndarray, ground_range: np.ndarray) -> None:
+    def _plot_polar(
+        self, ax, intensity: np.ndarray, theta: np.ndarray, ground_range: np.ndarray
+    ) -> None:
         """Plot intensity data in polar coordinates."""
         ax.clear()
         ax.set_theta_zero_location("N")
