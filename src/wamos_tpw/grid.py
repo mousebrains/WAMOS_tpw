@@ -1,14 +1,16 @@
 #! /usr/bin/env python3
 #
-# UTM grid computation and projection utilities for WAMOS radar data
+# Equirectangular grid computation and projection utilities for WAMOS radar data
 #
 # Jan-2026, Pat Welch, pat@mousebrains.com
 
-"""UTM grid computation and projection utilities for merging radar frames."""
+"""Equirectangular grid computation and projection utilities for merging radar frames."""
 
 from __future__ import annotations
 
 import numpy as np
+
+_DEG2M = 111_319.5  # meters per degree of latitude
 
 
 def compute_common_grid(
@@ -20,7 +22,7 @@ def compute_common_grid(
     resolution_scale: float = 1.0,
 ) -> dict:
     """
-    Compute a common UTM grid that covers all frames.
+    Compute a common equirectangular grid that covers all frames.
 
     Args:
         latitudes: List of per-radial latitude arrays
@@ -34,28 +36,21 @@ def compute_common_grid(
         Dictionary with grid parameters:
         - x_edges, y_edges: Grid edges in meters (centered)
         - grid_spacing: Cell size in meters
-        - utm_zone, hemisphere: Coordinate system info
+        - utm_zone, hemisphere: Coordinate system info (informational)
         - center_lat, center_lon: Grid center in degrees
-        - transformer: pyproj Transformer from WGS84 to UTM
+        - ref_lat, ref_lon: Reference point for equirectangular projection
+        - m_per_deg_lon: Meters per degree of longitude at ref_lat
     """
-    from pyproj import CRS, Transformer
-
     # Get reference position (center of all data)
     all_lats = np.concatenate(latitudes)
     all_lons = np.concatenate(longitudes)
     ref_lat = float(np.mean(all_lats))
     ref_lon = float(np.mean(all_lons))
 
-    # Determine UTM zone
-    utm_zone = int((ref_lon + 180) / 6) % 60 + 1
-    hemisphere = "north" if ref_lat >= 0 else "south"
-
-    utm_crs = CRS.from_proj4(f"+proj=utm +zone={utm_zone} +{hemisphere} +datum=WGS84")
-    crs_wgs84 = CRS.from_epsg(4326)
-    transformer = Transformer.from_crs(crs_wgs84, utm_crs, always_xy=True)
-
-    # Transform all positions to UTM
-    all_x, all_y = transformer.transform(all_lons, all_lats)
+    # Equirectangular projection: convert lat/lon to meters
+    m_per_deg_lon = _DEG2M * np.cos(np.deg2rad(ref_lat))
+    all_x = (all_lons - ref_lon) * m_per_deg_lon
+    all_y = (all_lats - ref_lat) * _DEG2M
 
     # Grid spacing from average range resolution, scaled by resolution_scale
     grid_spacing = float(np.mean(range_resolutions)) / resolution_scale
@@ -79,9 +74,13 @@ def compute_common_grid(
     x_center = (x_edges[0] + x_edges[-1]) / 2
     y_center = (y_edges[0] + y_edges[-1]) / 2
 
-    # Convert center to lat/lon
-    transformer_inv = Transformer.from_crs(utm_crs, crs_wgs84, always_xy=True)
-    center_lon, center_lat = transformer_inv.transform(x_center, y_center)
+    # Convert center to lat/lon via equirectangular inverse
+    center_lon = ref_lon + x_center / m_per_deg_lon
+    center_lat = ref_lat + y_center / _DEG2M
+
+    # UTM zone/hemisphere as informational metadata
+    utm_zone = int((center_lon + 180) / 6) % 60 + 1
+    hemisphere = "north" if center_lat >= 0 else "south"
 
     # Center the edges for output
     x_edges_centered = x_edges - x_center
@@ -90,16 +89,16 @@ def compute_common_grid(
     return {
         "x_edges": x_edges_centered,
         "y_edges": y_edges_centered,
-        "x_edges_utm": x_edges,
-        "y_edges_utm": y_edges,
+        "x_edges_abs": x_edges,
+        "y_edges_abs": y_edges,
         "grid_spacing": grid_spacing,
         "utm_zone": utm_zone,
         "hemisphere": hemisphere,
         "center_lat": float(center_lat),
         "center_lon": float(center_lon),
-        "x_center_utm": x_center,
-        "y_center_utm": y_center,
-        "transformer": transformer,
+        "ref_lat": ref_lat,
+        "ref_lon": ref_lon,
+        "m_per_deg_lon": m_per_deg_lon,
         "n_x": n_x,
         "n_y": n_y,
     }
@@ -115,7 +114,7 @@ def project_frame_to_common_grid(
     grid_params: dict,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Project a single frame onto a common UTM grid.
+    Project a single frame onto a common equirectangular grid.
 
     Args:
         intensity: 2D intensity array (n_bearings, n_distances)
@@ -129,15 +128,18 @@ def project_frame_to_common_grid(
     Returns:
         Tuple of (intensity_sum, intensity_count) arrays for this frame
     """
-    transformer = grid_params["transformer"]
-    x_edges_utm = grid_params["x_edges_utm"]
-    y_edges_utm = grid_params["y_edges_utm"]
+    ref_lat = grid_params["ref_lat"]
+    ref_lon = grid_params["ref_lon"]
+    m_per_deg_lon = grid_params["m_per_deg_lon"]
+    x_edges_abs = grid_params["x_edges_abs"]
+    y_edges_abs = grid_params["y_edges_abs"]
     grid_spacing = grid_params["grid_spacing"]
     n_x = grid_params["n_x"]
     n_y = grid_params["n_y"]
 
-    # Convert ship positions to UTM
-    ship_x, ship_y = transformer.transform(longitudes, latitudes)
+    # Convert ship positions to equirectangular meters
+    ship_x = (longitudes - ref_lon) * m_per_deg_lon
+    ship_y = (latitudes - ref_lat) * _DEG2M
 
     # Initialize accumulation arrays
     frame_sum = np.zeros((n_y, n_x), dtype=np.float64)
@@ -153,8 +155,8 @@ def project_frame_to_common_grid(
     y_coords = np.outer(cos_bearing, ground_range) + ship_y[:, np.newaxis]
 
     # Convert to grid indices
-    x_origin = x_edges_utm[0]
-    y_origin = y_edges_utm[0]
+    x_origin = x_edges_abs[0]
+    y_origin = y_edges_abs[0]
     inv_spacing = 1.0 / grid_spacing
 
     x_idx = ((x_coords - x_origin) * inv_spacing).astype(np.int32)
@@ -197,10 +199,10 @@ def remap_to_common_grid(
     Args:
         intensity: Source intensity (averaged) array
         count: Source count array (may be None)
-        src_x_edges: Source grid x edges (in absolute UTM coordinates)
-        src_y_edges: Source grid y edges (in absolute UTM coordinates)
-        dst_x_edges: Destination grid x edges (in absolute UTM coordinates)
-        dst_y_edges: Destination grid y edges (in absolute UTM coordinates)
+        src_x_edges: Source grid x edges (in absolute equirectangular meters)
+        src_y_edges: Source grid y edges (in absolute equirectangular meters)
+        dst_x_edges: Destination grid x edges (in absolute equirectangular meters)
+        dst_y_edges: Destination grid y edges (in absolute equirectangular meters)
         dst_n_x: Destination grid x dimension
         dst_n_y: Destination grid y dimension
 

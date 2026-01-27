@@ -20,6 +20,30 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _compute_global_percentiles(
+    merged_images: list["MergedImage"],
+    low: float = 2.0,
+    high: float = 98.0,
+    max_samples_per_image: int = 10_000,
+) -> tuple[float, float]:
+    """Compute intensity percentiles via subsampling to limit memory."""
+    rng = np.random.default_rng(0)
+    samples = []
+    for merged in merged_images:
+        valid = merged.intensity[~np.isnan(merged.intensity)]
+        if len(valid) == 0:
+            continue
+        if len(valid) > max_samples_per_image:
+            idx = rng.choice(len(valid), max_samples_per_image, replace=False)
+            samples.append(valid[idx])
+        else:
+            samples.append(valid)
+    if not samples:
+        return 0.0, 1.0
+    all_samples = np.concatenate(samples)
+    return float(np.percentile(all_samples, low)), float(np.percentile(all_samples, high))
+
+
 # ============================================================
 # Helper Functions
 # ============================================================
@@ -559,6 +583,7 @@ def write_mp4_movie(
     range_rings: bool = True,
     show_inset: bool = True,
     title: str | None = None,
+    release: bool = False,
 ) -> str:
     """
     Generate an MP4 movie from merged images.
@@ -575,6 +600,7 @@ def write_mp4_movie(
         range_rings: Draw range rings on frames
         show_inset: Show ship heading and wind direction inset
         title: Movie title (auto-generated if None)
+        release: Free each MergedImage after rendering its frame
 
     Returns:
         Path to created file
@@ -589,20 +615,13 @@ def write_mp4_movie(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Compute global intensity range
+    # Compute global intensity range (subsampled to limit memory)
     if vmin is None or vmax is None:
-        all_valid = []
-        for merged in merged_images:
-            valid_data = merged.intensity[~np.isnan(merged.intensity)]
-            if len(valid_data) > 0:
-                all_valid.extend(valid_data.ravel())
-        if all_valid:
-            if vmin is None:
-                vmin = float(np.percentile(all_valid, 2))
-            if vmax is None:
-                vmax = float(np.percentile(all_valid, 98))
-        else:
-            vmin, vmax = 0, 1
+        auto_vmin, auto_vmax = _compute_global_percentiles(merged_images)
+        if vmin is None:
+            vmin = auto_vmin
+        if vmax is None:
+            vmax = auto_vmax
 
     # Find global data bounds for consistent framing
     global_bounds = {"xmin": np.inf, "xmax": -np.inf, "ymin": np.inf, "ymax": -np.inf}
@@ -714,6 +733,8 @@ def write_mp4_movie(
                 plt.tight_layout()
 
             writer.grab_frame()
+            if release:
+                merged_images[i] = None
 
     plt.close(fig)
     logger.info("Wrote MP4 movie to %s", output_path)
@@ -895,17 +916,8 @@ def write_kml(
         image_dir = Path(image_dir)
     image_dir.mkdir(parents=True, exist_ok=True)
 
-    # Compute global intensity range for consistent coloring
-    all_valid = []
-    for merged in merged_images:
-        valid_data = merged.intensity[~np.isnan(merged.intensity)]
-        if len(valid_data) > 0:
-            all_valid.extend(valid_data.ravel())
-    if all_valid:
-        vmin = float(np.percentile(all_valid, 2))
-        vmax = float(np.percentile(all_valid, 98))
-    else:
-        vmin, vmax = 0, 1
+    # Compute global intensity range (subsampled to limit memory)
+    vmin, vmax = _compute_global_percentiles(merged_images)
 
     # Create KML structure
     kml = Element("kml", xmlns="http://www.opengis.net/kml/2.2")

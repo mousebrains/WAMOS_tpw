@@ -27,14 +27,16 @@ class TestComputeCommonGrid:
         # Check all expected keys are present
         assert "x_edges" in result
         assert "y_edges" in result
-        assert "x_edges_utm" in result
-        assert "y_edges_utm" in result
+        assert "x_edges_abs" in result
+        assert "y_edges_abs" in result
         assert "grid_spacing" in result
         assert "utm_zone" in result
         assert "hemisphere" in result
         assert "center_lat" in result
         assert "center_lon" in result
-        assert "transformer" in result
+        assert "ref_lat" in result
+        assert "ref_lon" in result
+        assert "m_per_deg_lon" in result
         assert "n_x" in result
         assert "n_y" in result
 
@@ -124,8 +126,8 @@ class TestComputeCommonGrid:
         # n_x + 1 edges for n_x bins
         assert len(result["x_edges"]) == result["n_x"] + 1
         assert len(result["y_edges"]) == result["n_y"] + 1
-        assert len(result["x_edges_utm"]) == result["n_x"] + 1
-        assert len(result["y_edges_utm"]) == result["n_y"] + 1
+        assert len(result["x_edges_abs"]) == result["n_x"] + 1
+        assert len(result["y_edges_abs"]) == result["n_y"] + 1
 
     def test_multiple_positions(self):
         """Test grid computation with multiple lat/lon arrays."""
@@ -512,17 +514,17 @@ class TestGridIntegration:
             coarse_n_y = 1
 
         coarse_x_edges = np.linspace(
-            grid_params["x_edges_utm"][0], grid_params["x_edges_utm"][-1], coarse_n_x + 1
+            grid_params["x_edges_abs"][0], grid_params["x_edges_abs"][-1], coarse_n_x + 1
         )
         coarse_y_edges = np.linspace(
-            grid_params["y_edges_utm"][0], grid_params["y_edges_utm"][-1], coarse_n_y + 1
+            grid_params["y_edges_abs"][0], grid_params["y_edges_abs"][-1], coarse_n_y + 1
         )
 
         remapped_sum, remapped_count = remap_to_common_grid(
             intensity=avg_intensity,
             count=frame_count,
-            src_x_edges=grid_params["x_edges_utm"],
-            src_y_edges=grid_params["y_edges_utm"],
+            src_x_edges=grid_params["x_edges_abs"],
+            src_y_edges=grid_params["y_edges_abs"],
             dst_x_edges=coarse_x_edges,
             dst_y_edges=coarse_y_edges,
             dst_n_x=coarse_n_x,

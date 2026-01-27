@@ -18,7 +18,6 @@ import numpy as np
 
 if TYPE_CHECKING:
     from wamos_tpw.frame_pipeline import FramePipeline
-    from wamos_tpw.priority_executor import Result
 
 
 logger = logging.getLogger(__name__)
@@ -42,12 +41,17 @@ class FrameInterpolator:
     - Else if previous and current are within tolerance: backward extrapolation
     """
 
+    # Constants
+    _DEFAULT_TOLERANCE = 1.2  # 20% margin on repeat_time
+    _DEFAULT_REPEAT_TIME = 1.43  # seconds from R/V Revelle should be specified in RPT field
+    _MIN_DIDT = 1  # Minimum indices/second for PPS extrapolation
+
     def __init__(
         self,
         prev: FramePipeline | None,
         current: FramePipeline,
         next_frame: FramePipeline | None,
-        tolerance: float = 1.2,
+        tolerance: float = _DEFAULT_TOLERANCE,
     ) -> None:
         """
         Initialize frame interpolator.
@@ -57,262 +61,242 @@ class FrameInterpolator:
             current: Current frame to compute per-radial values for
             next_frame: Next frame (can be None for last frame)
             tolerance: Multiplier for repeat_time to accept pair (1.2 = 20% margin)
-
-        Raises:
-            ValueError: If neither interpolation nor extrapolation is possible
         """
-        self._prev = prev
-        self._current = current
-        self._next = next_frame
-        self._tolerance = tolerance
-        self._method: str = "none"
-        self._timing_method: str = "linear"  # or "pps"
 
-        meta_curr = current.metadata
-        repeat_time = meta_curr.repeat_time or 1.5
+        self._current = current
+        self._tolerance = tolerance
+        self._timing_method: str = "linear"  # or "PPS(n)"
+
+        repeat_time = current.metadata.repeat_time or 1.43  # 1.43 is an approximation for Revelle
         max_dt = repeat_time * tolerance
 
         self._repeat_time = repeat_time
         self._n_radials = current.n_bearings
 
-        # Try forward interpolation first (current + next)
-        can_interpolate = False
+        # Check if prev is close enough to current, if not then drop it
+        if prev is not None:
+            dt = (current.metadata.timestamp - prev.metadata.timestamp) / np.timedelta64(1, "s")
+            if dt > max_dt or dt <= 0:
+                prev = None
+
+        # Check if next is close enough to current, if not then drop it
         if next_frame is not None:
-            dt_forward = self._time_delta_seconds(
-                meta_curr.timestamp, next_frame.metadata.timestamp
+            dt = (next_frame.metadata.timestamp - current.metadata.timestamp) / np.timedelta64(
+                1, "s"
             )
-            if dt_forward > 0 and dt_forward <= max_dt:
-                can_interpolate = True
-                self._dt = dt_forward
-                self._method = "interpolate"
-
-        # Fall back to backward extrapolation (prev + current)
-        can_extrapolate = False
-        if not can_interpolate and prev is not None:
-            dt_backward = self._time_delta_seconds(prev.metadata.timestamp, meta_curr.timestamp)
-            if dt_backward > 0 and dt_backward <= max_dt:
-                can_extrapolate = True
-                self._dt = dt_backward
-                self._method = "extrapolate"
-
-        if not can_interpolate and not can_extrapolate:
-            raise ValueError(
-                f"Cannot interpolate or extrapolate for frame at {meta_curr.timestamp}: "
-                f"no valid adjacent frame within tolerance {max_dt:.2f}s"
-            )
+            if dt > max_dt or dt <= 0:
+                next_frame = None
 
         # Compute timestamps using PPS or linear fallback
-        self._compute_timestamps()
+        self._compute_timestamps(prev, current, next_frame)
 
-        # Compute positions based on method
-        if self._method == "interpolate":
-            self._compute_interpolated_positions()
+        # Compute lat/lon/headings/speeds
+        self._compute_positions(prev, current, next_frame)
+
+        self._dt = (self._times[-1] - self._times[0]) / np.timedelta64(1, "s")  # Time span
+        self._method = (
+            "interpolate"
+            if next_frame is not None
+            else "extrapolate"
+            if prev is not None
+            else "none"
+        )
+
+    def _extract_PPS(self, frame: FramePipeline) -> tuple[np.ndarray, np.datetime64, int]:
+        """Extract PPS pulse indices from a frame."""
+
+        if frame is not None:
+            pps = frame.pps.indices if frame.pps is not None else None
+            t0 = frame.metadata.timestamp
+            n = frame.n_bearings
         else:
-            self._compute_extrapolated_positions()
+            pps = None
+            n = 1
 
-    def _time_delta_seconds(self, t0: np.datetime64, t1: np.datetime64) -> float:
-        """Return time difference in seconds."""
-        return (t1 - t0) / np.timedelta64(1, "s")
+        if pps is None:
+            pps = np.empty(0, dtype=int)
+            t0 = np.datetime64(0, "s")
 
-    def _get_pps_anchors(self, frame: FramePipeline) -> list[tuple[int, np.datetime64]]:
+        return (pps, t0, n)
+
+    def _compute_timestamps(
+        self,
+        prev: FramePipeline | None,
+        curr: FramePipeline,
+        nxt: FramePipeline | None,
+    ) -> None:
+        """Compute per-radial timestamps using PPS anchors or linear fallback.
+
+        If PPS pulses are found, then use all of the pulses from the previous, current, and next
+        frames to anchor the second transitions.
+        The reference time to round to a whole second corresponds to the first index
+        closest to the middle. The frame's timestamp can be ~+-0.25 seconds from the actual
+        frame's starttime.
+
+        If no PPS pulses are found, then fall back to linear timestamps
+        based on start_time and repeat_time.
         """
-        Get PPS timing anchors from a frame.
 
-        Returns list of (radial_index, whole_second_timestamp) tuples.
-        """
-        if frame is None or frame.pps is None:
-            return []
+        # Get PPS locations from previous frame
+        (prev_PPS, prev_t0, prev_n) = self._extract_PPS(prev)
+        (curr_PPS, curr_t0, curr_n) = self._extract_PPS(curr)
+        (next_PPS, next_t0, next_n) = self._extract_PPS(nxt)
 
-        pps = frame.pps
-        if not pps:
-            return []
+        indices = np.concatenate(
+            (
+                prev_PPS - prev_n,
+                curr_PPS,
+                next_PPS + curr_n,
+            )
+        )
 
-        pps_indices = pps.indices
-        if len(pps_indices) == 0:
-            return []
+        t0 = np.concatenate(
+            (
+                prev_t0 + np.arange(prev_PPS.size, dtype="timedelta64[s]"),
+                curr_t0 + np.arange(curr_PPS.size, dtype="timedelta64[s]"),
+                next_t0 + np.arange(next_PPS.size, dtype="timedelta64[s]"),
+            )
+        )
 
-        meta = frame.metadata
-        start_time = meta.timestamp
-        repeat_time = meta.repeat_time or 1.5
-        n_radials = frame.n_bearings
+        if indices.size > 0:
+            # Find index closest to the middle of the frame scan
+            # The metadata timestamp may be off by up to ~+-0.25 seconds,
+            self._timing_method = f"PPS({indices.size})"
+            mid = np.concatenate(
+                (
+                    (prev_n - prev_PPS) / prev_n,
+                    (curr_n - curr_PPS) / curr_n,
+                    (next_n - next_PPS) / next_n,
+                )
+            )
 
-        anchors = []
-        for idx in pps_indices:
-            # Estimate time at this radial using linear model
-            fraction = idx / n_radials
-            estimated_ns = start_time + np.timedelta64(int(fraction * repeat_time * 1e9), "ns")
+            i_mid = np.argmin(np.abs(mid - 0.5))  # index of the PPS closest to middle
+            t0_mid = t0[i_mid]
+            t0_mid = t0_mid.astype("datetime64[s]")  # Floor to whole second
 
-            # Round to nearest whole second (PPS occurs at whole seconds)
-            # Convert to seconds since epoch, round, convert back
-            estimated_s = estimated_ns.astype("datetime64[s]")
-            # Check if we should round up or down
-            remainder_ns = (estimated_ns - estimated_s) / np.timedelta64(1, "ns")
-            if remainder_ns >= 0.5e9:
-                whole_second = estimated_s + np.timedelta64(1, "s")
-            else:
-                whole_second = estimated_s
-
-            anchors.append((idx, whole_second))
-
-        return anchors
-
-    def _compute_timestamps(self) -> None:
-        """Compute per-radial timestamps using PPS anchors or linear fallback."""
-        n_radials = self._n_radials
-
-        # Collect PPS anchors from all available frames
-        all_anchors = []
-
-        # Get anchors from previous frame (offset indices to be relative to current)
-        if self._prev is not None:
-            prev_anchors = self._get_pps_anchors(self._prev)
-            # Previous frame's radials come before current frame
-            # Offset by -n_radials_prev
-            n_prev = self._prev.n_bearings
-            for idx, ts in prev_anchors:
-                all_anchors.append((idx - n_prev, ts))
-
-        # Get anchors from current frame
-        curr_anchors = self._get_pps_anchors(self._current)
-        all_anchors.extend(curr_anchors)
-
-        # Get anchors from next frame (offset indices)
-        if self._next is not None:
-            next_anchors = self._get_pps_anchors(self._next)
-            for idx, ts in next_anchors:
-                all_anchors.append((idx + n_radials, ts))
-
-        if len(all_anchors) >= 2:
-            # Use PPS anchors to build timing model
-            self._timing_method = "pps"
-            self._times = self._interpolate_from_pps(all_anchors, n_radials)
-        elif len(all_anchors) == 1:
-            # Single PPS anchor - use it with repeat_time for rate
-            self._timing_method = "pps"
-            idx, ts = all_anchors[0]
-            # Rate: radials per nanosecond
-            rate_ns = self._repeat_time * 1e9 / n_radials
-            radial_indices = np.arange(n_radials)
-            offsets_ns = (radial_indices - idx) * rate_ns
-            self._times = ts + offsets_ns.astype("timedelta64[ns]")
-        else:
-            # No PPS anchors - fall back to linear model
+            # Whole second for each PPS pulse
+            t_pps = t0_mid - np.timedelta64(i_mid, "s")  # time at first PPS
+            t_pps = t_pps + np.arange(indices.size, dtype="timedelta64[s]")  # Time at each PPS
+        else:  # No PPS at all
             self._timing_method = "linear"
-            self._times = self._compute_linear_timestamps()
+            indices = np.array([0, curr_n])  # Assume repeat is total time, curr_n instead of -1
+            meta = self._current.metadata
+            t_pps = meta.timestamp + np.array([0, meta.repeat_time * 1e9]).astype(int).astype(
+                "timedelta64[ns]"
+            )
 
-    def _interpolate_from_pps(
-        self, anchors: list[tuple[int, np.datetime64]], n_radials: int
-    ) -> np.ndarray:
-        """
-        Interpolate timestamps from PPS anchors.
+        # Now deal with extrapolation issues for np.interp
 
-        Uses linear interpolation between anchor points.
-        """
-        # Sort anchors by index
-        anchors = sorted(anchors, key=lambda x: x[0])
+        if indices[0] > 0:  # first PPS is after first index, so extrapolate back
+            if indices.size == 1:  # Only a single PPS to pin to, so use RPT
+                dIdt = np.maximum(self._MIN_DIDT, curr_n / self._repeat_time)  # indices/second
+            else:  # Use average spacing
+                dIdt = np.maximum(
+                    self._MIN_DIDT, np.abs(np.mean(np.diff(indices)))
+                )  # Should be positive already
 
-        # Convert to arrays for interpolation
-        anchor_indices = np.array([a[0] for a in anchors])
-        anchor_times_ns = np.array(
-            [(a[1] - np.datetime64(0, "ns")) / np.timedelta64(1, "ns") for a in anchors]
+            cnt = int(np.ceil(indices[0] / dIdt))  # number of points to back up
+            indices = np.insert(
+                indices,
+                0,
+                indices[0] - dIdt * cnt,
+            )
+            t_pps = np.insert(
+                t_pps,
+                0,
+                t_pps[0] - np.datetime64(cnt, "s"),
+            )
+
+        if indices[-1] < curr_n - 1:  # last PPS is before last index, so extrapolate forward
+            if indices.size == 1:  # Only a single PPS to pin to, so use RPT
+                dIdt = np.maximum(self._MIN_DIDT, curr_n / self._repeat_time)  # indices/second
+            else:
+                dIdt = np.maximum(
+                    self._MIN_DIDT, np.abs(np.mean(np.diff(indices)))
+                )  # Should be positive already
+
+            cnt = int(np.ceil((curr_n - 1 - indices[-1]) / dIdt))  # number of points forward
+            indices = np.insert(indices, indices.size, indices[-1] + dIdt * cnt)
+            t_pps = np.insert(
+                t_pps,
+                t_pps.size,
+                t_pps[-1] + np.timedelta64(cnt, "s"),
+            )
+
+        # Now interpolate to get per-radial timestamps, with known PPS anchors
+        dt = np.interp(
+            np.arange(curr_n),
+            indices,
+            (t_pps - t_pps[0]).astype("timedelta64[us]").astype(float),
         )
+        self._times = t_pps[0] + dt.astype("timedelta64[us]")
 
-        # Interpolate for all radial indices
-        radial_indices = np.arange(n_radials)
-        interpolated_ns = np.interp(radial_indices, anchor_indices, anchor_times_ns)
+    # Compute lat/lon/headings/speeds for each radial
+    def _compute_positions(
+        self,
+        prev: FramePipeline | None,
+        curr: FramePipeline,
+        nxt: FramePipeline | None,
+    ) -> None:
+        """Compute per-radial information using interpolation if nxt is available,
+        else extrapolation if prev is available.
+        If neither is available, do nothing.
 
-        # Convert back to datetime64
-        return np.datetime64(0, "ns") + interpolated_ns.astype("timedelta64[ns]")
+        One might think of using the ship speed and heading for the lat/lon, but
+        one has to consider the ship can be crabbing due to currents and winds.
+        """
 
-    def _compute_linear_timestamps(self) -> np.ndarray:
-        """Compute timestamps using linear model from start_time and repeat_time."""
-        meta = self._current.metadata
-        n_radials = self._n_radials
-        radial_fractions = np.linspace(0, 1, n_radials, endpoint=False)
-        return meta.timestamp + (radial_fractions * self._repeat_time * 1e9).astype(
-            "timedelta64[ns]"
-        )
+        # The starting point of the frame at the first radial
+        indices = [0]
+        lat = [curr.metadata.latitude]
+        lon = [curr.metadata.longitude]
+        hdg = [curr.metadata.heading]
 
-    def _compute_interpolated_positions(self) -> None:
-        """Compute interpolated positions and headings using current and next frames."""
-        meta_curr = self._current.metadata
-        meta_next = self._next.metadata
-        n_radials = self._n_radials
+        indices.append(curr.n_bearings)  # Used for interpolation/extrapolation/nothing
 
-        radial_fractions = np.linspace(0, 1, n_radials, endpoint=False)
+        if nxt is not None:  # Interpolation from current starting values to next starting values
+            lat.append(nxt.metadata.latitude)
+            lon.append(nxt.metadata.longitude)
+            hdg.append(nxt.metadata.heading)
+        elif prev is not None:  # Extrapolate if prev is available
+            lat.append(
+                curr.metadata.latitude
+                + (curr.metadata.latitude - prev.metadata.latitude)
+                / prev.n_bearings
+                * curr.n_bearings
+            )
+            lon.append(
+                curr.metadata.longitude
+                + (curr.metadata.longitude - prev.metadata.longitude)
+                / prev.n_bearings
+                * curr.n_bearings
+            )
+            hdg.append(
+                curr.metadata.heading
+                + (curr.metadata.heading - prev.metadata.heading)
+                / prev.n_bearings
+                * curr.n_bearings
+            )
+        else:  # No prev or next, so just duplicate current values
+            lat.append(curr.metadata.latitude)
+            lon.append(curr.metadata.longitude)
+            hdg.append(curr.metadata.heading)
 
-        # Position scale: how much of the inter-frame motion applies to one frame
-        position_scale = self._repeat_time / self._dt if self._dt > 0 else 1.0
+        # Radials are equally spaced in time, so interpolate over indices
+        self._latitudes = np.interp(np.arange(curr.n_bearings), indices, lat)
+        self._longitudes = self._interp_angle(np.arange(curr.n_bearings), indices, lon, True)
+        self._headings = self._interp_angle(np.arange(curr.n_bearings), indices, hdg)
 
-        # Interpolate position
-        lat0 = meta_curr.latitude or 0.0
-        lon0 = meta_curr.longitude or 0.0
-        lat1 = meta_next.latitude or 0.0
-        lon1 = meta_next.longitude or 0.0
-
-        self._latitudes = lat0 + radial_fractions * (lat1 - lat0) * position_scale
-        self._longitudes = self._interpolate_longitude(lon0, lon1, radial_fractions, position_scale)
-
-        # Interpolate heading (circular)
-        hdg0 = meta_curr.heading or 0.0
-        hdg1 = meta_next.heading or 0.0
-        self._headings = self._interpolate_angle(hdg0, hdg1, radial_fractions, position_scale)
-
-    def _compute_extrapolated_positions(self) -> None:
-        """Compute extrapolated positions and headings using previous and current frames."""
-        meta_prev = self._prev.metadata
-        meta_curr = self._current.metadata
-        n_radials = self._n_radials
-
-        radial_fractions = np.linspace(0, 1, n_radials, endpoint=False)
-
-        # Rate of change from prev to current, then project forward
-        rate_scale = self._repeat_time / self._dt if self._dt > 0 else 1.0
-
-        # Extrapolate position using rate from prev->current
-        lat_prev = meta_prev.latitude or 0.0
-        lon_prev = meta_prev.longitude or 0.0
-        lat_curr = meta_curr.latitude or 0.0
-        lon_curr = meta_curr.longitude or 0.0
-
-        lat_rate = lat_curr - lat_prev
-        self._latitudes = lat_curr + radial_fractions * lat_rate * rate_scale
-
-        # Handle longitude carefully for rate calculation
-        lon_diff = lon_curr - lon_prev
-        if abs(lon_diff) > 180:
-            lon_diff = lon_diff - 360 if lon_diff > 0 else lon_diff + 360
-        lon_rate = lon_diff
-        self._longitudes = lon_curr + radial_fractions * lon_rate * rate_scale
-        self._longitudes = ((self._longitudes + 180) % 360) - 180
-
-        # Extrapolate heading (circular)
-        hdg_prev = meta_prev.heading or 0.0
-        hdg_curr = meta_curr.heading or 0.0
-        hdg_diff = hdg_curr - hdg_prev
-        if abs(hdg_diff) > 180:
-            hdg_diff = hdg_diff - 360 if hdg_diff > 0 else hdg_diff + 360
-        self._headings = (hdg_curr + radial_fractions * hdg_diff * rate_scale) % 360
-
-    def _interpolate_longitude(
-        self, lon0: float, lon1: float, fractions: np.ndarray, scale: float
+    def _interp_angle(
+        self,
+        j: np.ndarray,  # Target indices
+        indices: np.ndarray,  # Source indices
+        theta: np.ndarray,  # Source angles
+        q180: bool = False,  # Should result be wrapped to [-180,180]
     ) -> np.ndarray:
-        """Interpolate longitude handling date line wrap-around."""
-        lon_diff = lon1 - lon0
-        if abs(lon_diff) > 180:
-            lon_diff = lon_diff - 360 if lon_diff > 0 else lon_diff + 360
-        result = lon0 + fractions * lon_diff * scale
-        return ((result + 180) % 360) - 180
-
-    def _interpolate_angle(
-        self, angle0: float, angle1: float, fractions: np.ndarray, scale: float
-    ) -> np.ndarray:
-        """Interpolate angles (0-360) handling wrap-around."""
-        angle_diff = angle1 - angle0
-        if abs(angle_diff) > 180:
-            angle_diff = angle_diff - 360 if angle_diff > 0 else angle_diff + 360
-        result = angle0 + fractions * angle_diff * scale
-        return result % 360
+        # Interpolate angles (0-360) handling wrap-around
+        result = np.interp(j, indices, np.asarray(theta) % 360, period=360)  # [0,360)
+        return (result + 180) % 360 - 180 if q180 else result
 
     @property
     def method(self) -> str:
@@ -321,23 +305,13 @@ class FrameInterpolator:
 
     @property
     def timing_method(self) -> str:
-        """Return the timing method used: 'pps' or 'linear'."""
+        """Return the timing method used: 'PPS(n)' or 'linear'."""
         return self._timing_method
 
     @property
     def frame(self) -> FramePipeline:
         """Return the current frame."""
         return self._current
-
-    @property
-    def prev_frame(self) -> FramePipeline | None:
-        """Return the previous frame (may be None)."""
-        return self._prev
-
-    @property
-    def next_frame(self) -> FramePipeline | None:
-        """Return the next frame (may be None)."""
-        return self._next
 
     @property
     def times(self) -> np.ndarray:
@@ -411,532 +385,6 @@ class FrameData:
     timings: dict[str, float] = field(default_factory=dict)
 
 
-# ============================================================
-# Task handlers for priority executor (must be at module level)
-# ============================================================
-
-
-def _do_process_file(task) -> "Result":
-    """
-    Process a single polar file and return FrameData for each frame.
-
-    This task loads a file, processes each frame through the pipeline,
-    and returns serializable FrameData with shared memory for arrays.
-    """
-    import resource
-    from wamos_tpw.priority_executor import Result, create_shared_array
-    from wamos_tpw.config import Config
-    from wamos_tpw.polarfile import PolarFile
-    from wamos_tpw.frame_pipeline import FramePipeline
-
-    filepath, file_index, config_dict, qTiming = task.data
-
-    # Reconstruct config
-    config = Config()
-    if config_dict:
-        config._config = config_dict
-
-    t0 = time.perf_counter() if qTiming else None
-    pf = PolarFile(filepath, config=config)
-    frames_data = []
-    shm_names = []
-
-    for frame_idx, frame in enumerate(pf):
-        fp = FramePipeline(frame, config=config, qTiming=qTiming)
-
-        # Create shared memory for arrays
-        theta_shm = create_shared_array(fp.theta_array)
-        ground_range_shm = create_shared_array(fp.ground_range)
-        intensity_shm = create_shared_array(fp.final_intensity)
-
-        shm_names.extend([theta_shm[0], ground_range_shm[0], intensity_shm[0]])
-
-        frame_data = FrameData(
-            filepath=filepath,
-            file_index=file_index,
-            frame_index=frame_idx,
-            timestamp=fp.metadata.timestamp,
-            repeat_time=fp.metadata.repeat_time or 1.5,
-            latitude=fp.metadata.latitude,
-            longitude=fp.metadata.longitude,
-            heading=fp.metadata.heading,
-            ship_speed=fp.metadata.ship_speed,
-            wind_speed=fp.metadata.wind_speed,
-            wind_direction=fp.metadata.wind_direction,
-            n_bearings=fp.n_bearings,
-            n_distances=fp.n_distances,
-            pps_indices=fp.pps.indices if fp.pps else None,
-            theta_shm=theta_shm,
-            ground_range_shm=ground_range_shm,
-            intensity_shm=intensity_shm,
-            timings=fp.timings if qTiming else {},
-        )
-        frames_data.append(frame_data)
-
-    elapsed = time.perf_counter() - t0 if t0 else 0.0
-    peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-
-    return Result(
-        task_type="process_file",
-        task_id=task.task_id,
-        data={
-            "filepath": filepath,
-            "file_index": file_index,
-            "frames": frames_data,
-            "elapsed": elapsed,
-            "peak_rss": peak_rss,
-        },
-        shm_to_release=[],  # Don't release yet - needed for interpolation
-    )
-
-
-def _write_frame_netcdf(
-    netcdf_dir: str,
-    timestamp: np.datetime64,
-    projected_intensity: np.ndarray,
-    grid_params: dict,
-    latitudes: np.ndarray,
-    longitudes: np.ndarray,
-    headings: np.ndarray,
-    ship_speed: float | None,
-    wind_speed: float | None,
-    wind_direction: float | None,
-    file_index: int,
-    frame_index: int,
-) -> str:
-    """
-    Write a single frame's projected data to a NetCDF file.
-
-    Args:
-        netcdf_dir: Output directory
-        timestamp: Frame timestamp
-        projected_intensity: 2D projected intensity array
-        grid_params: Grid parameters (x_edges, y_edges, center_lat, etc.)
-        latitudes: Per-radial latitudes
-        longitudes: Per-radial longitudes
-        headings: Per-radial ship headings
-        ship_speed: Ship speed (m/s) or None
-        wind_speed: Wind speed (m/s) or None
-        wind_direction: Wind direction (degrees) or None
-        file_index: Source file index
-        frame_index: Frame index within file
-
-    Returns:
-        Path to the written NetCDF file
-    """
-    import os
-
-    try:
-        import xarray as xr
-    except ImportError:
-        logger.warning("xarray not installed, skipping NetCDF output")
-        return ""
-
-    # Generate filename from timestamp: YYYYMMDD_HHMMSS_fff.nc
-    ts_str = np.datetime_as_string(timestamp, unit="ms")
-    # Format: 2022-04-05T14:00:00.123 -> 20220405_140000_123
-    filename = ts_str.replace("-", "").replace(":", "").replace("T", "_").replace(".", "_") + ".nc"
-    filepath = os.path.join(netcdf_dir, filename)
-
-    # Compute grid centers from edges
-    x_centers = (grid_params["x_edges"][:-1] + grid_params["x_edges"][1:]) / 2
-    y_centers = (grid_params["y_edges"][:-1] + grid_params["y_edges"][1:]) / 2
-
-    # Create xarray Dataset
-    ds = xr.Dataset(
-        data_vars={
-            "intensity": (
-                ["y", "x"],
-                projected_intensity,
-                {
-                    "long_name": "Projected radar intensity",
-                    "units": "counts",
-                    "coordinates": "x y",
-                },
-            ),
-        },
-        coords={
-            "x": (
-                ["x"],
-                x_centers,
-                {
-                    "long_name": "Distance east from center",
-                    "units": "m",
-                    "axis": "X",
-                },
-            ),
-            "y": (
-                ["y"],
-                y_centers,
-                {
-                    "long_name": "Distance north from center",
-                    "units": "m",
-                    "axis": "Y",
-                },
-            ),
-            "time": timestamp,
-        },
-        attrs={
-            "title": "WAMOS radar frame projection",
-            "institution": "WAMOS TPW",
-            "source": "wamos interpolator",
-            "history": f"Created {np.datetime64('now')}",
-            "Conventions": "CF-1.8",
-            # Grid metadata
-            "grid_spacing_m": grid_params["grid_spacing"],
-            "utm_zone": grid_params["utm_zone"],
-            "hemisphere": grid_params["hemisphere"],
-            "center_latitude": grid_params["center_lat"],
-            "center_longitude": grid_params["center_lon"],
-            "crs": f"EPSG:326{grid_params['utm_zone']:02d}"
-            if grid_params["hemisphere"] == "north"
-            else f"EPSG:327{grid_params['utm_zone']:02d}",
-            # Frame indices
-            "file_index": file_index,
-            "frame_index": frame_index,
-        },
-    )
-
-    # Add ship/wind metadata as scalar variables
-    if ship_speed is not None:
-        ds["ship_speed"] = xr.DataArray(
-            ship_speed,
-            attrs={"long_name": "Ship speed", "units": "m/s"},
-        )
-    if wind_speed is not None:
-        ds["wind_speed"] = xr.DataArray(
-            wind_speed,
-            attrs={"long_name": "Wind speed", "units": "m/s"},
-        )
-    if wind_direction is not None:
-        ds["wind_direction"] = xr.DataArray(
-            wind_direction,
-            attrs={"long_name": "Wind direction (from)", "units": "degrees"},
-        )
-
-    # Add mean heading
-    ds["ship_heading"] = xr.DataArray(
-        float(np.mean(headings)),
-        attrs={"long_name": "Mean ship heading", "units": "degrees"},
-    )
-
-    # Add per-radial data as 1D arrays
-    ds["radial_latitude"] = xr.DataArray(
-        latitudes,
-        dims=["radial"],
-        attrs={"long_name": "Per-radial latitude", "units": "degrees_north"},
-    )
-    ds["radial_longitude"] = xr.DataArray(
-        longitudes,
-        dims=["radial"],
-        attrs={"long_name": "Per-radial longitude", "units": "degrees_east"},
-    )
-    ds["radial_heading"] = xr.DataArray(
-        headings,
-        dims=["radial"],
-        attrs={"long_name": "Per-radial ship heading", "units": "degrees"},
-    )
-
-    # Write to file with compression
-    encoding = {
-        "intensity": {"zlib": True, "complevel": 4, "dtype": "float32"},
-        "radial_latitude": {"zlib": True, "complevel": 4},
-        "radial_longitude": {"zlib": True, "complevel": 4},
-        "radial_heading": {"zlib": True, "complevel": 4},
-    }
-
-    ds.to_netcdf(filepath, encoding=encoding)
-
-    return filepath
-
-
-def _do_interpolate(task) -> "Result":
-    """
-    Perform interpolation on a triplet, then project to UTM grid.
-
-    This task runs the FrameInterpolator logic on serialized frame data,
-    then projects the intensity onto a per-frame UTM grid.
-    """
-    import resource
-    from wamos_tpw.priority_executor import Result, read_shared_array
-
-    prev_data, current_data, next_data, tolerance, do_projection, netcdf_dir = task.data
-
-    t0_total = time.perf_counter()
-    timings = {}
-
-    # Read intensity, theta, ground_range from shared memory for projection.
-    # Only the CURRENT frame needs these arrays - prev/next are only used
-    # for their metadata (timestamp, lat, lon, heading, pps) to compute
-    # interpolated per-radial values.
-    t0 = time.perf_counter()
-    intensity = None
-    theta = None
-    ground_range = None
-
-    if current_data.intensity_shm:
-        intensity = read_shared_array(*current_data.intensity_shm)
-    if current_data.theta_shm:
-        theta = read_shared_array(*current_data.theta_shm)
-    if current_data.ground_range_shm:
-        ground_range = read_shared_array(*current_data.ground_range_shm)
-    timings["read_shm"] = time.perf_counter() - t0
-
-    # Build lightweight wrappers that provide the interface FrameInterpolator expects
-    class _MetadataProxy:
-        def __init__(self, frame_data: FrameData):
-            self.timestamp = frame_data.timestamp
-            self.repeat_time = frame_data.repeat_time
-            self.latitude = frame_data.latitude
-            self.longitude = frame_data.longitude
-            self.heading = frame_data.heading
-
-    class _PPSProxy:
-        def __init__(self, indices: np.ndarray | None):
-            self.indices = indices if indices is not None else np.array([], dtype=np.int32)
-
-        def __bool__(self):
-            return len(self.indices) > 0
-
-    class FrameProxy:
-        """Proxy for FramePipeline that uses serialized FrameData."""
-
-        def __init__(self, frame_data: FrameData):
-            self._data = frame_data
-            self._metadata = _MetadataProxy(frame_data)
-            self._pps = (
-                _PPSProxy(frame_data.pps_indices) if frame_data.pps_indices is not None else None
-            )
-
-        @property
-        def metadata(self):
-            return self._metadata
-
-        @property
-        def pps(self):
-            return self._pps
-
-        @property
-        def n_bearings(self):
-            return self._data.n_bearings
-
-    # Create proxies
-    t0 = time.perf_counter()
-    prev_proxy = FrameProxy(prev_data) if prev_data else None
-    current_proxy = FrameProxy(current_data)
-    next_proxy = FrameProxy(next_data) if next_data else None
-    timings["build_proxies"] = time.perf_counter() - t0
-
-    try:
-        # Run interpolation
-        t0 = time.perf_counter()
-        interp = FrameInterpolator(
-            prev_proxy,
-            current_proxy,
-            next_proxy,
-            tolerance=tolerance,
-        )
-        timings["interpolate"] = time.perf_counter() - t0
-
-        # UTM projection (if requested)
-        projected_intensity = None
-        grid_params = None
-
-        if do_projection and intensity is not None and ground_range is not None:
-            t0 = time.perf_counter()
-            from pyproj import CRS, Transformer
-
-            latitudes = interp.latitudes
-            longitudes = interp.longitudes
-            headings = interp.headings
-
-            # Determine UTM zone from center of frame
-            ref_lat = float(np.mean(latitudes))
-            ref_lon = float(np.mean(longitudes))
-            utm_zone = int((ref_lon + 180) / 6) % 60 + 1
-            hemisphere = "north" if ref_lat >= 0 else "south"
-
-            utm_crs = CRS.from_proj4(f"+proj=utm +zone={utm_zone} +{hemisphere} +datum=WGS84")
-            crs_wgs84 = CRS.from_epsg(4326)
-            transformer = Transformer.from_crs(crs_wgs84, utm_crs, always_xy=True)
-
-            # Convert ship positions to UTM
-            ship_x, ship_y = transformer.transform(longitudes, latitudes)
-
-            # Compute grid extent for this frame
-            max_range = float(ground_range[-1]) * 1.1
-            # Grid spacing = max of range resolution and angular width at outermost range
-            # Angular width = arc length between adjacent radials = range * (2π / n_bearings)
-            range_res = float(ground_range[1] - ground_range[0]) if len(ground_range) > 1 else 10.0
-            n_bearings = intensity.shape[0]
-            angular_width = float(ground_range[-1]) * 2 * np.pi / n_bearings
-            grid_spacing = max(range_res, angular_width)
-
-            x_min = ship_x.min() - max_range
-            x_max = ship_x.max() + max_range
-            y_min = ship_y.min() - max_range
-            y_max = ship_y.max() + max_range
-
-            n_x = int(np.ceil((x_max - x_min) / grid_spacing))
-            n_y = int(np.ceil((y_max - y_min) / grid_spacing))
-
-            x_edges = np.linspace(x_min, x_min + n_x * grid_spacing, n_x + 1)
-            y_edges = np.linspace(y_min, y_min + n_y * grid_spacing, n_y + 1)
-
-            # Initialize accumulation arrays
-            intensity_sum = np.zeros((n_y, n_x), dtype=np.float64)
-            intensity_count = np.zeros((n_y, n_x), dtype=np.int32)
-
-            # Project: compute earth bearing and positions
-            earth_bearing_rad = np.deg2rad((theta + headings) % 360)
-            sin_bearing = np.sin(earth_bearing_rad)
-            cos_bearing = np.cos(earth_bearing_rad)
-
-            x_coords = np.outer(sin_bearing, ground_range) + ship_x[:, np.newaxis]
-            y_coords = np.outer(cos_bearing, ground_range) + ship_y[:, np.newaxis]
-
-            # Convert to grid indices
-            inv_spacing = 1.0 / grid_spacing
-            x_idx = ((x_coords - x_min) * inv_spacing).astype(np.int32)
-            y_idx = ((y_coords - y_min) * inv_spacing).astype(np.int32)
-
-            # Flatten and filter valid
-            x_flat = x_idx.ravel()
-            y_flat = y_idx.ravel()
-            values_flat = intensity.ravel()
-
-            valid = (
-                (x_flat >= 0)
-                & (x_flat < n_x)
-                & (y_flat >= 0)
-                & (y_flat < n_y)
-                & ~np.isnan(values_flat)
-            )
-
-            if np.sum(valid) > 0:
-                linear_idx = y_flat[valid] * n_x + x_flat[valid]
-                grid_size = n_x * n_y
-                batch_sum = np.bincount(linear_idx, weights=values_flat[valid], minlength=grid_size)
-                batch_count = np.bincount(linear_idx, minlength=grid_size)
-                intensity_sum.ravel()[:] += batch_sum
-                intensity_count.ravel()[:] += batch_count
-
-            # Compute averaged intensity
-            with np.errstate(invalid="ignore"):
-                projected_intensity = intensity_sum / intensity_count
-            projected_intensity[intensity_count == 0] = np.nan
-
-            # Grid center for display coordinates
-            x_center = (x_edges[0] + x_edges[-1]) / 2
-            y_center = (y_edges[0] + y_edges[-1]) / 2
-
-            # Convert center to lat/lon
-            transformer_inv = Transformer.from_crs(utm_crs, crs_wgs84, always_xy=True)
-            center_lon, center_lat = transformer_inv.transform(x_center, y_center)
-
-            grid_params = {
-                "x_edges": x_edges - x_center,  # Centered coordinates
-                "y_edges": y_edges - y_center,
-                "grid_spacing": grid_spacing,
-                "utm_zone": utm_zone,
-                "hemisphere": hemisphere,
-                "center_lat": float(center_lat),
-                "center_lon": float(center_lon),
-                "n_x": n_x,
-                "n_y": n_y,
-            }
-            timings["project"] = time.perf_counter() - t0
-
-            # Write NetCDF file if output directory specified
-            if netcdf_dir and projected_intensity is not None:
-                t0 = time.perf_counter()
-                _write_frame_netcdf(
-                    netcdf_dir=netcdf_dir,
-                    timestamp=current_data.timestamp,
-                    projected_intensity=projected_intensity,
-                    grid_params=grid_params,
-                    latitudes=latitudes,
-                    longitudes=longitudes,
-                    headings=headings,
-                    ship_speed=current_data.ship_speed,
-                    wind_speed=current_data.wind_speed,
-                    wind_direction=current_data.wind_direction,
-                    file_index=current_data.file_index,
-                    frame_index=current_data.frame_index,
-                )
-                timings["netcdf"] = time.perf_counter() - t0
-
-        timings["total"] = time.perf_counter() - t0_total
-
-        result_data = {
-            "file_index": current_data.file_index,
-            "frame_index": current_data.frame_index,
-            "filepath": current_data.filepath,
-            "timestamp": current_data.timestamp,
-            "method": interp.method,
-            "timing_method": interp.timing_method,
-            "time_delta": interp.time_delta,
-            "times": interp.times,
-            "latitudes": interp.latitudes,
-            "longitudes": interp.longitudes,
-            "headings": interp.headings,
-            # Ship and wind metadata
-            "ship_speed": current_data.ship_speed,
-            "wind_speed": current_data.wind_speed,
-            "wind_direction": current_data.wind_direction,
-            # Projected data (if do_projection=True)
-            "projected_intensity": projected_intensity,
-            "grid_params": grid_params,
-            # Timings
-            "timings": timings,
-            "success": True,
-            "error": None,
-        }
-    except ValueError as e:
-        timings["total"] = time.perf_counter() - t0_total
-        result_data = {
-            "file_index": current_data.file_index,
-            "frame_index": current_data.frame_index,
-            "filepath": current_data.filepath,
-            "timestamp": current_data.timestamp,
-            "prev_timestamp": prev_data.timestamp if prev_data else None,
-            "next_timestamp": next_data.timestamp if next_data else None,
-            "timings": timings,
-            "success": False,
-            "error": str(e),
-        }
-
-    # Track shared memory to release (the triplet's arrays)
-    shm_to_release = []
-    for frame_data in [prev_data, current_data, next_data]:
-        if frame_data:
-            if frame_data.theta_shm:
-                shm_to_release.append(frame_data.theta_shm[0])
-            if frame_data.ground_range_shm:
-                shm_to_release.append(frame_data.ground_range_shm[0])
-            if frame_data.intensity_shm:
-                shm_to_release.append(frame_data.intensity_shm[0])
-
-    elapsed = time.perf_counter() - t0
-    result_data["elapsed"] = elapsed
-    peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    result_data["peak_rss"] = peak_rss
-
-    return Result(
-        task_type="interpolate",
-        task_id=task.task_id,
-        data=result_data,
-        shm_to_release=[],  # Don't release - main process handles lifecycle
-    )
-
-
-# Task handlers registry for priority executor
-TASK_HANDLERS = {
-    "process_file": _do_process_file,
-    "interpolate": _do_interpolate,
-}
-
-
 def _add_arguments(parser) -> None:
     """Add command arguments to parser."""
     from wamos_tpw.filenames import add_common_arguments
@@ -998,6 +446,7 @@ def run(args) -> None:
     from tqdm import tqdm
     from wamos_tpw.config import Config
     from wamos_tpw.filenames import Filenames
+    from wamos_tpw.interpolator_tasks import TASK_HANDLERS
     from wamos_tpw.priority_executor import (
         Priority,
         PriorityProcessExecutor,
@@ -1067,7 +516,6 @@ def run(args) -> None:
     n_extrapolated = 0
     n_pps = 0
     n_linear = 0
-    n_skipped = 0
 
     # Progress bars
     pbar_files = tqdm(
@@ -1147,24 +595,10 @@ def run(args) -> None:
                 else:
                     n_extrapolated += 1
 
-                if data["timing_method"] == "pps":
+                if data["timing_method"].startswith("PPS"):
                     n_pps += 1
                 else:
                     n_linear += 1
-            else:
-                n_skipped += 1
-                prev_ts = data.get("prev_timestamp")
-                next_ts = data.get("next_timestamp")
-                curr_ts = data["timestamp"]
-                logging.warning(
-                    "Frame (%d, %d): skipped - %s | prev=%s, curr=%s, next=%s",
-                    data["file_index"],
-                    data["frame_index"],
-                    data["error"],
-                    np.datetime_as_string(prev_ts, unit="ms") if prev_ts is not None else "None",
-                    np.datetime_as_string(curr_ts, unit="ms"),
-                    np.datetime_as_string(next_ts, unit="ms") if next_ts is not None else "None",
-                )
 
             # Check for more ready triplets (in case file results arrived while processing)
             for prev, current, next_frame in triplet_collector.ready_triplets():
@@ -1201,19 +635,29 @@ def run(args) -> None:
     )
     logging.info("Workers: %d", n_workers)
     logging.info(
-        "Summary: position: %d interpolated, %d extrapolated; "
-        "timing: %d pps, %d linear; %d skipped",
+        "Summary: position: %d interpolated, %d extrapolated; timing: %d pps, %d linear",
         n_interpolated,
         n_extrapolated,
         n_pps,
         n_linear,
-        n_skipped,
     )
 
     # Timing statistics
     if args.timing and interp_results:
         # Collect timing data from all successful results
-        timing_keys = ["read_shm", "build_proxies", "interpolate", "project", "netcdf", "total"]
+        timing_keys = [
+            "read_shm",
+            "build_proxies",
+            "interpolate",
+            "project",
+            "proj_ship_pos",
+            "proj_grid_setup",
+            "proj_bearings",
+            "proj_bincount",
+            "proj_finalize",
+            "netcdf",
+            "total",
+        ]
         timing_sums = {k: 0.0 for k in timing_keys}
         timing_counts = {k: 0 for k in timing_keys}
 
@@ -1230,7 +674,7 @@ def run(args) -> None:
             if timing_counts[k] > 0:
                 avg_ms = timing_sums[k] / timing_counts[k] * 1000
                 total_s = timing_sums[k]
-                logging.info("  %-15s: %7.2f ms avg, %7.2f s total", k, avg_ms, total_s)
+                logging.info("  %-18s: %7.2f ms avg, %7.2f s total", k, avg_ms, total_s)
 
     # Finalize viewer and wait for user to close
     if viewer:

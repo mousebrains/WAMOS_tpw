@@ -84,6 +84,7 @@ class FilesMergePipeline:
         self._n_processed = 0
         self._n_merged = 0
         self._timings: dict[str, float] = {}
+        self._merge_stats: list[dict] = []
 
     @property
     def n_windows(self) -> int:
@@ -106,6 +107,8 @@ class FilesMergePipeline:
         Returns:
             MergedImage or None if not enough valid frames
         """
+        t0_merge = time.perf_counter()
+
         if len(frames) < self._window_config.min_frames_per_window:
             return None
 
@@ -123,13 +126,13 @@ class FilesMergePipeline:
         range_resolutions = []
 
         for f in frames:
-            if "grid_params" in f and f["grid_params"]:
-                max_ranges.append(f["grid_params"].get("n_x", 1000) * 10)
-                range_resolutions.append(f["grid_params"].get("grid_spacing", 10))
-            else:
-                max_ranges.append(3000.0)
-                range_resolutions.append(7.5)
+            max_ranges.append(f.get("ground_range_max", 3000.0))
+            # Use per-frame projected grid_spacing (accounts for angular width)
+            # rather than raw range_resolution (radial sample spacing only)
+            frame_gp = f.get("grid_params") or {}
+            range_resolutions.append(frame_gp.get("grid_spacing", 7.5))
 
+        t0 = time.perf_counter()
         grid_params = compute_common_grid(
             latitudes=latitudes,
             longitudes=longitudes,
@@ -137,6 +140,7 @@ class FilesMergePipeline:
             range_resolutions=range_resolutions,
             resolution_scale=self._window_config.resolution_scale,
         )
+        t_grid = time.perf_counter() - t0
 
         # Create accumulator
         accumulator = WindowAccumulator(
@@ -150,6 +154,12 @@ class FilesMergePipeline:
         )
 
         # Project each frame onto the common grid
+        t_remap_total = 0.0
+        t_accum_total = 0.0
+        n_remapped = 0
+        n_fallback = 0
+        n_no_proj = 0
+
         for frame_data in frames:
             if "latitudes" not in frame_data:
                 continue
@@ -173,22 +183,28 @@ class FilesMergePipeline:
                     and frame_center_lat is not None
                     and frame_center_lon is not None
                 ):
-                    frame_center_x, frame_center_y = grid_params["transformer"].transform(
-                        frame_center_lon, frame_center_lat
-                    )
-                    frame_x_edges_utm = frame_x_edges_centered + frame_center_x
-                    frame_y_edges_utm = frame_y_edges_centered + frame_center_y
+                    ref_lat = grid_params["ref_lat"]
+                    ref_lon = grid_params["ref_lon"]
+                    m_per_deg_lon = grid_params["m_per_deg_lon"]
 
+                    frame_center_x = (frame_center_lon - ref_lon) * m_per_deg_lon
+                    frame_center_y = (frame_center_lat - ref_lat) * 111_319.5
+                    frame_x_edges_abs = frame_x_edges_centered + frame_center_x
+                    frame_y_edges_abs = frame_y_edges_centered + frame_center_y
+
+                    t0 = time.perf_counter()
                     frame_sum, frame_count = remap_to_common_grid(
                         proj_intensity,
                         proj_count,
-                        frame_x_edges_utm,
-                        frame_y_edges_utm,
-                        grid_params["x_edges_utm"],
-                        grid_params["y_edges_utm"],
+                        frame_x_edges_abs,
+                        frame_y_edges_abs,
+                        grid_params["x_edges_abs"],
+                        grid_params["y_edges_abs"],
                         grid_params["n_x"],
                         grid_params["n_y"],
                     )
+                    t_remap_total += time.perf_counter() - t0
+                    n_remapped += 1
                 else:
                     frame_sum = np.zeros((grid_params["n_y"], grid_params["n_x"]), dtype=np.float64)
                     frame_count = np.zeros((grid_params["n_y"], grid_params["n_x"]), dtype=np.int32)
@@ -199,6 +215,7 @@ class FilesMergePipeline:
                             frame_count[valid] = proj_count[valid]
                         else:
                             frame_count[valid] = 1
+                    n_fallback += 1
             else:
                 logger.debug(
                     "Frame (%d, %d) has no projected data",
@@ -207,7 +224,9 @@ class FilesMergePipeline:
                 )
                 frame_sum = np.zeros((grid_params["n_y"], grid_params["n_x"]), dtype=np.float64)
                 frame_count = np.zeros((grid_params["n_y"], grid_params["n_x"]), dtype=np.int32)
+                n_no_proj += 1
 
+            t0 = time.perf_counter()
             accumulator.add_projected(
                 projected_intensity=frame_sum,
                 projected_count=frame_count,
@@ -217,13 +236,37 @@ class FilesMergePipeline:
                 wind_speed=frame_data.get("wind_speed"),
                 wind_direction=frame_data.get("wind_direction"),
             )
+            t_accum_total += time.perf_counter() - t0
 
+        t0 = time.perf_counter()
+        result = None
         if accumulator.n_frames >= self._window_config.min_frames_per_window:
-            return accumulator.finalize(
+            result = accumulator.finalize(
                 window_index=window_idx,
                 interpolate_gaps=self._window_config.interpolate_gaps,
             )
-        return None
+        t_finalize = time.perf_counter() - t0
+
+        t_total = time.perf_counter() - t0_merge
+
+        self._merge_stats.append(
+            {
+                "total": t_total,
+                "grid": t_grid,
+                "remap": t_remap_total,
+                "accumulate": t_accum_total,
+                "finalize": t_finalize,
+                "n_frames": len(frames),
+                "n_remapped": n_remapped,
+                "n_fallback": n_fallback,
+                "n_no_proj": n_no_proj,
+                "n_y": grid_params["n_y"],
+                "n_x": grid_params["n_x"],
+                "grid_spacing": grid_params["grid_spacing"],
+            }
+        )
+
+        return result
 
     def iter_merged(self) -> Iterator[MergedImage]:
         """
@@ -235,7 +278,7 @@ class FilesMergePipeline:
         """
         from tqdm import tqdm
 
-        from wamos_tpw.interpolator import TASK_HANDLERS
+        from wamos_tpw.interpolator_tasks import TASK_HANDLERS
         from wamos_tpw.priority_executor import (
             Priority,
             PriorityProcessExecutor,
@@ -293,16 +336,28 @@ class FilesMergePipeline:
         pending_files = 0
         pending_interp = 0
 
-        # Initial batch size: enough to keep workers busy without overwhelming queue
-        # Queue buffer on macOS is ~64KB; with ~500 bytes per task, ~100 tasks fit
-        # Use 2x workers as target in-flight to maintain throughput
-        max_pending = max(self._n_workers * 4, 100)
+        # Limit in-flight file loads to keep workers busy without excessive
+        # shared memory accumulation.  Each loaded-but-not-interpolated file
+        # holds ~376 KB of shared memory (intensity + theta + ground_range).
+        max_pending = self._n_workers * 3
 
         def submit_batch(n: int) -> int:
-            """Submit up to n file tasks. Returns number submitted."""
+            """Submit up to n file tasks. Returns number submitted.
+
+            Respects two limits:
+            - max_pending: caps tasks submitted but not yet returned
+            - max_loaded_ahead: caps files loaded but not yet interpolated,
+              preventing unbounded shared memory growth on large runs
+            """
             nonlocal files_submitted, pending_files
+            # Files loaded but not yet interpolated (holding shared memory)
+            loaded_not_interp = len(file_frame_counts) - len(files_with_all_frames_interpolated)
+            max_loaded_ahead = max_pending * 2
+            room = min(n, max_pending - pending_files, max_loaded_ahead - loaded_not_interp)
+            if room <= 0:
+                return 0
             submitted = 0
-            for _ in range(n):
+            for _ in range(room):
                 try:
                     file_idx = next(file_iter)
                     filepath = self._files[file_idx]
@@ -362,11 +417,82 @@ class FilesMergePipeline:
         time_interpolating = 0.0
         time_merging = 0.0
 
+        # ---- Merge thread: runs _merge_window off the main event loop ----
+        import queue as _queue
+        import threading
+
+        merge_input: _queue.Queue[tuple[int, list[dict]]] = _queue.Queue()
+        merge_output: _queue.Queue[tuple[int, MergedImage | None, float]] = _queue.Queue()
+        merge_shutdown = threading.Event()
+
+        def _merge_thread_fn():
+            while not merge_shutdown.is_set():
+                try:
+                    window_idx, frames = merge_input.get(timeout=0.1)
+                except _queue.Empty:
+                    continue
+                t0 = time.perf_counter()
+                merged = self._merge_window(window_idx, frames)
+                elapsed = time.perf_counter() - t0
+                merge_output.put((window_idx, merged, elapsed))
+
+        merge_thread = threading.Thread(target=_merge_thread_fn, daemon=True)
+        merge_thread.start()
+        pending_merges = 0
+        # Cap queued merges to bound memory: each window holds ~42 frame dicts
+        # with projected arrays. 4 windows ≈ 25 MB — keeps merge thread fed
+        # without unbounded growth on 100K+ file runs.
+        max_queued_merges = 4
+
         # Submit initial batch to get workers started
         submit_batch(max_pending)
 
+        # Helper: drain completed merges from the merge thread (non-blocking)
+        def _collect_merges():
+            nonlocal time_merging, pending_merges
+            while True:
+                try:
+                    window_idx, merged, elapsed = merge_output.get_nowait()
+                    time_merging += elapsed
+                    pending_merges -= 1
+                    if merged is not None:
+                        self._n_merged += 1
+                        pbar_merged.update(1)
+                        _merged_results.append(merged)
+                    completed_windows.add(window_idx)
+                except _queue.Empty:
+                    break
+
+        def _wait_for_merge_room():
+            """Block until pending_merges drops below max_queued_merges."""
+            nonlocal time_merging, pending_merges
+            while pending_merges >= max_queued_merges:
+                try:
+                    window_idx, merged, elapsed = merge_output.get(timeout=0.1)
+                    time_merging += elapsed
+                    pending_merges -= 1
+                    if merged is not None:
+                        self._n_merged += 1
+                        pbar_merged.update(1)
+                        _merged_results.append(merged)
+                    completed_windows.add(window_idx)
+                except _queue.Empty:
+                    pass
+
+        _merged_results: list[MergedImage] = []
+
         # Main processing loop - submit more tasks as results arrive
-        while pending_files > 0 or pending_interp > 0 or files_submitted < total_files:
+        while (
+            pending_files > 0
+            or pending_interp > 0
+            or files_submitted < total_files
+            or pending_merges > 0
+        ):
+            # Yield any completed merges without blocking
+            _collect_merges()
+            while _merged_results:
+                yield _merged_results.pop(0)
+
             result = executor.get_result(timeout=0.1)
             if result is None:
                 # No result yet - submit more if queue has room
@@ -464,29 +590,18 @@ class FilesMergePipeline:
                             window_frames[window_idx].append(data)
 
                     # Check if any windows are now complete
-                    # A window is complete when all its files have finished interpolation
                     for window_idx in file_to_windows[file_idx]:
                         if window_idx in completed_windows:
                             continue
 
-                        # Check if all files for this window are done
                         needed = window_needs[window_idx]
                         if needed.issubset(files_with_all_frames_interpolated):
-                            # Window is ready to merge
-                            t_merge = time.perf_counter()
-                            frames = window_frames.get(window_idx, [])
-                            merged = self._merge_window(window_idx, frames)
-                            time_merging += time.perf_counter() - t_merge
-
-                            if merged is not None:
-                                self._n_merged += 1
-                                pbar_merged.update(1)
-                                yield merged
-
-                            # Mark as completed and free memory
-                            completed_windows.add(window_idx)
-                            if window_idx in window_frames:
-                                del window_frames[window_idx]
+                            # Apply backpressure: wait if merge queue is full
+                            _wait_for_merge_room()
+                            # Submit to merge thread
+                            frames = window_frames.pop(window_idx, [])
+                            merge_input.put((window_idx, frames))
+                            pending_merges += 1
 
                 # Check for more ready triplets
                 for prev, current, next_frame in triplet_collector.ready_triplets():
@@ -503,9 +618,21 @@ class FilesMergePipeline:
 
                 time_interpolating += time.perf_counter() - t_phase
 
+        # Drain any remaining merge results
+        _collect_merges()
+        while _merged_results:
+            yield _merged_results.pop(0)
+
+        # Shut down merge thread
+        merge_shutdown.set()
+        merge_thread.join(timeout=2.0)
+
         pbar_files.close()
         pbar_interp.close()
         pbar_merged.close()
+
+        # Final prune to free any remaining triplet items
+        triplet_collector.prune_emitted()
 
         # Get memory stats before cleanup
         shm_stats = shm_manager.stats
@@ -534,11 +661,43 @@ class FilesMergePipeline:
             print(f"  Total time:    {self._timings['total']:.2f}s")
             print(f"  Loading:       {time_loading:.2f}s")
             print(f"  Interpolating: {time_interpolating:.2f}s")
-            print(f"  Merging:       {time_merging:.2f}s")
+            print(f"  Merging:       {time_merging:.2f}s (background thread)")
             print(f"  Files processed: {len(file_indices_to_process)}")
             print(f"  Frames interpolated: {n_interp_completed}")
             print(f"  Windows merged: {self._n_merged}")
             print(f"  Max memory: {max_mem:.1f} MB")
+
+            if self._merge_stats:
+                n_win = len(self._merge_stats)
+                tot = [s["total"] for s in self._merge_stats]
+                t_grid = [s["grid"] for s in self._merge_stats]
+                t_remap = [s["remap"] for s in self._merge_stats]
+                t_accum = [s["accumulate"] for s in self._merge_stats]
+                t_final = [s["finalize"] for s in self._merge_stats]
+                n_frames = [s["n_frames"] for s in self._merge_stats]
+                n_remap = [s["n_remapped"] for s in self._merge_stats]
+                grids = [f"{s['n_y']}x{s['n_x']}" for s in self._merge_stats]
+                spacing = self._merge_stats[0]["grid_spacing"]
+
+                # Per-frame remap across all windows
+                total_remapped = sum(n_remap)
+                total_remap_time = sum(t_remap)
+                avg_remap_per_frame = (
+                    (total_remap_time / total_remapped * 1000) if total_remapped else 0
+                )
+
+                print(f"\nMerge Breakdown ({n_win} windows, grid ~{grids[0]} @ {spacing:.1f}m):")
+                print(
+                    f"  Per window (mean):  {np.mean(tot) * 1000:.0f}ms total, {np.mean(n_frames):.0f} frames"
+                )
+                print(f"    compute_grid:  {np.mean(t_grid) * 1000:.1f}ms")
+                print(
+                    f"    remap:         {np.mean(t_remap) * 1000:.1f}ms ({avg_remap_per_frame:.1f}ms/frame, {total_remapped} total)"
+                )
+                print(f"    accumulate:    {np.mean(t_accum) * 1000:.1f}ms")
+                print(f"    finalize:      {np.mean(t_final) * 1000:.1f}ms")
+                print(f"  Per window (range): {min(tot) * 1000:.0f}–{max(tot) * 1000:.0f}ms")
+
             print("\nMemory Management:")
             print(f"  SharedMem registered: {shm_stats['registered']}")
             print(f"  SharedMem released:   {shm_stats['released']}")
@@ -552,6 +711,33 @@ class FilesMergePipeline:
 # ============================================================
 
 
+def parse_duration(value: str) -> float:
+    """Parse a duration string into seconds.
+
+    Accepts bare numbers (interpreted as seconds) or numbers with a suffix:
+      s = seconds, m = minutes, h = hours, d = days.
+
+    Examples:
+        "60"   -> 60.0
+        "60s"  -> 60.0
+        "1.5m" -> 90.0
+        "1h"   -> 3600.0
+        "0.5d" -> 43200.0
+    """
+    import argparse
+    import re
+
+    m = re.fullmatch(r"([0-9]*\.?[0-9]+)\s*([smhd]?)", value.strip().lower())
+    if not m:
+        raise argparse.ArgumentTypeError(
+            f"invalid duration: {value!r}  (use e.g. 60, 60s, 1.5m, 1h, 0.5d)"
+        )
+    number = float(m.group(1))
+    unit = m.group(2) or "s"
+    multiplier = {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]
+    return number * multiplier
+
+
 def _add_arguments(parser) -> None:
     """Add command arguments to parser."""
     from wamos_tpw.filenames import add_common_arguments
@@ -562,9 +748,10 @@ def _add_arguments(parser) -> None:
     # Window configuration
     parser.add_argument(
         "--window",
-        type=float,
+        type=parse_duration,
         default=60.0,
-        help="Window duration in seconds (default: 60)",
+        metavar="DURATION",
+        help="Window duration (default: 60s). Accepts: 60, 60s, 1.5m, 1h, 0.5d",
     )
     parser.add_argument(
         "--overlap",
@@ -747,19 +934,23 @@ def run(args) -> None:
 
     logging.info("Created %d time windows", pipeline.n_windows)
 
-    # Collect merged images
-    merged_images = []
+    # Only accumulate merged images in memory when bulk output is requested
+    needs_bulk = bool(args.mp4 or args.kml or args.kmz or args.plot)
+    merged_images = [] if needs_bulk else None
+    n_merged = 0
     first_shown = False
 
     for merged in pipeline.iter_merged():
-        merged_images.append(merged)
+        n_merged += 1
+        if merged_images is not None:
+            merged_images.append(merged)
 
         # Show first image immediately if --plot is requested
         if args.plot and not first_shown:
             first_shown = True
             show_single_merged_image(merged)
 
-        # Write output files
+        # Write per-window output files
         if args.output_dir:
             if args.format in ("netcdf", "both"):
                 write_merged_netcdf(merged, args.output_dir)
@@ -768,23 +959,20 @@ def run(args) -> None:
             if args.geotiff:
                 write_geotiff(merged, args.output_dir)
 
-    logging.info("Created %d merged images", len(merged_images))
+    logging.info("Created %d merged images", n_merged)
 
-    # Generate MP4 movie if requested
-    if args.mp4 and merged_images:
-        write_mp4_movie(merged_images, args.mp4, fps=args.fps)
-
-    # Generate KML file with ground overlays if requested
-    if args.kml and merged_images:
-        write_kml(merged_images, args.kml)
-
-    # Generate KMZ file (self-contained package) if requested
-    if args.kmz and merged_images:
-        write_kmz(merged_images, args.kmz)
-
-    # Show full viewer if requested (after all images collected)
-    if args.plot and merged_images:
-        show_merged_viewer(merged_images)
+    # Bulk outputs (require all images in memory)
+    if merged_images:
+        # KML/KMZ/plot first, then MP4 last so it can release each image
+        if args.kml:
+            write_kml(merged_images, args.kml)
+        if args.kmz:
+            write_kmz(merged_images, args.kmz)
+        if args.plot:
+            show_merged_viewer(merged_images)
+        if args.mp4:
+            write_mp4_movie(merged_images, args.mp4, fps=args.fps, release=True)
+        del merged_images
 
 
 from wamos_tpw.cli_utils import create_standalone_main  # noqa: E402

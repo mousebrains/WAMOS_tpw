@@ -118,7 +118,7 @@ class FramePipeline:
                 t0 = time.perf_counter()
 
             intensity = shadow.mask(destreak.intensity)
-            self._intensity_shadowed = intensity if qSave else None
+            self._intensity_shadowed = intensity.copy() if qSave else None
             if t0 is not None:
                 self._timings["MaskShadow"] = time.perf_counter() - t0
                 t0 = time.perf_counter()
@@ -126,7 +126,7 @@ class FramePipeline:
             if not qSave:
                 del destreak, shadow
 
-            deramp = Deramp(intensity, rng)
+            deramp = Deramp(intensity, rng, copy=qSave)
             self._deramp = deramp if qSave else None
             if t0 is not None:
                 self._timings["Deramp"] = time.perf_counter() - t0
@@ -135,30 +135,15 @@ class FramePipeline:
             if not qSave:
                 del rng
 
-            dewind = Dewind(deramp.intensity, theta)
+            dewind = Dewind(deramp.intensity, theta, copy=qSave)
             self._dewind = dewind if qSave else None
             if t0 is not None:
                 self._timings["Dewind"] = time.perf_counter() - t0
                 t0 = time.perf_counter()
 
-            # Normalize intensity to [0, 1] range
-            intensity = dewind.intensity
-            valid_mask = ~np.isnan(intensity)
-            if np.any(valid_mask):
-                imin = np.nanmin(intensity)
-                imax = np.nanmax(intensity)
-                if imax > imin:
-                    normalized = (intensity - imin) / (imax - imin)
-                else:
-                    # All values are the same, set to 0.5
-                    normalized = np.where(valid_mask, 0.5, np.nan)
-            else:
-                # All NaN, keep as is
-                normalized = intensity
-            self._final_intensity = normalized
-            if t0 is not None:
-                self._timings["Normalize"] = time.perf_counter() - t0
-                t0 = time.perf_counter()
+            # Pass deramped/dewinded intensity directly — normalization deferred
+            # to display/output time to preserve inter-frame comparability.
+            self._final_intensity = dewind.intensity
 
             if not qSave:
                 del theta, deramp
@@ -259,44 +244,11 @@ class FramePipeline:
 
     @property
     def final_intensity(self) -> np.ndarray:
-        """Return the normalized intensity array [0, 1] (destreaked, shadow-masked, deramped, dewinded, normalized)."""
+        """Return the processed intensity array (destreaked, shadow-masked, deramped, dewinded)."""
         return self._final_intensity
 
     def __repr__(self) -> str:
         return f"<FramePipeline timestamp={self._metadata.timestamp}>"
-
-
-def process_polar_file(
-    filename: str,
-    config: "Config | None" = None,
-    qSave: bool = False,
-    qTiming: bool = False,
-) -> list[FramePipeline]:
-    """
-    Process all frames in a polar file through the pipeline.
-
-    This is a convenience function that processes each frame in a polar file
-    through the FramePipeline.
-
-    Args:
-        filename: Path to the polar file to process
-        config: Optional YAML configuration object
-        qSave: Save intermediate results for debugging
-        qTiming: Time each processing step
-
-    Returns:
-        List of FramePipeline objects, one per frame in the file
-
-    Example:
-        >>> from wamos_tpw.frame_pipeline import process_polar_file
-        >>> frames = process_polar_file("20241215103045.pol.gz")
-        >>> for fp in frames:
-        ...     print(fp.timestamp, fp.final_intensity.shape)
-    """
-    from wamos_tpw.polarfile import PolarFile
-
-    pf = PolarFile(filename, config=config)
-    return [FramePipeline(frame, config=config, qSave=qSave, qTiming=qTiming) for frame in pf]
 
 
 def _process_frame(
@@ -341,6 +293,44 @@ def _add_arguments(parser) -> None:
     parser.add_argument(
         "--workers", "-w", type=int, default=None, help="Number of parallel workers (default: auto)"
     )
+    parser.add_argument(
+        "--plot", "-p", action="store_true", help="Display diagnostic plots for each pipeline stage"
+    )
+    parser.add_argument(
+        "--polar",
+        action="store_true",
+        help="Display polar plots of Raw, Destreaked, Deramped, Dewinded",
+    )
+
+    # Progress bar
+    progress_group = parser.add_mutually_exclusive_group()
+    progress_group.add_argument(
+        "--progress",
+        dest="progress",
+        action="store_true",
+        default=True,
+        help="Show progress bars (default)",
+    )
+    progress_group.add_argument(
+        "--no-progress", dest="progress", action="store_false", help="Hide progress bars"
+    )
+
+    # Mutually exclusive executor selection
+    executor_group = parser.add_mutually_exclusive_group()
+    executor_group.add_argument(
+        "--threadpool", action="store_true", help="Use ThreadPoolExecutor only"
+    )
+    executor_group.add_argument(
+        "--processpool", action="store_true", help="Use ProcessPoolExecutor only"
+    )
+    executor_group.add_argument(
+        "--prioritypool", action="store_true", help="Use PriorityProcessExecutor only"
+    )
+    executor_group.add_argument(
+        "--all-executors",
+        action="store_true",
+        help="Compare all executor types (threadpool, processpool, prioritypool)",
+    )
 
 
 def add_subparser(subparsers) -> None:
@@ -352,6 +342,21 @@ def add_subparser(subparsers) -> None:
     )
     _add_arguments(p)
     p.set_defaults(func=run)
+
+
+def _get_executors(args) -> list[str]:
+    """Determine which executors to use based on command line arguments."""
+    if args.threadpool:
+        return ["threadpool"]
+    elif args.processpool:
+        return ["processpool"]
+    elif args.prioritypool:
+        return ["prioritypool"]
+    elif args.all_executors:
+        return ["threadpool", "processpool", "prioritypool"]
+    else:
+        # Default: compare threadpool and processpool
+        return ["threadpool", "processpool"]
 
 
 def run(args) -> None:
@@ -381,6 +386,20 @@ def run(args) -> None:
 
     logging.info("Found %d files to process", len(files))
 
+    # Handle --plot mode separately (interactive, no parallel processing)
+    if args.plot:
+        from wamos_tpw.frame_pipeline_viewer import run_plot_mode
+
+        run_plot_mode(files, config, args.frame)
+        return
+
+    # Handle --polar mode separately (interactive polar plots)
+    if args.polar:
+        from wamos_tpw.frame_pipeline_viewer import run_polar_mode
+
+        run_polar_mode(files, config, args.frame)
+        return
+
     frame_index = args.frame
     process_func = partial(
         _process_frame,
@@ -390,12 +409,16 @@ def run(args) -> None:
         qSave=args.save,
     )
 
+    executors = _get_executors(args)
+
     for bench in run_benchmark(
         items=files,
         process_func=process_func,
         n_workers=args.workers,
         item_desc="file",
         get_rss=lambda r: r["peak_rss"],
+        executors=executors,
+        qProgress=args.progress,
     ):
         # Count successful frames
         successful = [r for r in bench.results if r["success"]]

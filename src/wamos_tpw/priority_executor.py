@@ -569,6 +569,7 @@ class TripletCollector:
         self._items: dict[tuple[int, int], Any] = {}  # (file_idx, frame_idx) -> item
         self._emitted: set[tuple[int, int]] = set()  # Keys already emitted as 'current'
         self._file_frame_counts: dict[int, int] = {}  # file_idx -> frame count
+        self._n_pruned: int = 0  # Count of items removed from _items by prune_emitted
 
     def add(self, item: Any) -> None:
         """
@@ -681,18 +682,18 @@ class TripletCollector:
 
     @property
     def pending_count(self) -> int:
-        """Number of items not yet emitted as 'current'."""
-        return len(self._items) - len(self._emitted)
+        """Number of items in memory not yet emitted as 'current'."""
+        return len(self._items) - (len(self._emitted) - self._n_pruned)
 
     @property
     def item_count(self) -> int:
-        """Total number of items collected."""
+        """Number of items still in memory."""
         return len(self._items)
 
     @property
     def emitted_count(self) -> int:
-        """Number of items already emitted as 'current'."""
-        return len(self._emitted)
+        """Number of emitted items still in memory."""
+        return len(self._emitted) - self._n_pruned
 
     @property
     def files_complete(self) -> int:
@@ -736,6 +737,7 @@ class TripletCollector:
         for key in to_remove:
             if key in self._items:
                 del self._items[key]
-            self._emitted.discard(key)
+            # Keep key in _emitted so neighbors can still verify it was emitted
 
+        self._n_pruned += len(to_remove)
         return len(to_remove)

@@ -47,6 +47,7 @@ def run_with_executor(
     n_workers: int,
     item_desc: str = "item",
     get_rss: Callable[[R], int] | None = None,
+    qProgress: bool = True,
 ) -> BenchmarkResult:
     """
     Run process_func over items using the specified executor.
@@ -59,6 +60,7 @@ def run_with_executor(
         n_workers: Number of parallel workers
         item_desc: Description for progress bar (e.g., "file", "group")
         get_rss: Optional function to extract RSS from result
+        qProgress: Show progress bar
 
     Returns:
         BenchmarkResult with all results and statistics
@@ -70,7 +72,7 @@ def run_with_executor(
 
     if n_workers <= 1 or len(items) == 1:
         # Sequential processing
-        for item in tqdm(items, desc=executor_name, unit=item_desc):
+        for item in tqdm(items, desc=executor_name, unit=item_desc, disable=not qProgress):
             try:
                 result = process_func(item)
                 results.append(result)
@@ -84,7 +86,11 @@ def run_with_executor(
         with Executor(max_workers=n_workers) as executor:
             futures = {executor.submit(process_func, item): item for item in items}
             for future in tqdm(
-                as_completed(futures), total=len(items), desc=executor_name, unit=item_desc
+                as_completed(futures),
+                total=len(items),
+                desc=executor_name,
+                unit=item_desc,
+                disable=not qProgress,
             ):
                 item = futures[future]
                 try:
@@ -114,9 +120,11 @@ def run_benchmark(
     n_workers: int | None = None,
     item_desc: str = "item",
     get_rss: Callable[[R], int] | None = None,
+    executors: list[str] | None = None,
+    qProgress: bool = True,
 ) -> Iterator[BenchmarkResult]:
     """
-    Run process_func over items using both ThreadPool and ProcessPool.
+    Run process_func over items using selected executor types.
 
     Yields BenchmarkResult for each executor type.
 
@@ -126,30 +134,171 @@ def run_benchmark(
         n_workers: Number of workers (default: min(len(items), cpu_count))
         item_desc: Description for progress bar
         get_rss: Optional function to extract RSS from result
+        executors: List of executor names to use. Valid values:
+                   "threadpool", "processpool", "prioritypool".
+                   If None, uses ["threadpool", "processpool"].
+        qProgress: Show progress bar
     """
     if n_workers is None:
         n_workers = min(len(items), os.cpu_count() or 1)
 
-    for executor_name, Executor in [
-        ("ThreadPool", ThreadPoolExecutor),
-        ("ProcessPool", ProcessPoolExecutor),
-    ]:
-        logger.info("")
-        logger.info("=" * 60)
-        logger.info("Running with %s (%d workers)", executor_name, n_workers)
-        logger.info("=" * 60)
+    # Default to both standard executors
+    if executors is None:
+        executors = ["threadpool", "processpool"]
 
-        result = run_with_executor(
-            executor_name=executor_name,
-            Executor=Executor,
-            items=items,
-            process_func=process_func,
-            n_workers=n_workers,
-            item_desc=item_desc,
-            get_rss=get_rss,
+    # Map of executor names to (display_name, executor_class)
+    executor_map = {
+        "threadpool": ("ThreadPool", ThreadPoolExecutor),
+        "processpool": ("ProcessPool", ProcessPoolExecutor),
+    }
+
+    for executor_key in executors:
+        executor_key_lower = executor_key.lower()
+
+        if executor_key_lower == "prioritypool":
+            # PriorityPool uses different API - run separately
+            result = run_with_priority_executor(
+                items=items,
+                process_func=process_func,
+                n_workers=n_workers,
+                item_desc=item_desc,
+                get_rss=get_rss,
+                qProgress=qProgress,
+            )
+            yield result
+        elif executor_key_lower in executor_map:
+            executor_name, Executor = executor_map[executor_key_lower]
+
+            logger.info("")
+            logger.info("=" * 60)
+            logger.info("Running with %s (%d workers)", executor_name, n_workers)
+            logger.info("=" * 60)
+
+            result = run_with_executor(
+                executor_name=executor_name,
+                Executor=Executor,
+                items=items,
+                process_func=process_func,
+                n_workers=n_workers,
+                item_desc=item_desc,
+                get_rss=get_rss,
+                qProgress=qProgress,
+            )
+
+            yield result
+        else:
+            logger.warning("Unknown executor type: %s", executor_key)
+
+
+def _priority_task_handler(task):
+    """
+    Module-level task handler for PriorityProcessExecutor.
+
+    Must be at module level to be picklable for multiprocessing.
+    Expects task.data to be a tuple of (process_func, item).
+    """
+    from wamos_tpw.priority_executor import Result
+
+    process_func, item = task.data
+    result = process_func(item)
+    return Result(
+        task_type="process",
+        task_id=task.task_id,
+        data=result,
+    )
+
+
+def run_with_priority_executor(
+    items: list[T],
+    process_func: Callable[[T], R],
+    n_workers: int,
+    item_desc: str = "item",
+    get_rss: Callable[[R], int] | None = None,
+    qProgress: bool = True,
+) -> BenchmarkResult:
+    """
+    Run process_func over items using the PriorityProcessExecutor.
+
+    This adapter wraps PriorityProcessExecutor to provide the same interface
+    as the standard concurrent.futures executors.
+
+    Args:
+        items: List of items to process
+        process_func: Function to call for each item
+        n_workers: Number of parallel workers
+        item_desc: Description for progress bar
+        get_rss: Optional function to extract RSS from result
+        qProgress: Show progress bar
+
+    Returns:
+        BenchmarkResult with all results and statistics
+    """
+    from wamos_tpw.priority_executor import Priority, PriorityProcessExecutor
+
+    executor_name = "PriorityPool"
+    results = []
+    errors = []
+    max_worker_rss = 0
+
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info("Running with %s (%d workers)", executor_name, n_workers)
+    logger.info("=" * 60)
+
+    t_start = time.perf_counter()
+
+    if n_workers <= 1 or len(items) == 1:
+        # Sequential processing - same as other executors
+        for item in tqdm(items, desc=executor_name, unit=item_desc, disable=not qProgress):
+            try:
+                result = process_func(item)
+                results.append(result)
+                if get_rss is not None:
+                    max_worker_rss = max(max_worker_rss, get_rss(result))
+            except Exception as e:
+                errors.append((item, e))
+                logger.error("Error processing %s: %s", item, e)
+    else:
+        # Use module-level handler for pickling compatibility
+        executor = PriorityProcessExecutor(
+            max_workers=n_workers,
+            task_handlers={"process": _priority_task_handler},
         )
+        executor.start()
 
-        yield result
+        # Submit all tasks with (process_func, item) tuple as data
+        pending = len(items)
+        for i, item in enumerate(items):
+            executor.submit(Priority.MEDIUM, "process", data=(process_func, item), task_id=i)
+
+        # Collect results with progress bar
+        with tqdm(total=pending, desc=executor_name, unit=item_desc, disable=not qProgress) as pbar:
+            while pending > 0:
+                result = executor.get_result(timeout=0.1)
+                if result is not None:
+                    pending -= 1
+                    pbar.update(1)
+
+                    if result.error:
+                        errors.append((items[result.task_id], Exception(result.error)))
+                        logger.error("Error processing item %d: %s", result.task_id, result.error)
+                    else:
+                        results.append(result.data)
+                        if get_rss is not None:
+                            max_worker_rss = max(max_worker_rss, get_rss(result.data))
+
+        executor.shutdown()
+
+    elapsed = time.perf_counter() - t_start
+
+    return BenchmarkResult(
+        executor_name=executor_name,
+        elapsed=elapsed,
+        n_workers=n_workers,
+        results=results,
+        errors=errors,
+        max_worker_rss=max_worker_rss,
+    )
 
 
 def aggregate_timings(
