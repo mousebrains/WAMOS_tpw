@@ -52,6 +52,8 @@ docs/_build/
 Thumbs.db
 
 # Output files
+*.kml
+*.kmz
 *.mp4
 *.png
 *.jpg
