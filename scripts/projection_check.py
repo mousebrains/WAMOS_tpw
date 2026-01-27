@@ -23,11 +23,11 @@ src_path = Path(__file__).parent.parent / "src"
 if src_path.exists():
     sys.path.insert(0, str(src_path))
 
-from wamos_tpw import Filenames, PolarFile
-from wamos_tpw.config import Config
-from wamos_tpw.filenames import add_common_arguments
-from wamos_tpw.frame_pipeline import FramePipeline
-from wamos_tpw.interpolator import FrameInterpolator
+from wamos_tpw import Filenames, PolarFile  # noqa: E402
+from wamos_tpw.config import Config  # noqa: E402
+from wamos_tpw.filenames import add_common_arguments  # noqa: E402
+from wamos_tpw.frame_pipeline import FramePipeline  # noqa: E402
+from wamos_tpw.interpolator import FrameInterpolator  # noqa: E402
 
 
 def polar_mesh(intensity, theta_deg, range_m):
@@ -42,16 +42,35 @@ def polar_mesh(intensity, theta_deg, range_m):
     return t_mesh, r_mesh, intensity_closed
 
 
-def project_to_grid(intensity, theta_deg, headings, ground_range, ship_x, ship_y,
-                    grid_spacing, x_min, y_min, n_x, n_y):
+def project_to_grid(
+    intensity,
+    theta_deg,
+    headings,
+    ground_range,
+    ship_x,
+    ship_y,
+    grid_spacing,
+    x_min,
+    y_min,
+    n_x,
+    n_y,
+):
     """Equirectangular projection onto a north-up grid."""
     earth_bearing_rad = np.deg2rad((theta_deg + headings) % 360)
     sin_b = np.sin(earth_bearing_rad)
     cos_b = np.cos(earth_bearing_rad)
 
     inv_sp = 1.0 / grid_spacing
-    x_idx = ((np.outer(sin_b, ground_range) + ship_x[:, None] - x_min) * inv_sp).astype(np.int32).ravel()
-    y_idx = ((np.outer(cos_b, ground_range) + ship_y[:, None] - y_min) * inv_sp).astype(np.int32).ravel()
+    x_idx = (
+        ((np.outer(sin_b, ground_range) + ship_x[:, None] - x_min) * inv_sp)
+        .astype(np.int32)
+        .ravel()
+    )
+    y_idx = (
+        ((np.outer(cos_b, ground_range) + ship_y[:, None] - y_min) * inv_sp)
+        .astype(np.int32)
+        .ravel()
+    )
     vals = intensity.ravel()
 
     valid = (x_idx >= 0) & (x_idx < n_x) & (y_idx >= 0) & (y_idx < n_y) & ~np.isnan(vals)
@@ -79,7 +98,8 @@ def main():
     filenames = Filenames(args.stime, args.etime, args.polar_path)
     files = list(filenames)
     if not files:
-        print("No files found"); return 1
+        print("No files found")
+        return 1
 
     # Load two consecutive files for interpolation
     pf0 = PolarFile(files[0], config=config)
@@ -95,7 +115,7 @@ def main():
     interp = FrameInterpolator(None, fp0, fp1)
 
     # Collect pipeline stages
-    raw = (frame0.intensity[:, :fp0.n_distances] & 0x0FFF).astype(np.float32)
+    raw = (frame0.intensity[:, : fp0.n_distances] & 0x0FFF).astype(np.float32)
     destreaked = fp0.destreak.intensity.astype(np.float32)
     deramped = fp0.deramp.intensity.astype(np.float32)
     dewinded = fp0.final_intensity  # processed (deramped + dewinded)
@@ -127,12 +147,21 @@ def main():
     n_y = int(np.ceil((y_max - y_min) / grid_spacing))
 
     projected = project_to_grid(
-        dewinded, theta_deg, headings, ground_range,
-        ship_x, ship_y, grid_spacing, x_min, y_min, n_x, n_y)
+        dewinded,
+        theta_deg,
+        headings,
+        ground_range,
+        ship_x,
+        ship_y,
+        grid_spacing,
+        x_min,
+        y_min,
+        n_x,
+        n_y,
+    )
 
     # --- Plot ---
-    fig, axes = plt.subplots(1, 5, figsize=(24, 5),
-                             subplot_kw={"projection": "polar"})
+    fig, axes = plt.subplots(1, 5, figsize=(24, 5), subplot_kw={"projection": "polar"})
 
     stages = [
         ("Raw (12-bit)", raw),
@@ -144,8 +173,9 @@ def main():
     for ax, (title, data) in zip(axes[:4], stages):
         vmin, vmax = np.nanpercentile(data, [1, 99])
         t_mesh, r_mesh, d_closed = polar_mesh(data, theta_deg, ground_range)
-        ax.pcolormesh(t_mesh, r_mesh, d_closed, shading="auto", cmap="viridis",
-                      vmin=vmin, vmax=vmax)
+        ax.pcolormesh(
+            t_mesh, r_mesh, d_closed, shading="auto", cmap="viridis", vmin=vmin, vmax=vmax
+        )
         ax.set_title(title, fontsize=10)
         ax.set_theta_zero_location("N")
         ax.set_theta_direction(-1)
@@ -157,20 +187,33 @@ def main():
     y_edges = np.linspace(y_min, y_min + n_y * grid_spacing, n_y + 1)
     x_center = (x_edges[0] + x_edges[-1]) / 2
     y_center = (y_edges[0] + y_edges[-1]) / 2
-    extent = [(x_edges[0] - x_center), (x_edges[-1] - x_center),
-              (y_edges[0] - y_center), (y_edges[-1] - y_center)]
+    extent = [
+        (x_edges[0] - x_center),
+        (x_edges[-1] - x_center),
+        (y_edges[0] - y_center),
+        (y_edges[-1] - y_center),
+    ]
     vmin, vmax = np.nanpercentile(projected, [1, 99])
-    ax_proj.imshow(projected, origin="lower", extent=extent, aspect="equal",
-                   cmap="viridis", vmin=vmin, vmax=vmax)
+    ax_proj.imshow(
+        projected,
+        origin="lower",
+        extent=extent,
+        aspect="equal",
+        cmap="viridis",
+        vmin=vmin,
+        vmax=vmax,
+    )
     ax_proj.set_title("Projected", fontsize=10)
     ax_proj.set_xlabel("East (m)")
     ax_proj.set_ylabel("North (m)")
 
     ts = np.datetime_as_string(fp0.metadata.timestamp, unit="s")
-    fig.suptitle(f"{files[0]}  frame={args.frame}  {ts}\n"
-                 f"method={interp.method}  timing={interp.timing_method}  "
-                 f"heading={fp0.metadata.heading:.1f}°",
-                 fontsize=11)
+    fig.suptitle(
+        f"{files[0]}  frame={args.frame}  {ts}\n"
+        f"method={interp.method}  timing={interp.timing_method}  "
+        f"heading={fp0.metadata.heading:.1f}°",
+        fontsize=11,
+    )
     plt.tight_layout()
     plt.show()
     return 0
