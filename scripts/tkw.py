@@ -31,16 +31,18 @@ import numpy as np
 
 class Priority(IntEnum):
     """Priority levels (lower = higher priority)."""
-    MOVIE = 0      # Highest - flush completed work
-    PROJECT = 1    # High - grouping complete
-    NETCDF = 2     # Medium - write individual frame files
-    INTERP = 2     # Medium - interpolate triplets
-    LOAD = 3       # Lowest - load files
+
+    MOVIE = 0  # Highest - flush completed work
+    PROJECT = 1  # High - grouping complete
+    NETCDF = 2  # Medium - write individual frame files
+    INTERP = 2  # Medium - interpolate triplets
+    LOAD = 3  # Lowest - load files
 
 
 @dataclass
 class Task:
     """Task to be executed by a worker."""
+
     task_type: str
     task_id: int
     data: Any
@@ -49,6 +51,7 @@ class Task:
 @dataclass
 class Result:
     """Result from a completed task."""
+
     task_type: str
     task_id: int
     data: Any
@@ -183,6 +186,7 @@ def read_shared_frame(shm_name: str, shape: tuple, dtype: np.dtype) -> np.ndarra
 # Worker functions (must be at module level for pickling)
 # ============================================================
 
+
 def do_load(task: Task) -> Result:
     """Load a file and create frame data in shared memory."""
     time.sleep(0.1)
@@ -247,9 +251,7 @@ def do_netcdf(task: Task) -> Result:
     time.sleep(0.02)
     frame_info = task.data
 
-    frame_data = read_shared_frame(
-        frame_info["shm_name"], frame_info["shape"], frame_info["dtype"]
-    )
+    frame_data = read_shared_frame(frame_info["shm_name"], frame_info["shape"], frame_info["dtype"])
 
     filename = f"frame_{frame_info['index']:04d}.nc"
     checksum = np.sum(frame_data)
@@ -278,7 +280,10 @@ def do_project(task: Task) -> Result:
     projected = np.mean(frames, axis=0)
     shm_name, shape, dtype = create_shared_frame(projected)
 
-    print(f"  [PROJECT] group {start_index} ({len(frames)} frames) -> shm:{shm_name[:12]}...", flush=True)
+    print(
+        f"  [PROJECT] group {start_index} ({len(frames)} frames) -> shm:{shm_name[:12]}...",
+        flush=True,
+    )
     return Result(
         task_type="project",
         task_id=task.task_id,
@@ -353,6 +358,7 @@ def worker_process(
             except Exception as e:
                 print(f"Worker {worker_id} error: {e}", flush=True)
                 import traceback
+
                 traceback.print_exc()
                 result_queue.put(Result(task.task_type, task.task_id, {"error": str(e)}))
 
@@ -446,9 +452,9 @@ class GroupCollector:
 
         groups = []
         while len(self._items) >= self._group_size:
-            group = [item for _, item in self._items[:self._group_size]]
+            group = [item for _, item in self._items[: self._group_size]]
             start_idx = self._items[0][0]
-            self._items = self._items[self._group_size:]
+            self._items = self._items[self._group_size :]
             groups.append((group, start_idx))
 
         return groups
@@ -629,19 +635,22 @@ def main():
         description="Prioritized multi-stage pipeline demo with shared memory and refcounting"
     )
     parser.add_argument(
-        "-n", "--num-files",
+        "-n",
+        "--num-files",
         type=int,
         default=12,
         help="Number of files to process (default: 12)",
     )
     parser.add_argument(
-        "-w", "--workers",
+        "-w",
+        "--workers",
         type=int,
         default=4,
         help="Number of worker processes (default: 4)",
     )
     parser.add_argument(
-        "-g", "--group-size",
+        "-g",
+        "--group-size",
         type=int,
         default=3,
         help="Number of frames per projection group (default: 3)",
