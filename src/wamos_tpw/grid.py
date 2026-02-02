@@ -104,6 +104,107 @@ def compute_common_grid(
     }
 
 
+def compute_common_grid_from_stats(
+    position_stats: list[dict],
+    max_ranges: list[float],
+    range_resolutions: list[float],
+    padding: float = 1.1,
+    resolution_scale: float = 1.0,
+) -> dict:
+    """
+    Compute a common equirectangular grid from per-frame position statistics.
+
+    Optimized version of compute_common_grid that uses pre-computed summary
+    statistics instead of full per-radial arrays, reducing data transfer
+    by ~120x (from ~14,400 values to ~120 for a typical 40-frame window).
+
+    Args:
+        position_stats: List of dicts with per-frame position statistics:
+            - lat_min, lat_max, lat_mean: Latitude summary stats
+            - lon_min, lon_max, lon_mean: Longitude summary stats
+        max_ranges: Maximum ground range per frame in meters
+        range_resolutions: Range resolution per frame in meters
+        padding: Multiplier for max range to add margin
+        resolution_scale: Grid resolution multiplier (2.0 = 2x finer grid)
+
+    Returns:
+        Dictionary with grid parameters (same as compute_common_grid)
+    """
+    if not position_stats:
+        raise ValueError("position_stats cannot be empty")
+
+    # Compute reference position from per-frame means
+    # Mean of means equals true mean when all frames have equal counts
+    ref_lat = float(np.mean([s["lat_mean"] for s in position_stats]))
+    ref_lon = float(np.mean([s["lon_mean"] for s in position_stats]))
+
+    # Equirectangular projection parameters
+    m_per_deg_lon = _DEG2M * np.cos(np.deg2rad(ref_lat))
+
+    # Get lat/lon extremes from per-frame min/max
+    lat_min = min(s["lat_min"] for s in position_stats)
+    lat_max = max(s["lat_max"] for s in position_stats)
+    lon_min = min(s["lon_min"] for s in position_stats)
+    lon_max = max(s["lon_max"] for s in position_stats)
+
+    # Convert extremes to meters relative to reference
+    x_data_min = (lon_min - ref_lon) * m_per_deg_lon
+    x_data_max = (lon_max - ref_lon) * m_per_deg_lon
+    y_data_min = (lat_min - ref_lat) * _DEG2M
+    y_data_max = (lat_max - ref_lat) * _DEG2M
+
+    # Grid spacing from average range resolution, scaled by resolution_scale
+    grid_spacing = float(np.mean(range_resolutions)) / resolution_scale
+
+    # Grid extent: data extent + max radar range + padding
+    max_range = float(np.max(max_ranges)) * padding
+
+    x_min = x_data_min - max_range
+    x_max = x_data_max + max_range
+    y_min = y_data_min - max_range
+    y_max = y_data_max + max_range
+
+    # Create bin edges aligned to grid spacing
+    n_x = int(np.ceil((x_max - x_min) / grid_spacing))
+    n_y = int(np.ceil((y_max - y_min) / grid_spacing))
+
+    x_edges = np.linspace(x_min, x_min + n_x * grid_spacing, n_x + 1)
+    y_edges = np.linspace(y_min, y_min + n_y * grid_spacing, n_y + 1)
+
+    # Compute grid center
+    x_center = (x_edges[0] + x_edges[-1]) / 2
+    y_center = (y_edges[0] + y_edges[-1]) / 2
+
+    # Convert center to lat/lon via equirectangular inverse
+    center_lon = ref_lon + x_center / m_per_deg_lon
+    center_lat = ref_lat + y_center / _DEG2M
+
+    # UTM zone/hemisphere as informational metadata
+    utm_zone = int((center_lon + 180) / 6) % 60 + 1
+    hemisphere = "north" if center_lat >= 0 else "south"
+
+    # Center the edges for output
+    x_edges_centered = x_edges - x_center
+    y_edges_centered = y_edges - y_center
+
+    return {
+        "x_edges": x_edges_centered,
+        "y_edges": y_edges_centered,
+        "x_edges_abs": x_edges,
+        "y_edges_abs": y_edges,
+        "grid_spacing": grid_spacing,
+        "utm_zone": utm_zone,
+        "hemisphere": hemisphere,
+        "center_lat": float(center_lat),
+        "center_lon": float(center_lon),
+        "ref_lat": ref_lat,
+        "ref_lon": ref_lon,
+        "m_per_deg_lon": m_per_deg_lon,
+        "n_x": n_x,
+        "n_y": n_y,
+    }
+
+
 def project_frame_to_common_grid(
     intensity: np.ndarray,
     theta: np.ndarray,

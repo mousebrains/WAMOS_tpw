@@ -575,6 +575,19 @@ def _do_interpolate(task) -> "Result":
 
     timings["total"] = time.perf_counter() - t0_total
 
+    # Compute position statistics for efficient grid extent computation
+    # This avoids concatenating full per-radial arrays in compute_common_grid
+    lats = interp.latitudes
+    lons = interp.longitudes
+    position_stats = {
+        "lat_min": float(np.min(lats)),
+        "lat_max": float(np.max(lats)),
+        "lat_mean": float(np.mean(lats)),
+        "lon_min": float(np.min(lons)),
+        "lon_max": float(np.max(lons)),
+        "lon_mean": float(np.mean(lons)),
+    }
+
     result_data = {
         "file_index": current_data.file_index,
         "frame_index": current_data.frame_index,
@@ -584,9 +597,11 @@ def _do_interpolate(task) -> "Result":
         "timing_method": interp.timing_method,
         "time_delta": interp.time_delta,
         "times": interp.times,
-        "latitudes": interp.latitudes,
-        "longitudes": interp.longitudes,
+        "latitudes": lats,
+        "longitudes": lons,
         "headings": interp.headings,
+        # Position statistics for efficient grid computation
+        "position_stats": position_stats,
         # Ship and wind metadata
         "ship_speed": current_data.ship_speed,
         "wind_speed": current_data.wind_speed,

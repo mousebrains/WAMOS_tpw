@@ -18,7 +18,11 @@ from typing import TYPE_CHECKING, Iterator
 
 import numpy as np
 
-from wamos_tpw.grid import compute_common_grid, remap_to_common_grid
+from wamos_tpw.grid import (
+    compute_common_grid,
+    compute_common_grid_from_stats,
+    remap_to_common_grid,
+)
 from wamos_tpw.merged_image import MergedImage, TimeWindowConfig
 from wamos_tpw.window import WindowAccumulator, create_time_windows
 
@@ -128,15 +132,10 @@ class FilesMergePipeline:
         # Sort by timestamp
         frames.sort(key=lambda x: x["timestamp"])
 
-        # Compute common grid for this window
-        latitudes = [f["latitudes"] for f in frames if "latitudes" in f]
-        longitudes = [f["longitudes"] for f in frames if "longitudes" in f]
-
-        if not latitudes:
-            return None
-
+        # Collect grid computation inputs
         max_ranges = []
         range_resolutions = []
+        position_stats = []
 
         for f in frames:
             max_ranges.append(f.get("ground_range_max", 3000.0))
@@ -144,15 +143,33 @@ class FilesMergePipeline:
             # rather than raw range_resolution (radial sample spacing only)
             frame_gp = f.get("grid_params") or {}
             range_resolutions.append(frame_gp.get("grid_spacing", 7.5))
+            # Collect position stats if available
+            if "position_stats" in f:
+                position_stats.append(f["position_stats"])
 
         t0 = time.perf_counter()
-        grid_params = compute_common_grid(
-            latitudes=latitudes,
-            longitudes=longitudes,
-            max_ranges=max_ranges,
-            range_resolutions=range_resolutions,
-            resolution_scale=self._window_config.resolution_scale,
-        )
+
+        # Use optimized stats-based grid computation if position_stats available
+        if position_stats and len(position_stats) == len(frames):
+            grid_params = compute_common_grid_from_stats(
+                position_stats=position_stats,
+                max_ranges=max_ranges,
+                range_resolutions=range_resolutions,
+                resolution_scale=self._window_config.resolution_scale,
+            )
+        else:
+            # Fallback to original method (for backwards compatibility)
+            latitudes = [f["latitudes"] for f in frames if "latitudes" in f]
+            longitudes = [f["longitudes"] for f in frames if "longitudes" in f]
+            if not latitudes:
+                return None
+            grid_params = compute_common_grid(
+                latitudes=latitudes,
+                longitudes=longitudes,
+                max_ranges=max_ranges,
+                range_resolutions=range_resolutions,
+                resolution_scale=self._window_config.resolution_scale,
+            )
         t_grid = time.perf_counter() - t0
 
         # Create accumulator
