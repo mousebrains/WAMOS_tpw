@@ -23,7 +23,7 @@ _DEFAULT_CONFIG = "default_wamos.yaml"
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["Config", "WamosConfig", "ConfigSchema"]
+__all__ = ["Config", "WamosConfig", "ConfigSchema", "NullConfig"]
 
 
 # =============================================================================
@@ -359,6 +359,73 @@ class Config:
     def __repr__(self) -> str:
         name = self._filename or "None"
         return f"{type(self).__name__}({name}):\n{pprint.pformat(self._config)}"
+
+
+class NullConfig(Config):
+    """
+    Null object pattern for Config - provides safe defaults without file loading.
+
+    Use NullConfig when a Config object is expected but no actual configuration
+    is available. All get() calls return the default value, and __getitem__ raises
+    KeyError for any key.
+
+    This eliminates the need for `if config is not None` checks throughout the code.
+
+    Example::
+
+        def process(frame, config: Config | None = None):
+            # Old pattern (error-prone):
+            # if config and "shadow" in config:
+            #     ...
+
+            # New pattern (type-safe):
+            cfg = config or NullConfig()
+            shadow_frac = cfg.get("shadow.range_fraction", 0.1)  # Always works
+
+    See Also
+    --------
+    Config : Full configuration with file loading and validation.
+    """
+
+    _instance: "NullConfig | None" = None
+
+    def __new__(cls) -> "NullConfig":
+        """Singleton pattern - only one NullConfig instance needed."""
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self) -> None:
+        """Initialize empty NullConfig (no file loading)."""
+        # Avoid re-initialization in singleton
+        if hasattr(self, "_initialized"):
+            return
+        self._initialized = True
+        self._filename = "NullConfig"
+        self._config: dict = {}
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Always return default value."""
+        return default
+
+    def __getitem__(self, key: str) -> Any:
+        """Raise KeyError for any key (no config available)."""
+        raise KeyError(f"NullConfig has no key '{key}'")
+
+    def __contains__(self, key: str) -> bool:
+        """NullConfig contains no keys."""
+        return False
+
+    def __bool__(self) -> bool:
+        """NullConfig is falsy (no configuration)."""
+        return False
+
+    def validate(self, section: str | None = None) -> list[str]:
+        """NullConfig always validates (no config to validate)."""
+        return []
+
+    def __repr__(self) -> str:
+        return "NullConfig()"
 
 
 def _add_arguments(parser) -> None:

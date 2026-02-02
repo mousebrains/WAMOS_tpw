@@ -2,7 +2,23 @@
 Benchmark tests for wamos_tpw.
 
 Run with: pytest tests/test_benchmarks.py --benchmark-only
+
+Performance Regression Testing
+------------------------------
+
+This module includes two types of tests:
+
+1. **Benchmark tests** - Use pytest-benchmark to measure performance
+   Run: pytest tests/test_benchmarks.py --benchmark-only
+
+2. **Regression tests** - Assert that operations complete within time limits
+   Run: pytest tests/test_benchmarks.py -k regression
+
+The regression tests have conservative thresholds (10x typical) to avoid
+false positives while still catching major regressions.
 """
+
+import time
 
 import numpy as np
 import pytest
@@ -324,3 +340,201 @@ class TestNormalizationBenchmarks:
 
         result = benchmark(compute)
         assert len(result) == 2
+
+
+# =============================================================================
+# Performance Regression Tests
+# =============================================================================
+#
+# These tests verify that operations complete within reasonable time limits.
+# They use conservative thresholds (typically 10x expected time) to avoid
+# false positives on slow CI machines while still catching major regressions.
+# =============================================================================
+
+
+class TestPerformanceRegression:
+    """
+    Performance regression tests with time assertions.
+
+    These tests don't require pytest-benchmark - they use simple time checks
+    to catch major performance regressions.
+    """
+
+    @pytest.fixture
+    def frame_data(self):
+        """Create standard frame data for testing."""
+        n_bearings, n_distances = 360, 752
+        raw_data = np.random.randint(0, 65535, (n_bearings, n_distances), dtype=np.uint16)
+        return raw_data
+
+    def test_regression_intensity_extraction(self, frame_data):
+        """Intensity extraction should complete in < 50ms (typically ~1ms)."""
+        from wamos_tpw.frame import Frame, FrameMetadata
+
+        metadata = FrameMetadata(
+            timestamp=np.datetime64("2024-12-15T10:30:00"),
+            filename="test.pol",
+            samples_in_range=752,
+        )
+        frame = Frame(frame_data, metadata, validate=False)
+
+        start = time.perf_counter()
+        _ = frame.intensity
+        elapsed = time.perf_counter() - start
+
+        assert elapsed < 0.050, f"Intensity extraction took {elapsed:.3f}s (limit: 0.050s)"
+
+    def test_regression_bit_extraction(self, frame_data):
+        """Bit extraction should complete in < 50ms (typically ~1ms)."""
+        from wamos_tpw.frame import Frame, FrameMetadata
+
+        metadata = FrameMetadata(
+            timestamp=np.datetime64("2024-12-15T10:30:00"),
+            filename="test.pol",
+            samples_in_range=752,
+        )
+        frame = Frame(frame_data, metadata, validate=False)
+
+        start = time.perf_counter()
+        _ = frame.bit13
+        elapsed = time.perf_counter() - start
+
+        assert elapsed < 0.050, f"Bit extraction took {elapsed:.3f}s (limit: 0.050s)"
+
+    def test_regression_slant_range(self, frame_data):
+        """Slant range calculation should complete in < 10ms."""
+        from wamos_tpw.frame import Frame, FrameMetadata
+
+        metadata = FrameMetadata(
+            timestamp=np.datetime64("2024-12-15T10:30:00"),
+            filename="test.pol",
+            samples_in_range=752,
+            sampling_frequency=20.0,
+            sample_delay_range=150.0,
+        )
+        frame = Frame(frame_data, metadata, validate=False)
+
+        start = time.perf_counter()
+        _ = frame.slant_range()
+        elapsed = time.perf_counter() - start
+
+        assert elapsed < 0.010, f"Slant range took {elapsed:.3f}s (limit: 0.010s)"
+
+    def test_regression_numpy_operations(self):
+        """Standard numpy operations should meet expected performance."""
+        arr = np.random.rand(360, 752).astype(np.float64)
+
+        # Mean along axis (should be < 5ms, typically ~0.1ms)
+        start = time.perf_counter()
+        for _ in range(100):
+            _ = np.mean(arr, axis=1)
+        elapsed = time.perf_counter() - start
+
+        assert elapsed < 0.500, f"100 mean ops took {elapsed:.3f}s (limit: 0.500s)"
+
+        # Percentile (should be < 50ms, typically ~5ms)
+        start = time.perf_counter()
+        _ = np.percentile(arr, [5, 95], axis=1)
+        elapsed = time.perf_counter() - start
+
+        assert elapsed < 0.050, f"Percentile took {elapsed:.3f}s (limit: 0.050s)"
+
+    def test_regression_coordinate_transform(self):
+        """Coordinate transformation should complete in < 100ms."""
+        bearings = np.linspace(0, 359.9, 360)
+        ranges = np.linspace(150, 6000, 752)
+
+        start = time.perf_counter()
+        heading_rad = np.deg2rad(bearings)[:, np.newaxis]
+        range_2d = ranges[np.newaxis, :]
+        x = range_2d * np.sin(heading_rad)
+        y = range_2d * np.cos(heading_rad)
+        elapsed = time.perf_counter() - start
+
+        assert elapsed < 0.100, f"Coordinate transform took {elapsed:.3f}s (limit: 0.100s)"
+        assert x.shape == (360, 752)
+        assert y.shape == (360, 752)
+
+    def test_regression_histogram2d(self):
+        """Histogram2d gridding should complete in < 200ms for 100k points."""
+        n_points = 100000
+        x = np.random.uniform(-5000, 5000, n_points)
+        y = np.random.uniform(-5000, 5000, n_points)
+        values = np.random.rand(n_points)
+        x_edges = np.linspace(-5000, 5000, 201)
+        y_edges = np.linspace(-5000, 5000, 201)
+
+        start = time.perf_counter()
+        counts, _, _ = np.histogram2d(x, y, bins=[x_edges, y_edges])
+        sums, _, _ = np.histogram2d(x, y, bins=[x_edges, y_edges], weights=values)
+        with np.errstate(invalid="ignore"):
+            result = sums / counts
+        elapsed = time.perf_counter() - start
+
+        assert elapsed < 0.200, f"Histogram2d took {elapsed:.3f}s (limit: 0.200s)"
+        assert result.shape == (200, 200)
+
+
+class TestProcessingRegression:
+    """Regression tests for processing modules using real data."""
+
+    def test_regression_polar_file_loading(self, single_polar_file):
+        """Polar file loading should complete in < 2s (includes decompression)."""
+        from wamos_tpw.polarfile import PolarFile
+
+        start = time.perf_counter()
+        pf = PolarFile(single_polar_file)
+        elapsed = time.perf_counter() - start
+
+        assert elapsed < 2.0, f"PolarFile loading took {elapsed:.3f}s (limit: 2.0s)"
+        assert len(pf.frames) > 0
+
+    def test_regression_destreak(self, single_polar_file):
+        """Destreak should complete in < 500ms per frame."""
+        from wamos_tpw.destreak import Destreak
+        from wamos_tpw.polarfile import PolarFile
+
+        pf = PolarFile(single_polar_file)
+        frame = pf.frames[0]
+
+        start = time.perf_counter()
+        ds = Destreak(frame)
+        elapsed = time.perf_counter() - start
+
+        assert elapsed < 0.500, f"Destreak took {elapsed:.3f}s (limit: 0.500s)"
+        assert ds.intensity.shape == frame.intensity.shape
+
+    def test_regression_deramp(self, single_polar_file):
+        """Deramp should complete in < 500ms per frame."""
+        from wamos_tpw.deramp import Deramp
+        from wamos_tpw.polarfile import PolarFile
+        from wamos_tpw.range import Range
+
+        pf = PolarFile(single_polar_file)
+        frame = pf.frames[0]
+        intensity = frame.intensity.astype(np.float32)
+        rng = Range(frame)
+
+        start = time.perf_counter()
+        deramp = Deramp(intensity, rng)
+        elapsed = time.perf_counter() - start
+
+        assert elapsed < 0.500, f"Deramp took {elapsed:.3f}s (limit: 0.500s)"
+        assert deramp.intensity.shape == frame.intensity.shape
+
+    def test_regression_theta_calculation(self, single_polar_file):
+        """Theta calculation should complete in < 1s."""
+        from wamos_tpw.bearing import MultiTheta as Theta
+        from wamos_tpw.config import WamosConfig
+        from wamos_tpw.polarfile import PolarFile
+
+        pf = PolarFile(single_polar_file)
+        frames = pf.frames[:1]
+        config = WamosConfig()
+
+        start = time.perf_counter()
+        theta = Theta(frames, config, refine=False)
+        elapsed = time.perf_counter() - start
+
+        assert elapsed < 1.0, f"Theta calculation took {elapsed:.3f}s (limit: 1.0s)"
+        assert theta is not None

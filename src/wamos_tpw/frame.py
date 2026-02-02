@@ -5,6 +5,64 @@
 #
 # Dec-2025, Pat Welch, pat@mousebrains.com
 
+"""
+WAMOS polar frame data container.
+
+This module provides Frame and FrameMetadata classes for handling WAMOS
+radar scan data stored as uint16 arrays.
+
+Bit Encoding
+------------
+
+Each uint16 value in the raw data encodes multiple signals::
+
+    Bit:  15  14  13  12  11  10  9   8   7   6   5   4   3   2   1   0
+         +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+         | R | R | B | P |       12-bit Radar Intensity (0-4095)        |
+         +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+           |   |   |   |
+           |   |   |   +-- Bit 12: PPS (Pulse Per Second) timing signal
+           |   |   +------ Bit 13: Bearing pulse / azimuth marker
+           |   +---------- Bit 14: Reserved (user-defined)
+           +-------------- Bit 15: Reserved (user-defined)
+
+Intensity Data (Bits 0-11)
+    - 12-bit radar backscatter intensity
+    - Range: 0 to 4095 (0x000 to 0xFFF)
+    - Higher values = stronger radar return
+    - Accessed via `frame.intensity` property
+
+PPS Signal (Bit 12)
+    - Pulse Per Second timing reference
+    - Used for time synchronization
+    - Accessed via `frame.bit12` property
+
+Bearing Pulse (Bit 13)
+    - Azimuth marker indicating radar beam direction
+    - Encodes bearing angle in data bins 18-20
+    - Bit 13 = 0: Even degree
+    - Bit 13 = 1: Odd degree
+    - Accessed via `frame.bit13` property
+    - Used by Theta class to compute beam angles
+
+Example
+-------
+::
+
+    frame = pf.frame()
+
+    # Get radar intensity (12-bit values)
+    intensity = frame.intensity  # Shape: (n_bearings, n_distances)
+
+    # Get bit 13 for bearing calculation
+    bearing_bits = frame.bit13  # Boolean array
+
+See Also
+--------
+- Theta: Uses bit 13 to calculate beam angles
+- PolarFile: Parses raw data into Frame objects
+"""
+
 from __future__ import annotations
 
 import logging

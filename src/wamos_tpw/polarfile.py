@@ -5,6 +5,43 @@
 #
 # Dec-2025, Pat Welch, pat@mousebrains.com
 
+"""
+WAMOS polar file parser.
+
+This module provides the PolarFile class for parsing `.pol` files containing
+marine radar scan data. Supports multiple compression formats (.gz, .bz2, .xz,
+.lzma, .zst).
+
+Module Organization
+-------------------
+
+1. **PolarFile class** - Main parser class
+   - Compression handling: _get_opener, _parse
+   - Header parsing: _parse_header, _parse_value, _parse_latlon
+   - Frame metadata: _parse_frame_section, _build_frame_metadata
+   - Binary data: _parse_data, _parse_data_from_bytes
+   - Public API: properties and iteration methods
+
+2. **Module-level functions** - For multiprocessing compatibility
+   - load_polar_file: Load single frame from file
+   - load_polar_file_all: Load all frames from file
+
+3. **CLI integration** - Subcommand registration for 'wamos parse'
+
+File Format
+-----------
+
+Polar files contain:
+- ASCII header with key-value pairs until EOH marker
+- Frame metadata section with per-frame timestamp, position, heading
+- Binary data blocks: 10-byte ASCII length + uint16 little-endian intensity
+
+See Also
+--------
+- Frame: Radar scan data container
+- Filenames: File discovery and timestamp extraction
+"""
+
 from __future__ import annotations
 
 import bz2
@@ -61,6 +98,10 @@ class PolarFile:
 
     _LENGTH_FIELD_SIZE = 10  # Bytes for ASCII length field
 
+    # -------------------------------------------------------------------------
+    # Initialization
+    # -------------------------------------------------------------------------
+
     def __init__(
         self,
         filepath: str | Path,
@@ -90,6 +131,10 @@ class PolarFile:
         self._timing: dict[str, float] = {}
 
         self._parse()
+
+    # -------------------------------------------------------------------------
+    # Compression and File Opening
+    # -------------------------------------------------------------------------
 
     def _parse(self) -> None:
         """Parse the polar file."""
@@ -273,6 +318,10 @@ class PolarFile:
         else:
             return open
 
+    # -------------------------------------------------------------------------
+    # Header Parsing
+    # -------------------------------------------------------------------------
+
     def _read_header(self, fp: BinaryIO) -> tuple[list[bytes], list[bytes]]:
         """Read header lines until EOH marker, separating frame section."""
         header_lines = []
@@ -317,6 +366,10 @@ class PolarFile:
                 header[key] = value
 
         return header
+
+    # -------------------------------------------------------------------------
+    # Frame Metadata Parsing
+    # -------------------------------------------------------------------------
 
     def _parse_frame_section(self, lines: list[bytes]) -> list[FrameMetadata]:
         """Parse frame metadata from frame section lines."""
@@ -434,6 +487,10 @@ class PolarFile:
             heading_delay=self._header.get("HDGDL", 0.0),
         )
 
+    # -------------------------------------------------------------------------
+    # Binary Data Parsing
+    # -------------------------------------------------------------------------
+
     def _parse_data(self, fp: BinaryIO) -> None:
         """Parse binary data blocks into Frame objects."""
         n_samples = self._header.get("FIFO", 0)
@@ -490,6 +547,10 @@ class PolarFile:
 
             frame = Frame(data, metadata, config=self._config)
             self._frames.append(frame)
+
+    # -------------------------------------------------------------------------
+    # Value Parsing Utilities
+    # -------------------------------------------------------------------------
 
     def _parse_value(self, value: bytes) -> Any:
         """Parse a value from the header."""
@@ -629,7 +690,11 @@ class PolarFile:
         return "\n".join(lines)
 
 
-# Module-level loader function for multiprocessing compatibility
+# =============================================================================
+# Module-Level Functions (for multiprocessing compatibility)
+# =============================================================================
+
+
 def load_polar_file(filepath: str, config: Config | None = None) -> Frame | None:
     """
     Load a polar file and return its first frame.
@@ -670,6 +735,11 @@ def load_polar_file_all(filepath: str, config: Config | None = None) -> list[Fra
     except Exception as e:
         logging.error("Error loading %s: %s", filepath, e)
         return []
+
+
+# =============================================================================
+# CLI Integration
+# =============================================================================
 
 
 def _add_arguments(parser) -> None:
