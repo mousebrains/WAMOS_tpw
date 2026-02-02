@@ -856,6 +856,13 @@ def _add_arguments(parser) -> None:
         "--no-progress", dest="progress", action="store_false", help="Hide progress bars"
     )
 
+    # Streaming mode
+    parser.add_argument(
+        "--streaming",
+        action="store_true",
+        help="Use streaming file discovery (starts processing sooner for large datasets)",
+    )
+
 
 def add_subparser(subparsers) -> None:
     """Register the 'files-pipeline' subcommand."""
@@ -866,6 +873,105 @@ def add_subparser(subparsers) -> None:
     )
     _add_arguments(p)
     p.set_defaults(func=run)
+
+
+def _run_streaming(args, config) -> None:
+    """Execute the 'files-pipeline' command with streaming file discovery.
+
+    This mode starts processing files as they are discovered, rather than
+    waiting for all files to be found first. Useful for large datasets.
+    """
+    from pathlib import Path
+
+    from wamos_tpw.merged_viewer import show_merged_viewer, show_single_merged_image
+    from wamos_tpw.output_writers import (
+        write_geotiff,
+        write_kml,
+        write_kmz,
+        write_merged_netcdf,
+        write_merged_png,
+        write_mp4_movie,
+    )
+    from wamos_tpw.streaming_pipeline import StreamingMergePipeline
+
+    logging.info("Using streaming file discovery mode")
+
+    # Create window config
+    window_config = TimeWindowConfig(
+        window_seconds=args.window,
+        overlap_fraction=args.overlap,
+        min_frames_per_window=args.min_frames,
+        resolution_scale=args.resolution_scale,
+        interpolate_gaps=args.interpolate,
+    )
+
+    logging.info(
+        "Window config: %.1fs duration, %.0f%% overlap, min %d frames, %.1fx resolution%s",
+        window_config.window_seconds,
+        window_config.overlap_fraction * 100,
+        window_config.min_frames_per_window,
+        window_config.resolution_scale,
+        ", interpolate gaps" if window_config.interpolate_gaps else "",
+    )
+
+    # Create output directory if specified
+    if args.output_dir:
+        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+        logging.info("Output directory: %s", args.output_dir)
+
+    # Create streaming pipeline
+    pipeline = StreamingMergePipeline(
+        stime=args.stime,
+        etime=args.etime,
+        polar_path=str(args.polar_path),
+        config=config,
+        window_config=window_config,
+        n_workers=args.workers,
+        tolerance=args.tolerance,
+        qTiming=args.timing,
+        qProgress=args.progress,
+    )
+
+    logging.info("Created streaming pipeline with %d time windows", pipeline.n_windows)
+
+    # Only accumulate merged images in memory when bulk output is requested
+    needs_bulk = bool(args.mp4 or args.kml or args.kmz or args.plot)
+    merged_images = [] if needs_bulk else None
+    n_merged = 0
+    first_shown = False
+
+    for merged in pipeline.iter_merged():
+        n_merged += 1
+        if merged_images is not None:
+            merged_images.append(merged)
+
+        # Show first image immediately if --plot is requested
+        if args.plot and not first_shown:
+            first_shown = True
+            show_single_merged_image(merged)
+
+        # Write per-window output files
+        if args.output_dir:
+            if args.format in ("netcdf", "both"):
+                write_merged_netcdf(merged, args.output_dir)
+            if args.format in ("png", "both"):
+                write_merged_png(merged, args.output_dir)
+            if args.geotiff:
+                write_geotiff(merged, args.output_dir)
+
+    logging.info("Created %d merged images (streaming mode)", n_merged)
+
+    # Bulk outputs (require all images in memory)
+    if merged_images:
+        if args.kml:
+            write_kml(merged_images, args.kml)
+        if args.kmz:
+            write_kmz(merged_images, args.kmz)
+        if args.plot:
+            show_merged_viewer(merged_images)
+        if args.mp4:
+            write_mp4_movie(merged_images, args.mp4, fps=args.fps, release=True)
+        del merged_images
 
 
 def run(args) -> None:
@@ -883,6 +989,11 @@ def run(args) -> None:
     )
 
     config = Config(args.config) if args.config else Config()
+
+    # Use streaming mode if requested
+    if getattr(args, "streaming", False):
+        _run_streaming(args, config)
+        return
 
     filenames = Filenames(args.stime, args.etime, args.polar_path)
     files = list(filenames)

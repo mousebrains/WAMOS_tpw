@@ -95,6 +95,7 @@ Examples:
     from wamos_tpw import frame_pipeline, files_pipeline, interpolator
     from wamos_tpw import range as range_module  # Avoid shadowing builtin
     from wamos_tpw import list_frames
+    from wamos_tpw import streaming_filenames, streaming_pipeline
 
     files.add_subparser(subparsers)  # wamos view
     bearing.add_subparser(subparsers)  # wamos bearing
@@ -112,6 +113,8 @@ Examples:
     files_pipeline.add_subparser(subparsers)  # wamos files-pipeline
     interpolator.add_subparser(subparsers)  # wamos interpolator
     list_frames.add_subparser(subparsers)  # wamos list-frames
+    streaming_filenames.add_subparser(subparsers)  # wamos stream-list
+    streaming_pipeline.add_subparser(subparsers)  # wamos stream-pipeline
 
     # Parse arguments
     args = parser.parse_args()
