@@ -25,6 +25,8 @@ from wamos_tpw.frame import Frame, FrameMetadata
 from wamos_tpw.filenames import extract_file_timestamp
 from wamos_tpw.config import Config
 
+__all__ = ["PolarFile"]
+
 
 class PolarFile:
     """

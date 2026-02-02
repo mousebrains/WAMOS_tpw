@@ -14,6 +14,8 @@ from numpy.polynomial import Polynomial
 from wamos_tpw.config import Config
 from wamos_tpw.range import Range
 
+__all__ = ["Deramp"]
+
 
 class Deramp:
     """

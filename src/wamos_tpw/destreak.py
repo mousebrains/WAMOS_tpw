@@ -16,6 +16,8 @@ from scipy import ndimage
 from wamos_tpw.config import Config
 from wamos_tpw.frame import Frame
 
+__all__ = ["Destreak"]
+
 
 class Destreak:
     """

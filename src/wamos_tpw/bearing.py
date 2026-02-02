@@ -27,6 +27,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+__all__ = [
+    "Bearing",
+    "MultiTheta",
+    "MultiBearing",
+    "theta_to_heading_ship",
+    "theta_to_heading_earth",
+    "heading_to_xy",
+]
+
 
 def theta_to_heading_ship(
     theta: np.ndarray,

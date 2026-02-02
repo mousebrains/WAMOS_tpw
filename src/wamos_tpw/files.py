@@ -21,6 +21,8 @@ from wamos_tpw.frame import Frame
 from wamos_tpw.plotting import BaseViewer, quantile_limits, calc_bin_edges, format_nav_title
 from wamos_tpw.polarfile import load_polar_file
 
+__all__ = ["Files"]
+
 
 class Files:
     """

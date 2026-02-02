@@ -82,6 +82,8 @@ from scipy.optimize import curve_fit
 from wamos_tpw.config import Config
 from wamos_tpw.theta import Theta
 
+__all__ = ["Dewind", "DewindDiag"]
+
 
 def _sin_model(theta_deg: np.ndarray, amplitude: float, phi: float) -> np.ndarray:
     """Sinusoidal model: amplitude * sin(theta + phi)."""

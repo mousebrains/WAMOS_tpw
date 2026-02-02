@@ -18,6 +18,8 @@ from wamos_tpw.config import Config
 if TYPE_CHECKING:
     from wamos_tpw.theta import Theta
 
+__all__ = ["Shadow"]
+
 
 class Shadow:
     """

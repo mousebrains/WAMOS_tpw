@@ -23,6 +23,8 @@ _DEFAULT_CONFIG = "default_wamos.yaml"
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["Config", "WamosConfig", "ConfigSchema"]
+
 
 # =============================================================================
 # Configuration Schema (for validation)

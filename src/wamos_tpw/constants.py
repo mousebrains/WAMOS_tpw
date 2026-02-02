@@ -6,6 +6,8 @@
 
 """Physical constants for radar calculations."""
 
+__all__ = ["C_VACUUM", "N_AIR_STANDARD", "C_AIR", "KNOTS_TO_MS"]
+
 # Speed of light in vacuum (m/s)
 C_VACUUM = 299_792_458.0
 

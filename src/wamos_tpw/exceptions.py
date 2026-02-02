@@ -17,6 +17,14 @@ Exception Hierarchy:
 
 from __future__ import annotations
 
+__all__ = [
+    "WamosError",
+    "PolarFileError",
+    "ConfigError",
+    "ProcessingError",
+    "ValidationError",
+]
+
 
 class WamosError(Exception):
     """

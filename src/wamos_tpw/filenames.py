@@ -14,6 +14,8 @@ from concurrent.futures import ProcessPoolExecutor
 from typing import Iterator
 from functools import partial
 
+__all__ = ["Filenames"]
+
 
 def extract_file_timestamp(filepath: str) -> np.datetime64 | None:
     """
