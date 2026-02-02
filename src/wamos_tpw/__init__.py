@@ -15,6 +15,7 @@ from wamos_tpw.exceptions import (
     ProcessingError,
     ValidationError,
 )
+from wamos_tpw.pipeline import MergePipeline, create_pipeline
 
 __all__ = [
     "__version__",
@@ -26,6 +27,9 @@ __all__ = [
     "Theta",
     "Bearing",
     "Config",
+    # Pipeline
+    "MergePipeline",
+    "create_pipeline",
     # Exceptions
     "WamosError",
     "PolarFileError",

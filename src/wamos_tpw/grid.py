@@ -4,13 +4,58 @@
 #
 # Jan-2026, Pat Welch, pat@mousebrains.com
 
-"""Equirectangular grid computation and projection utilities for merging radar frames."""
+"""
+Equirectangular grid computation and projection utilities for merging radar frames.
+
+This module provides functions for:
+
+1. **Grid Computation** - Computing common grids that cover multiple radar frames
+   - `compute_common_grid()` - From full per-radial lat/lon arrays
+   - `compute_common_grid_from_stats()` - From pre-computed position statistics (faster)
+
+2. **Frame Projection** - Projecting radar frames onto equirectangular grids
+   - `project_frame_to_common_grid()` - Project a single frame with motion compensation
+
+3. **Grid Remapping** - Remapping between different grid resolutions
+   - `remap_to_common_grid()` - Remap from source grid to destination grid
+
+The module automatically uses Numba JIT acceleration for `remap_to_common_grid`
+when Numba is available, providing 3-5x speedup for larger grids.
+
+Example::
+
+    # Compute a common grid for multiple frames
+    grid_params = compute_common_grid(latitudes, longitudes, max_ranges, resolutions)
+
+    # Project frames onto the grid
+    for frame in frames:
+        frame_sum, frame_count = project_frame_to_common_grid(
+            intensity, theta, ground_range, lats, lons, headings, grid_params
+        )
+
+    # Remap to a different grid resolution
+    dst_sum, dst_count = remap_to_common_grid(
+        intensity, count, src_x_edges, src_y_edges, dst_x_edges, dst_y_edges, n_x, n_y
+    )
+"""
 
 from __future__ import annotations
 
 import numpy as np
 
+__all__ = [
+    "compute_common_grid",
+    "compute_common_grid_from_stats",
+    "project_frame_to_common_grid",
+    "remap_to_common_grid",
+]
+
 _DEG2M = 111_319.5  # meters per degree of latitude
+
+
+# =============================================================================
+# Grid Computation Functions
+# =============================================================================
 
 
 def compute_common_grid(
@@ -205,6 +250,11 @@ def compute_common_grid_from_stats(
     }
 
 
+# =============================================================================
+# Frame Projection Functions
+# =============================================================================
+
+
 def _project_frame_numpy(
     intensity: np.ndarray,
     theta: np.ndarray,
@@ -289,6 +339,11 @@ def _project_frame_numpy(
 # Default to numpy implementation
 # Numba version available below but benchmarks show numpy is faster for typical frame sizes
 project_frame_to_common_grid = _project_frame_numpy
+
+
+# =============================================================================
+# Grid Remapping Functions
+# =============================================================================
 
 
 def remap_to_common_grid(

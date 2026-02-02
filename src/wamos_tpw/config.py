@@ -8,29 +8,160 @@
 from __future__ import annotations
 
 import logging
+import pprint
+from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
-import pprint
 from typing import Any
 
 import yaml
 
+from wamos_tpw.exceptions import ConfigError
+
 # Default config file name within package data
 _DEFAULT_CONFIG = "default_wamos.yaml"
+
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Configuration Schema (for validation)
+# =============================================================================
+
+
+@dataclass
+class OffsetsSchema:
+    """Schema for coordinate offset parameters."""
+
+    bow_to_radar: float = 0.0  # BO2RA: Angle from bow to radar beam (degrees)
+    heading_delay: float = 0.0  # HDGDL: Heading delay correction (degrees)
+    compass: float = 0.0  # Compass offset correction (degrees)
+
+
+@dataclass
+class BiasSchema:
+    """Schema for bias parameters."""
+
+    range: float = 0.0  # Range bias in meters
+    theta: float = 0.0  # Theta bias in degrees
+
+
+@dataclass
+class ShadowRegionSchema:
+    """Schema for a shadow region definition."""
+
+    LHS: float = 0.0  # Left-hand side angle (degrees)
+    RHS: float = 0.0  # Right-hand side angle (degrees)
+
+
+@dataclass
+class ShadowSchema:
+    """Schema for shadow detection parameters."""
+
+    range_fraction: float = 0.1  # Fraction of range bins for shadow detection
+    theta_refinement: bool = False  # Use shadow edges to refine theta
+    angle_range: float = 10.0  # +/- degrees to search around expected angles
+    # Named shadow regions (e.g., "aft", "forward") are dynamic
+
+
+@dataclass
+class ThetaRefinementSchema:
+    """Schema for theta refinement parameters."""
+
+    enabled: bool = True  # Enable theta refinement
+    min_frames: int = 3  # Minimum frames needed
+
+
+@dataclass
+class DerampSchema:
+    """Schema for deramp parameters."""
+
+    order: int = 4  # Polynomial order for fit
+
+
+@dataclass
+class DewindSchema:
+    """Schema for dewind parameters."""
+
+    order: int = 2  # Polynomial order for fit
+
+
+@dataclass
+class ConfigSchema:
+    """
+    Schema defining valid configuration structure and types.
+
+    Used for validation at load time to catch configuration errors early.
+    """
+
+    theta_refinement: ThetaRefinementSchema = field(default_factory=ThetaRefinementSchema)
+    shadow: ShadowSchema = field(default_factory=ShadowSchema)
+    bias: BiasSchema = field(default_factory=BiasSchema)
+    offsets: OffsetsSchema = field(default_factory=OffsetsSchema)
+    deramp: DerampSchema = field(default_factory=DerampSchema)
+    dewind: DewindSchema = field(default_factory=DewindSchema)
+
+
+# Type mapping for validation
+# Note: YAML doesn't distinguish int/float for whole numbers, so numeric types accept both
+_TYPE_MAP = {
+    "theta_refinement.enabled": bool,
+    "theta_refinement.min_frames": int,
+    "shadow.range_fraction": (int, float),
+    "shadow.theta_refinement": bool,
+    "shadow.angle_range": (int, float),
+    "bias.range": (int, float),
+    "bias.theta": (int, float),
+    "offsets.bow_to_radar": (int, float),
+    "offsets.heading_delay": (int, float),
+    "offsets.compass": (int, float),
+    "deramp.order": int,
+    "dewind.order": int,
+}
+
+# Value constraints
+_CONSTRAINTS = {
+    "shadow.range_fraction": lambda v: 0.0 < v <= 1.0,
+    "theta_refinement.min_frames": lambda v: v >= 1,
+    "deramp.order": lambda v: v >= 1,
+    "dewind.order": lambda v: v >= 1,
+}
 
 
 class Config:
     """
     Configuration class for WAMOS processing.
+
+    Provides:
+    - YAML configuration loading from files or package defaults
+    - Dot-notation access for nested keys (e.g., config["shadow.range_fraction"])
+    - Attribute-style access (e.g., config.shadow.range_fraction)
+    - Optional validation against schema with type checking
+
+    Example::
+
+        config = Config("tower_config.yaml")
+        config.validate()  # Raises ConfigError if invalid
+
+        # Access values
+        range_frac = config["shadow.range_fraction"]
+        deramp_order = config.deramp.order
     """
 
-    def __init__(self, filename: str | Path | None = None):
+    def __init__(
+        self,
+        filename: str | Path | None = None,
+        *,
+        validate: bool = False,
+    ):
         """
         Initialize configuration, optionally loading from YAML file.
 
         Args:
             filename: Path to YAML config file. If None, loads the default
                      configuration from package data.
+            validate: If True, validate configuration after loading.
+                     Raises ConfigError if validation fails.
         """
         if filename:
             filename = Path(filename)
@@ -39,6 +170,9 @@ class Config:
         else:
             self._filename = _DEFAULT_CONFIG
             self._config = self._load_default()
+
+        if validate:
+            self.validate()
 
     def _load(self, filename: Path) -> dict:
         """
@@ -60,6 +194,84 @@ class Config:
         """Load the default configuration from package data."""
         config_file = files("wamos_tpw.data").joinpath(_DEFAULT_CONFIG)
         return yaml.safe_load(config_file.read_text()) or {}
+
+    def validate(self, section: str | None = None) -> list[str]:
+        """
+        Validate configuration against schema.
+
+        Checks:
+        - Type correctness for known parameters
+        - Value constraints (e.g., range_fraction must be 0 < x <= 1)
+
+        Args:
+            section: Optional section name to validate (e.g., "global", "roger revelle").
+                    If None, validates all sections.
+
+        Returns:
+            List of warning messages for minor issues (e.g., unknown keys)
+
+        Raises:
+            ConfigError: If validation fails with type or constraint errors
+        """
+        errors = []
+        warnings = []
+
+        # Determine which sections to validate
+        if section:
+            sections = {section: self._config.get(section, {})}
+        else:
+            sections = self._config
+
+        for section_name, section_config in sections.items():
+            if not isinstance(section_config, dict):
+                continue
+
+            prefix = f"[{section_name}] " if section_name else ""
+
+            # Validate known keys
+            for key_path, expected_type in _TYPE_MAP.items():
+                try:
+                    value = self._get_nested(section_config, key_path)
+                    if value is None:
+                        continue  # Optional key not present
+
+                    # Type check
+                    if not isinstance(value, expected_type):
+                        type_names = (
+                            expected_type.__name__
+                            if isinstance(expected_type, type)
+                            else " or ".join(t.__name__ for t in expected_type)
+                        )
+                        errors.append(
+                            f"{prefix}{key_path}: expected {type_names}, "
+                            f"got {type(value).__name__} ({value!r})"
+                        )
+                        continue
+
+                    # Constraint check
+                    if key_path in _CONSTRAINTS:
+                        constraint = _CONSTRAINTS[key_path]
+                        if not constraint(value):
+                            errors.append(f"{prefix}{key_path}: invalid value {value!r}")
+
+                except (KeyError, TypeError):
+                    pass  # Key not present, which is OK
+
+        if errors:
+            error_msg = f"Configuration validation failed for {self._filename}:\n"
+            error_msg += "\n".join(f"  - {e}" for e in errors)
+            raise ConfigError(error_msg)
+
+        return warnings
+
+    def _get_nested(self, config: dict, key_path: str) -> Any:
+        """Get a nested value from config using dot notation."""
+        obj = config
+        for key in key_path.split("."):
+            if not isinstance(obj, dict) or key not in obj:
+                return None
+            obj = obj[key]
+        return obj
 
     def keys(self):
         """Return configuration keys."""

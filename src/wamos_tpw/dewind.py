@@ -4,6 +4,73 @@
 #
 # Jan-2025, Pat Welch, pat@mousebrains.com
 
+"""
+Remove look-angle-dependent intensity variation from radar data.
+
+Pipeline Integration
+--------------------
+
+Dewind is an optional processing step in the radar data pipeline, typically
+applied after destreaking and deramping:
+
+    PolarFile -> Frame -> Theta -> Destreak -> Shadow -> Deramp -> **Dewind**
+
+The processing order matters because:
+1. Destreak removes radial artifacts that would corrupt the mean calculation
+2. Shadow masks ship structure that would bias the sinusoidal fit
+3. Deramp removes range-dependent fall-off before azimuthal correction
+
+Usage in Pipeline
+-----------------
+
+The `FramePipeline` class in `frame_pipeline.py` integrates Dewind::
+
+    from wamos_tpw.frame_pipeline import FramePipeline
+
+    pipeline = FramePipeline(frame)
+    pipeline.apply_dewind()  # Apply look-angle correction
+    corrected = pipeline.intensity
+
+Visualization and Plotting
+--------------------------
+
+Dewind is used extensively for wind-related visualizations:
+
+1. **wind_histogram_viewer.py** - Plots intensity vs wind-relative angle
+   to visualize upwind/crosswind/downwind backscatter patterns
+
+2. **dewind_check.py** - Statistics on dewind fit parameters (amplitude, phi)
+   across multiple frames to assess wind direction consistency
+
+3. **frame_viewer.py**, **earth_viewer.py** - Optional dewind correction
+   for cleaner frame display
+
+4. **projection_check.py**, **combine_check.py** - Include dewind in the
+   full processing pipeline for earth-referenced composites
+
+The fitted phi parameter (phase offset) indicates the dominant wind direction
+relative to the ship heading - useful for validating meteorological data.
+
+Classes
+-------
+
+- `Dewind` - Core class for look-angle correction
+- `DewindDiag` - Diagnostic visualization comparing before/after
+
+CLI Usage
+---------
+
+::
+
+    wamos dewind <file.pol> --plot
+
+See Also
+--------
+- `deramp.py` - Range-dependent intensity correction (applied before dewind)
+- `shadow.py` - Ship structure masking (provides clean data for dewind fit)
+- `wind_histogram_viewer.py` - Wind-relative intensity analysis
+"""
+
 from __future__ import annotations
 
 import logging
