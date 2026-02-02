@@ -2,9 +2,14 @@
 """Benchmark grid projection and remap implementations."""
 
 import time
+
 import numpy as np
 
+from wamos_tpw.grid import project_frame_to_common_grid as project_optimized
+from wamos_tpw.grid import remap_to_common_grid as remap_optimized
+
 _DEG2M = 111_319.5  # meters per degree of latitude
+
 
 # Original implementation (before optimization)
 def remap_original(
@@ -65,12 +70,6 @@ def remap_original(
     )
 
     return dst_sum.astype(np.float64), dst_count.astype(np.int32)
-
-
-# Import optimized versions
-from wamos_tpw.grid import remap_to_common_grid as remap_optimized
-from wamos_tpw.grid import project_frame_to_common_grid as project_optimized
-from wamos_tpw.grid import _project_frame_numpy as project_numpy
 
 
 # Original project_frame implementation (with np.outer intermediate arrays)
@@ -142,6 +141,7 @@ def project_original(
 # Try to import numba for JIT version
 try:
     import numba
+
     HAS_NUMBA = True
 
     @numba.jit(nopython=True, parallel=True)
@@ -350,9 +350,9 @@ def main():
 
     # Test different frame sizes
     projection_sizes = [
-        (180, 512, 800),   # Small frame
-        (360, 512, 800),   # Standard frame
-        (360, 1024, 1000), # Large frame
+        (180, 512, 800),  # Small frame
+        (360, 512, 800),  # Standard frame
+        (360, 1024, 1000),  # Large frame
     ]
 
     for n_bearings, n_distances, grid_size in projection_sizes:
@@ -363,12 +363,14 @@ def main():
 
         # Benchmark original (numpy with np.outer)
         mean_orig, std_orig, result_orig = benchmark_function(project_original, args)
-        print(f"NumPy (np.outer):    {mean_orig*1000:8.3f} ms ± {std_orig*1000:.3f} ms")
+        print(f"NumPy (np.outer):    {mean_orig * 1000:8.3f} ms ± {std_orig * 1000:.3f} ms")
 
         # Benchmark optimized (numba if available)
         mean_opt, std_opt, result_opt = benchmark_function(project_optimized, args, n_warmup=5)
         speedup = mean_orig / mean_opt
-        print(f"Optimized (Numba):   {mean_opt*1000:8.3f} ms ± {std_opt*1000:.3f} ms  ({speedup:.2f}x speedup)")
+        print(
+            f"Optimized (Numba):   {mean_opt * 1000:8.3f} ms ± {std_opt * 1000:.3f} ms  ({speedup:.2f}x speedup)"
+        )
 
         # Verify results match
         sum_match = np.allclose(result_orig[0], result_opt[0], rtol=1e-6, equal_nan=True)
@@ -393,12 +395,14 @@ def main():
 
         # Benchmark original
         mean_orig, std_orig, result_orig = benchmark_function(remap_original, args)
-        print(f"Original (meshgrid):    {mean_orig*1000:8.3f} ms ± {std_orig*1000:.3f} ms")
+        print(f"Original (meshgrid):    {mean_orig * 1000:8.3f} ms ± {std_orig * 1000:.3f} ms")
 
         # Benchmark optimized
         mean_opt, std_opt, result_opt = benchmark_function(remap_optimized, args)
         speedup = mean_orig / mean_opt
-        print(f"Optimized (no meshgrid): {mean_opt*1000:8.3f} ms ± {std_opt*1000:.3f} ms  ({speedup:.2f}x speedup)")
+        print(
+            f"Optimized (no meshgrid): {mean_opt * 1000:8.3f} ms ± {std_opt * 1000:.3f} ms  ({speedup:.2f}x speedup)"
+        )
 
         # Verify results match
         sum_match = np.allclose(result_orig[0], result_opt[0], rtol=1e-10, equal_nan=True)
@@ -412,7 +416,9 @@ def main():
                 remap_numba, args, n_warmup=5, n_runs=20
             )
             speedup_numba = mean_orig / mean_numba
-            print(f"Numba JIT:              {mean_numba*1000:8.3f} ms ± {std_numba*1000:.3f} ms  ({speedup_numba:.2f}x speedup)")
+            print(
+                f"Numba JIT:              {mean_numba * 1000:8.3f} ms ± {std_numba * 1000:.3f} ms  ({speedup_numba:.2f}x speedup)"
+            )
 
             sum_match = np.allclose(result_orig[0], result_numba[0], rtol=1e-10, equal_nan=True)
             count_match = np.allclose(result_orig[1], result_numba[1], rtol=1e-10)
@@ -421,7 +427,7 @@ def main():
             print("Numba not available, skipping JIT benchmark")
 
     # Test early exit (no overlap)
-    print(f"\nEarly exit test (no overlap):")
+    print("\nEarly exit test (no overlap):")
     print("-" * 50)
     intensity, count, src_x, src_y, _, _, _, _ = create_test_data(400, 400)
     # Create non-overlapping destination
@@ -431,8 +437,10 @@ def main():
 
     mean_orig, _, _ = benchmark_function(remap_original, args_no_overlap)
     mean_opt, _, _ = benchmark_function(remap_optimized, args_no_overlap)
-    print(f"Original:  {mean_orig*1000:8.3f} ms")
-    print(f"Optimized: {mean_opt*1000:8.3f} ms  ({mean_orig/mean_opt:.1f}x speedup with early exit)")
+    print(f"Original:  {mean_orig * 1000:8.3f} ms")
+    print(
+        f"Optimized: {mean_opt * 1000:8.3f} ms  ({mean_orig / mean_opt:.1f}x speedup with early exit)"
+    )
 
 
 if __name__ == "__main__":
