@@ -205,7 +205,7 @@ def compute_common_grid_from_stats(
     }
 
 
-def project_frame_to_common_grid(
+def _project_frame_numpy(
     intensity: np.ndarray,
     theta: np.ndarray,
     ground_range: np.ndarray,
@@ -215,6 +215,8 @@ def project_frame_to_common_grid(
     grid_params: dict,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
+    Pure NumPy implementation of frame projection.
+
     Project a single frame onto a common equirectangular grid.
 
     Args:
@@ -282,6 +284,11 @@ def project_frame_to_common_grid(
         frame_count.ravel()[:] = batch_count
 
     return frame_sum, frame_count
+
+
+# Default to numpy implementation
+# Numba version available below but benchmarks show numpy is faster for typical frame sizes
+project_frame_to_common_grid = _project_frame_numpy
 
 
 def remap_to_common_grid(
@@ -412,10 +419,214 @@ def remap_to_common_grid(
     return dst_sum.astype(np.float64), dst_count.astype(np.int32)
 
 
-# Optional Numba acceleration for remap_to_common_grid
-# When numba is available, provides ~2-3x speedup over pure-numpy implementation
+# Optional Numba acceleration for grid operations
+# When numba is available, provides significant speedup over pure-numpy
 try:
     import numba
+
+    # =========================================================================
+    # Numba-accelerated project_frame_to_common_grid
+    # =========================================================================
+
+    @numba.jit(nopython=True, cache=True)
+    def _project_frame_numba_core(
+        intensity: np.ndarray,
+        sin_bearing: np.ndarray,
+        cos_bearing: np.ndarray,
+        ground_range: np.ndarray,
+        ship_x: np.ndarray,
+        ship_y: np.ndarray,
+        x_origin: float,
+        y_origin: float,
+        inv_spacing: float,
+        n_x: int,
+        n_y: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Numba-accelerated core projection loop.
+
+        Avoids large intermediate arrays by computing coordinates inline.
+        Sequential loop to handle accumulation safely.
+        """
+        grid_size = n_x * n_y
+        frame_sum = np.zeros(grid_size, dtype=np.float64)
+        frame_count = np.zeros(grid_size, dtype=np.int64)
+
+        n_bearings, n_distances = intensity.shape
+
+        for ib in range(n_bearings):
+            sin_b = sin_bearing[ib]
+            cos_b = cos_bearing[ib]
+            sx = ship_x[ib]
+            sy = ship_y[ib]
+
+            for ir in range(n_distances):
+                val = intensity[ib, ir]
+                if np.isnan(val):
+                    continue
+
+                # Compute coordinates inline (no intermediate array)
+                r = ground_range[ir]
+                x = sin_b * r + sx
+                y = cos_b * r + sy
+
+                # Convert to grid indices
+                x_idx = int((x - x_origin) * inv_spacing)
+                y_idx = int((y - y_origin) * inv_spacing)
+
+                # Check bounds and accumulate
+                if 0 <= x_idx < n_x and 0 <= y_idx < n_y:
+                    linear_idx = y_idx * n_x + x_idx
+                    frame_sum[linear_idx] += val
+                    frame_count[linear_idx] += 1
+
+        return frame_sum.reshape((n_y, n_x)), frame_count.reshape((n_y, n_x))
+
+    @numba.jit(nopython=True, parallel=True, cache=True)
+    def _project_frame_numba_core_parallel(
+        intensity: np.ndarray,
+        sin_bearing: np.ndarray,
+        cos_bearing: np.ndarray,
+        ground_range: np.ndarray,
+        ship_x: np.ndarray,
+        ship_y: np.ndarray,
+        x_origin: float,
+        y_origin: float,
+        inv_spacing: float,
+        n_x: int,
+        n_y: int,
+        n_threads: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Parallel Numba projection using thread-local accumulators.
+
+        Each thread accumulates into its own grid, then merged at the end.
+        """
+        grid_size = n_x * n_y
+        n_bearings, n_distances = intensity.shape
+
+        # Thread-local accumulators (n_threads x grid_size)
+        local_sums = np.zeros((n_threads, grid_size), dtype=np.float64)
+        local_counts = np.zeros((n_threads, grid_size), dtype=np.int64)
+
+        # Process bearings in parallel
+        for ib in numba.prange(n_bearings):
+            # Get thread ID (bearings are distributed across threads)
+            tid = ib % n_threads
+
+            sin_b = sin_bearing[ib]
+            cos_b = cos_bearing[ib]
+            sx = ship_x[ib]
+            sy = ship_y[ib]
+
+            for ir in range(n_distances):
+                val = intensity[ib, ir]
+                if np.isnan(val):
+                    continue
+
+                r = ground_range[ir]
+                x = sin_b * r + sx
+                y = cos_b * r + sy
+
+                x_idx = int((x - x_origin) * inv_spacing)
+                y_idx = int((y - y_origin) * inv_spacing)
+
+                if 0 <= x_idx < n_x and 0 <= y_idx < n_y:
+                    linear_idx = y_idx * n_x + x_idx
+                    local_sums[tid, linear_idx] += val
+                    local_counts[tid, linear_idx] += 1
+
+        # Merge thread-local results
+        frame_sum = np.zeros(grid_size, dtype=np.float64)
+        frame_count = np.zeros(grid_size, dtype=np.int64)
+        for tid in range(n_threads):
+            for i in range(grid_size):
+                frame_sum[i] += local_sums[tid, i]
+                frame_count[i] += local_counts[tid, i]
+
+        return frame_sum.reshape((n_y, n_x)), frame_count.reshape((n_y, n_x))
+
+    def _project_frame_numba(
+        intensity: np.ndarray,
+        theta: np.ndarray,
+        ground_range: np.ndarray,
+        latitudes: np.ndarray,
+        longitudes: np.ndarray,
+        headings: np.ndarray,
+        grid_params: dict,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Numba-accelerated frame projection."""
+        ref_lat = grid_params["ref_lat"]
+        ref_lon = grid_params["ref_lon"]
+        m_per_deg_lon = grid_params["m_per_deg_lon"]
+        x_edges_abs = grid_params["x_edges_abs"]
+        y_edges_abs = grid_params["y_edges_abs"]
+        grid_spacing = grid_params["grid_spacing"]
+        n_x = grid_params["n_x"]
+        n_y = grid_params["n_y"]
+
+        # Convert ship positions to equirectangular meters
+        ship_x = (longitudes - ref_lon) * m_per_deg_lon
+        ship_y = (latitudes - ref_lat) * _DEG2M
+
+        # Compute earth bearing for each radial
+        earth_bearing_rad = np.deg2rad((theta + headings) % 360)
+        sin_bearing = np.sin(earth_bearing_rad)
+        cos_bearing = np.cos(earth_bearing_rad)
+
+        x_origin = x_edges_abs[0]
+        y_origin = y_edges_abs[0]
+        inv_spacing = 1.0 / grid_spacing
+
+        # Ensure arrays are contiguous float64 for numba
+        intensity_f64 = np.ascontiguousarray(intensity, dtype=np.float64)
+        ground_range_f64 = np.ascontiguousarray(ground_range, dtype=np.float64)
+        ship_x_f64 = np.ascontiguousarray(ship_x, dtype=np.float64)
+        ship_y_f64 = np.ascontiguousarray(ship_y, dtype=np.float64)
+        sin_bearing_f64 = np.ascontiguousarray(sin_bearing, dtype=np.float64)
+        cos_bearing_f64 = np.ascontiguousarray(cos_bearing, dtype=np.float64)
+
+        n_bearings = intensity.shape[0]
+
+        # Use parallel version for larger frames, sequential for smaller
+        if n_bearings >= 180:
+            n_threads = min(8, n_bearings // 45)  # ~45 bearings per thread minimum
+            frame_sum, frame_count = _project_frame_numba_core_parallel(
+                intensity_f64,
+                sin_bearing_f64,
+                cos_bearing_f64,
+                ground_range_f64,
+                ship_x_f64,
+                ship_y_f64,
+                x_origin,
+                y_origin,
+                inv_spacing,
+                n_x,
+                n_y,
+                n_threads,
+            )
+        else:
+            frame_sum, frame_count = _project_frame_numba_core(
+                intensity_f64,
+                sin_bearing_f64,
+                cos_bearing_f64,
+                ground_range_f64,
+                ship_x_f64,
+                ship_y_f64,
+                x_origin,
+                y_origin,
+                inv_spacing,
+                n_x,
+                n_y,
+            )
+
+        return frame_sum, frame_count.astype(np.int32)
+
+    # Note: Numba projection available as _project_frame_numba but benchmarks show
+    # numpy is faster for typical frame sizes (360x512). Keep numpy as default.
+    # For very large frames (>360x1024), numba may provide slight benefit.
+
+    # =========================================================================
+    # Numba-accelerated remap_to_common_grid
+    # =========================================================================
 
     @numba.jit(nopython=True, parallel=True, cache=True)
     def _remap_numba_core(

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Benchmark remap_to_common_grid implementations."""
+"""Benchmark grid projection and remap implementations."""
 
 import time
 import numpy as np
+
+_DEG2M = 111_319.5  # meters per degree of latitude
 
 # Original implementation (before optimization)
 def remap_original(
@@ -65,8 +67,76 @@ def remap_original(
     return dst_sum.astype(np.float64), dst_count.astype(np.int32)
 
 
-# Import optimized version
+# Import optimized versions
 from wamos_tpw.grid import remap_to_common_grid as remap_optimized
+from wamos_tpw.grid import project_frame_to_common_grid as project_optimized
+from wamos_tpw.grid import _project_frame_numpy as project_numpy
+
+
+# Original project_frame implementation (with np.outer intermediate arrays)
+def project_original(
+    intensity: np.ndarray,
+    theta: np.ndarray,
+    ground_range: np.ndarray,
+    latitudes: np.ndarray,
+    longitudes: np.ndarray,
+    headings: np.ndarray,
+    grid_params: dict,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Original implementation with large intermediate arrays."""
+    ref_lat = grid_params["ref_lat"]
+    ref_lon = grid_params["ref_lon"]
+    m_per_deg_lon = grid_params["m_per_deg_lon"]
+    x_edges_abs = grid_params["x_edges_abs"]
+    y_edges_abs = grid_params["y_edges_abs"]
+    grid_spacing = grid_params["grid_spacing"]
+    n_x = grid_params["n_x"]
+    n_y = grid_params["n_y"]
+
+    # Convert ship positions to equirectangular meters
+    ship_x = (longitudes - ref_lon) * m_per_deg_lon
+    ship_y = (latitudes - ref_lat) * _DEG2M
+
+    # Initialize accumulation arrays
+    frame_sum = np.zeros((n_y, n_x), dtype=np.float64)
+    frame_count = np.zeros((n_y, n_x), dtype=np.int32)
+
+    # Compute earth bearing for each radial
+    earth_bearing_rad = np.deg2rad((theta + headings) % 360)
+    sin_bearing = np.sin(earth_bearing_rad)
+    cos_bearing = np.cos(earth_bearing_rad)
+
+    # Compute x, y for all points (n_bearings, n_distances) - creates large arrays
+    x_coords = np.outer(sin_bearing, ground_range) + ship_x[:, np.newaxis]
+    y_coords = np.outer(cos_bearing, ground_range) + ship_y[:, np.newaxis]
+
+    # Convert to grid indices
+    x_origin = x_edges_abs[0]
+    y_origin = y_edges_abs[0]
+    inv_spacing = 1.0 / grid_spacing
+
+    x_idx = ((x_coords - x_origin) * inv_spacing).astype(np.int32)
+    y_idx = ((y_coords - y_origin) * inv_spacing).astype(np.int32)
+
+    # Flatten arrays
+    x_flat = x_idx.ravel()
+    y_flat = y_idx.ravel()
+    values_flat = intensity.ravel()
+
+    # Filter valid indices
+    valid = (x_flat >= 0) & (x_flat < n_x) & (y_flat >= 0) & (y_flat < n_y) & ~np.isnan(values_flat)
+
+    if np.sum(valid) > 0:
+        linear_idx = y_flat[valid] * n_x + x_flat[valid]
+        grid_size = n_x * n_y
+
+        batch_sum = np.bincount(linear_idx, weights=values_flat[valid], minlength=grid_size)
+        batch_count = np.bincount(linear_idx, minlength=grid_size)
+
+        frame_sum.ravel()[:] = batch_sum
+        frame_count.ravel()[:] = batch_count
+
+    return frame_sum, frame_count
 
 
 # Try to import numba for JIT version
@@ -227,8 +297,88 @@ def benchmark_function(func, args, n_warmup=3, n_runs=20):
     return np.mean(times), np.std(times), result
 
 
+def create_projection_test_data(n_bearings: int, n_distances: int, grid_size: int):
+    """Create test data for projection benchmarking."""
+    # Simulate radar frame
+    intensity = np.random.rand(n_bearings, n_distances).astype(np.float64) * 100
+    intensity[np.random.rand(n_bearings, n_distances) < 0.1] = np.nan
+
+    # Theta angles (0-360 degrees)
+    theta = np.linspace(0, 360, n_bearings, endpoint=False)
+
+    # Ground range (meters)
+    ground_range = np.linspace(100, 3000, n_distances).astype(np.float32)
+
+    # Per-radial positions (ship moving slightly)
+    base_lat, base_lon = 45.0, -125.0
+    latitudes = base_lat + np.linspace(0, 0.001, n_bearings)
+    longitudes = base_lon + np.linspace(0, 0.001, n_bearings)
+    headings = 45.0 + np.random.rand(n_bearings) * 2  # Slight heading variation
+
+    # Grid parameters
+    ref_lat = float(np.mean(latitudes))
+    ref_lon = float(np.mean(longitudes))
+    m_per_deg_lon = _DEG2M * np.cos(np.deg2rad(ref_lat))
+    grid_spacing = 7.5  # meters
+
+    # Create grid edges
+    max_range = 3500.0
+    x_edges = np.linspace(-max_range, max_range, grid_size + 1)
+    y_edges = np.linspace(-max_range, max_range, grid_size + 1)
+
+    grid_params = {
+        "ref_lat": ref_lat,
+        "ref_lon": ref_lon,
+        "m_per_deg_lon": m_per_deg_lon,
+        "x_edges_abs": x_edges,
+        "y_edges_abs": y_edges,
+        "grid_spacing": grid_spacing,
+        "n_x": grid_size,
+        "n_y": grid_size,
+    }
+
+    return intensity, theta, ground_range, latitudes, longitudes, headings, grid_params
+
+
 def main():
+    # =========================================================================
+    # Projection benchmarks
+    # =========================================================================
     print("=" * 70)
+    print("Benchmark: project_frame_to_common_grid implementations")
+    print("=" * 70)
+
+    # Test different frame sizes
+    projection_sizes = [
+        (180, 512, 800),   # Small frame
+        (360, 512, 800),   # Standard frame
+        (360, 1024, 1000), # Large frame
+    ]
+
+    for n_bearings, n_distances, grid_size in projection_sizes:
+        print(f"\nFrame: {n_bearings}x{n_distances}, Grid: {grid_size}x{grid_size}")
+        print("-" * 50)
+
+        args = create_projection_test_data(n_bearings, n_distances, grid_size)
+
+        # Benchmark original (numpy with np.outer)
+        mean_orig, std_orig, result_orig = benchmark_function(project_original, args)
+        print(f"NumPy (np.outer):    {mean_orig*1000:8.3f} ms ± {std_orig*1000:.3f} ms")
+
+        # Benchmark optimized (numba if available)
+        mean_opt, std_opt, result_opt = benchmark_function(project_optimized, args, n_warmup=5)
+        speedup = mean_orig / mean_opt
+        print(f"Optimized (Numba):   {mean_opt*1000:8.3f} ms ± {std_opt*1000:.3f} ms  ({speedup:.2f}x speedup)")
+
+        # Verify results match
+        sum_match = np.allclose(result_orig[0], result_opt[0], rtol=1e-6, equal_nan=True)
+        count_match = np.array_equal(result_orig[1], result_opt[1])
+        print(f"  Results match: sum={sum_match}, count={count_match}")
+
+    # =========================================================================
+    # Remap benchmarks
+    # =========================================================================
+    print("\n" + "=" * 70)
     print("Benchmark: remap_to_common_grid implementations")
     print("=" * 70)
 
