@@ -68,6 +68,7 @@ class StreamingMergePipeline:
         tolerance: float = 1.2,
         qTiming: bool = False,
         qProgress: bool = True,
+        max_windows: int | None = None,
     ):
         """
         Initialize the streaming merge pipeline.
@@ -82,6 +83,7 @@ class StreamingMergePipeline:
             tolerance: Multiplier for repeat_time to accept frame pair
             qTiming: Enable timing statistics
             qProgress: Show progress bars
+            max_windows: Maximum number of windows to process (None = all)
         """
         self._stime = np.datetime64(stime, "ns")
         self._etime = np.datetime64(etime, "ns")
@@ -100,6 +102,17 @@ class StreamingMergePipeline:
             window_seconds=self._window_config.window_seconds,
             overlap=self._window_config.overlap_fraction,
         )
+
+        # Limit windows if max_windows is specified
+        if max_windows is not None and max_windows > 0:
+            total_windows = len(self._windows)
+            if max_windows < total_windows:
+                self._windows = self._windows[:max_windows]
+                logger.info(
+                    "Limiting to first %d of %d windows (--max-windows)",
+                    max_windows,
+                    total_windows,
+                )
 
         # Statistics
         self._n_files_discovered = 0

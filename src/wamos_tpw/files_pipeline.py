@@ -56,6 +56,7 @@ class FilesMergePipeline:
         tolerance: float = 1.2,
         qTiming: bool = False,
         qProgress: bool = True,
+        max_windows: int | None = None,
     ):
         """
         Initialize the merge pipeline.
@@ -68,6 +69,7 @@ class FilesMergePipeline:
             tolerance: Multiplier for repeat_time to accept frame pair
             qTiming: Enable timing statistics
             qProgress: Show progress bars
+            max_windows: Maximum number of windows to process (None = all)
         """
         self._files = filenames
         self._config = config
@@ -79,6 +81,17 @@ class FilesMergePipeline:
 
         # Create time windows
         self._windows = create_time_windows(filenames, self._window_config)
+
+        # Limit windows if max_windows is specified
+        if max_windows is not None and max_windows > 0:
+            total_windows = len(self._windows)
+            if max_windows < total_windows:
+                self._windows = self._windows[:max_windows]
+                logger.info(
+                    "Limiting to first %d of %d windows (--max-windows)",
+                    max_windows,
+                    total_windows,
+                )
 
         # Statistics
         self._n_processed = 0
@@ -863,6 +876,23 @@ def _add_arguments(parser) -> None:
         help="Use streaming file discovery (starts processing sooner for large datasets)",
     )
 
+    # Memory monitoring
+    parser.add_argument(
+        "--memory-stats",
+        action="store_true",
+        help="Show detailed memory usage statistics during and after processing",
+    )
+
+    # Batch processing
+    parser.add_argument(
+        "--max-windows",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Maximum number of windows to process (default: all). "
+        "Useful for testing or batch processing large datasets.",
+    )
+
 
 def add_subparser(subparsers) -> None:
     """Register the 'files-pipeline' subcommand."""
@@ -883,6 +913,7 @@ def _run_streaming(args, config) -> None:
     """
     from pathlib import Path
 
+    from wamos_tpw.memory_monitor import MemoryMonitor, log_memory_stats
     from wamos_tpw.merged_viewer import show_merged_viewer, show_single_merged_image
     from wamos_tpw.output_writers import (
         write_geotiff,
@@ -895,6 +926,13 @@ def _run_streaming(args, config) -> None:
     from wamos_tpw.streaming_pipeline import StreamingMergePipeline
 
     logging.info("Using streaming file discovery mode")
+
+    # Set up memory monitoring if requested
+    memory_monitor = None
+    if getattr(args, "memory_stats", False):
+        sample_interval = 5.0  # Sample memory every 5 seconds
+        memory_monitor = MemoryMonitor(sample_interval=sample_interval)
+        memory_monitor.__enter__()
 
     # Create window config
     window_config = TimeWindowConfig(
@@ -930,6 +968,7 @@ def _run_streaming(args, config) -> None:
         tolerance=args.tolerance,
         qTiming=args.timing,
         qProgress=args.progress,
+        max_windows=getattr(args, "max_windows", None),
     )
 
     logging.info("Created streaming pipeline with %d time windows", pipeline.n_windows)
@@ -961,6 +1000,9 @@ def _run_streaming(args, config) -> None:
 
     logging.info("Created %d merged images (streaming mode)", n_merged)
 
+    if memory_monitor:
+        memory_monitor.checkpoint("After pipeline iteration")
+
     # Bulk outputs (require all images in memory)
     if merged_images:
         if args.kml:
@@ -973,11 +1015,17 @@ def _run_streaming(args, config) -> None:
             write_mp4_movie(merged_images, args.mp4, fps=args.fps, release=True)
         del merged_images
 
+    # Log final memory statistics
+    if memory_monitor:
+        memory_monitor.__exit__(None, None, None)
+        log_memory_stats(memory_monitor.stats, "Streaming pipeline")
+
 
 def run(args) -> None:
     """Execute the 'files-pipeline' command."""
     from wamos_tpw.config import Config
     from wamos_tpw.filenames import Filenames
+    from wamos_tpw.memory_monitor import MemoryMonitor, log_memory_stats
     from wamos_tpw.merged_viewer import show_merged_viewer, show_single_merged_image
     from wamos_tpw.output_writers import (
         write_geotiff,
@@ -994,6 +1042,13 @@ def run(args) -> None:
     if getattr(args, "streaming", False):
         _run_streaming(args, config)
         return
+
+    # Set up memory monitoring if requested
+    memory_monitor = None
+    if getattr(args, "memory_stats", False):
+        sample_interval = 5.0  # Sample memory every 5 seconds
+        memory_monitor = MemoryMonitor(sample_interval=sample_interval)
+        memory_monitor.__enter__()
 
     filenames = Filenames(args.stime, args.etime, args.polar_path)
     files = list(filenames)
@@ -1041,6 +1096,7 @@ def run(args) -> None:
         tolerance=args.tolerance,
         qTiming=args.timing,
         qProgress=args.progress,
+        max_windows=getattr(args, "max_windows", None),
     )
 
     logging.info("Created %d time windows", pipeline.n_windows)
@@ -1072,6 +1128,9 @@ def run(args) -> None:
 
     logging.info("Created %d merged images", n_merged)
 
+    if memory_monitor:
+        memory_monitor.checkpoint("After pipeline iteration")
+
     # Bulk outputs (require all images in memory)
     if merged_images:
         # KML/KMZ/plot first, then MP4 last so it can release each image
@@ -1084,6 +1143,11 @@ def run(args) -> None:
         if args.mp4:
             write_mp4_movie(merged_images, args.mp4, fps=args.fps, release=True)
         del merged_images
+
+    # Log final memory statistics
+    if memory_monitor:
+        memory_monitor.__exit__(None, None, None)
+        log_memory_stats(memory_monitor.stats, "Files pipeline")
 
 
 from wamos_tpw.cli_utils import create_standalone_main  # noqa: E402

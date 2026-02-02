@@ -257,15 +257,27 @@ class Files:
         """
         return self._load_files(file_list)
 
+    # Threshold for warning about large dataset
+    _LARGE_DATASET_THRESHOLD = 1000
+
     def load_all(self) -> list[Frame]:
         """
         Load all frames from all files.
 
         Warning: This may use significant memory for large time ranges.
+        Consider using itergroups() for streaming processing of large datasets.
 
         Returns:
             List of all Frame objects, sorted by timestamp
         """
+        n_files = len(self.files)
+        if n_files >= self._LARGE_DATASET_THRESHOLD:
+            logging.warning(
+                "load_all() loading %d files into memory. "
+                "Consider using itergroups() for streaming processing "
+                "to reduce memory usage.",
+                n_files,
+            )
         return self._load_files(self.files)
 
     # -------------------------------------------------------------------------

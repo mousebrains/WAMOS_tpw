@@ -96,6 +96,7 @@ Examples:
     from wamos_tpw import range as range_module  # Avoid shadowing builtin
     from wamos_tpw import list_frames
     from wamos_tpw import streaming_filenames, streaming_pipeline
+    from wamos_tpw import stitch
 
     files.add_subparser(subparsers)  # wamos view
     bearing.add_subparser(subparsers)  # wamos bearing
@@ -115,6 +116,7 @@ Examples:
     list_frames.add_subparser(subparsers)  # wamos list-frames
     streaming_filenames.add_subparser(subparsers)  # wamos stream-list
     streaming_pipeline.add_subparser(subparsers)  # wamos stream-pipeline
+    stitch.add_subparser(subparsers)  # wamos stitch
 
     # Parse arguments
     args = parser.parse_args()

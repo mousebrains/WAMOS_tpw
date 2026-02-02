@@ -337,6 +337,101 @@ class Filenames:
         """
         yield from self.groupby(freq).items()
 
+    def iter_streaming_groups(self, freq: str = "h") -> Iterator[tuple[np.datetime64, list[str]]]:
+        """
+        Stream file groups as they're discovered, without loading all files first.
+
+        Unlike itergroups() which discovers all files before grouping, this method
+        scans directories in chronological order and yields groups as soon as
+        they're complete. This reduces time-to-first-output for large datasets.
+
+        Best for hourly groups ('h') or larger periods where group boundaries
+        align with directory structure (YYYY/MM/DD/HH).
+
+        Args:
+            freq: Time frequency - supports 'h', 'D', 'M', 'Y', or 'Nh' (N hours).
+                  Sub-hour frequencies are not recommended (use itergroups instead).
+
+        Yields:
+            Tuples of (period_start, list of files in that period)
+
+        Example:
+            >>> # Process hourly groups as they're discovered
+            >>> for period, files in filenames.iter_streaming_groups('h'):
+            ...     process_hour(period, files)
+
+            >>> # Process daily groups
+            >>> for period, files in filenames.iter_streaming_groups('D'):
+            ...     process_day(period, files)
+        """
+        multiplier, unit = self._parse_freq(freq)
+
+        # For sub-hour frequencies, fall back to regular itergroups
+        # since directory structure is hour-level
+        if unit in ("m", "s") or (unit == "h" and multiplier < 1):
+            yield from self.itergroups(freq)
+            return
+
+        # Convert times to nanoseconds for efficient comparison
+        stime_ns = self.stime.astype(np.int64)
+        etime_ns = self.etime.astype(np.int64)
+
+        # Calculate period duration in nanoseconds
+        period_delta = np.timedelta64(multiplier, unit)
+        period_ns = period_delta.astype("timedelta64[ns]").astype(np.int64)
+
+        # Group hour directories by their target period
+        # period_start_ns -> list of (hour_dir, hour_ns)
+        period_hours: dict[int, list[str]] = {}
+
+        for hour_dir in self._generate_hour_directories():
+            # Extract hour timestamp from directory path
+            # Path format: .../YYYY/MM/DD/HH
+            parts = hour_dir.split(os.sep)
+            if len(parts) < 4:
+                continue
+            try:
+                year, month, day, hour = parts[-4], parts[-3], parts[-2], parts[-1]
+                hour_time = np.datetime64(f"{year}-{month}-{day}T{hour}:00:00")
+                hour_ns = hour_time.astype("datetime64[ns]").astype(np.int64)
+            except (ValueError, IndexError):
+                continue
+
+            # Calculate which period this hour belongs to
+            if hour_ns < stime_ns:
+                period_start_ns = stime_ns
+            else:
+                # Align to period boundaries from stime
+                offset = (hour_ns - stime_ns) // period_ns
+                period_start_ns = stime_ns + (offset * period_ns)
+
+            if period_start_ns not in period_hours:
+                period_hours[period_start_ns] = []
+            period_hours[period_start_ns].append(hour_dir)
+
+        # Process periods in chronological order
+        for period_start_ns in sorted(period_hours.keys()):
+            hour_dirs = period_hours[period_start_ns]
+            period_end_ns = period_start_ns + period_ns
+
+            # Scan all hour directories for this period
+            all_files = []
+            for hour_dir in hour_dirs:
+                files = _scan_hour_directory(hour_dir, stime_ns, etime_ns)
+                # Filter files that actually belong to this period
+                for filepath in files:
+                    ts = extract_file_timestamp(filepath)
+                    if ts is None:
+                        continue
+                    ts_ns = ts.astype("datetime64[ns]").astype(np.int64)
+                    if period_start_ns <= ts_ns < period_end_ns:
+                        all_files.append(filepath)
+
+            if all_files:
+                all_files.sort()
+                period_start = np.datetime64(period_start_ns, "ns")
+                yield period_start, all_files
+
     def chunks(self, n: int) -> list[list[str]]:
         """
         Split files into n roughly equal-sized chunks.
