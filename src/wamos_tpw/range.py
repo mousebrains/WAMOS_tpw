@@ -109,11 +109,11 @@ class Range:
         Applies bias.range correction from config if present.
 
         Returns:
-            Array of ground ranges in meters, shape (n_distances,)
+            Array of ground ranges in meters, shape (n_distances,), dtype float32
         """
         if self._radar_height is None:
             # No radar height - return slant range + bias
-            return self._slant_range + self._range_bias
+            return (self._slant_range + self._range_bias).astype(np.float32)
 
         # Calculate ground range: sqrt(slant² - height²)
         height_sq = self._radar_height**2
@@ -122,10 +122,8 @@ class Range:
         # Where slant > height, compute ground range; otherwise 0
         ground = np.where(slant_sq > height_sq, np.sqrt(slant_sq - height_sq), 0.0)
 
-        # Apply bias correction
-        ground = ground + self._range_bias
-
-        return ground
+        # Apply bias correction and convert to float32 (sufficient precision for ~0-3000m)
+        return (ground + self._range_bias).astype(np.float32)
 
     # -------------------------------------------------------------------------
     # Public API
