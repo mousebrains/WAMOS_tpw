@@ -63,6 +63,9 @@ def create_time_windows(
     """
     Create overlapping time windows from a file list.
 
+    Uses binary search for O(N log N + W log N) complexity instead of O(W * N),
+    where N = number of files and W = number of windows.
+
     Args:
         files: List of polar file paths (should be time-sorted)
         window_config: Time window configuration
@@ -94,9 +97,14 @@ def create_time_windows(
     timestamps = np.array(timestamps, dtype="datetime64[ns]")
     valid_indices = np.array(valid_indices)
 
+    # Sort by timestamp for binary search (preserves original file indices)
+    sort_order = np.argsort(timestamps)
+    sorted_timestamps = timestamps[sort_order]
+    sorted_indices = valid_indices[sort_order]
+
     # Get time range
-    t_min = timestamps.min()
-    t_max = timestamps.max()
+    t_min = sorted_timestamps[0]
+    t_max = sorted_timestamps[-1]
 
     window_ns = np.timedelta64(int(window_config.window_seconds * 1e9), "ns")
     stride_ns = np.timedelta64(int(window_config.stride_seconds * 1e9), "ns")
@@ -107,12 +115,16 @@ def create_time_windows(
     while window_start <= t_max:
         window_end = window_start + window_ns
 
-        # Find files within this window
-        mask = (timestamps >= window_start) & (timestamps < window_end)
-        file_indices = valid_indices[mask].tolist()
+        # Use binary search to find file range: O(log N) instead of O(N)
+        # searchsorted('left') finds first index where value could be inserted
+        # searchsorted('right') finds last index where value could be inserted
+        start_idx = np.searchsorted(sorted_timestamps, window_start, side="left")
+        end_idx = np.searchsorted(sorted_timestamps, window_end, side="left")
 
-        # Only include windows with enough frames
-        if len(file_indices) >= window_config.min_frames_per_window:
+        # Extract file indices for this window
+        n_files = end_idx - start_idx
+        if n_files >= window_config.min_frames_per_window:
+            file_indices = sorted_indices[start_idx:end_idx].tolist()
             windows.append((window_start, window_end, file_indices))
 
         window_start = window_start + stride_ns
