@@ -69,6 +69,8 @@ class StreamingMergePipeline:
         qTiming: bool = False,
         qProgress: bool = True,
         max_windows: int | None = None,
+        pending_multiplier: float = 3.0,
+        max_queued_merges: int = 4,
     ):
         """
         Initialize the streaming merge pipeline.
@@ -84,6 +86,12 @@ class StreamingMergePipeline:
             qTiming: Enable timing statistics
             qProgress: Show progress bars
             max_windows: Maximum number of windows to process (None = all)
+            pending_multiplier: Multiplier for n_workers to set max in-flight file loads.
+                Higher values keep workers busier but use more shared memory.
+                Each pending file holds ~376 KB. Default: 3.0
+            max_queued_merges: Maximum windows queued for merge thread.
+                Higher values reduce merge thread stalls but use more memory.
+                Each queued window holds ~25 MB of frame data. Default: 4
         """
         self._stime = np.datetime64(stime, "ns")
         self._etime = np.datetime64(etime, "ns")
@@ -94,6 +102,8 @@ class StreamingMergePipeline:
         self._tolerance = tolerance
         self._qTiming = qTiming
         self._qProgress = qProgress
+        self._pending_multiplier = pending_multiplier
+        self._max_queued_merges = max_queued_merges
 
         # Pre-create windows based on time bounds
         self._windows = create_time_windows_from_bounds(
@@ -186,7 +196,7 @@ class StreamingMergePipeline:
         t0_total = time.perf_counter()
 
         # Backpressure control
-        max_pending = (self._n_workers or 4) * 3
+        max_pending = int((self._n_workers or 4) * self._pending_multiplier)
         pending_files = 0
         pending_interp = 0
 
@@ -230,7 +240,7 @@ class StreamingMergePipeline:
         merge_input: _queue.Queue[tuple[int, list[dict]]] = _queue.Queue()
         merge_output: _queue.Queue[tuple[int, MergedImage | None, float]] = _queue.Queue()
         merge_shutdown = threading.Event()
-        max_queued_merges = 4
+        max_queued_merges = self._max_queued_merges
         pending_merges = 0
 
         def _merge_window(window_idx: int, frames: list[dict]) -> MergedImage | None:

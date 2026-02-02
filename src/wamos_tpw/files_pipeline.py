@@ -61,6 +61,8 @@ class FilesMergePipeline:
         qTiming: bool = False,
         qProgress: bool = True,
         max_windows: int | None = None,
+        pending_multiplier: float = 3.0,
+        max_queued_merges: int = 4,
     ):
         """
         Initialize the merge pipeline.
@@ -74,6 +76,12 @@ class FilesMergePipeline:
             qTiming: Enable timing statistics
             qProgress: Show progress bars
             max_windows: Maximum number of windows to process (None = all)
+            pending_multiplier: Multiplier for n_workers to set max in-flight file loads.
+                Higher values keep workers busier but use more shared memory.
+                Each pending file holds ~376 KB. Default: 3.0
+            max_queued_merges: Maximum windows queued for merge thread.
+                Higher values reduce merge thread stalls but use more memory.
+                Each queued window holds ~25 MB of frame data. Default: 4
         """
         self._files = filenames
         self._config = config
@@ -82,6 +90,8 @@ class FilesMergePipeline:
         self._tolerance = tolerance
         self._qTiming = qTiming
         self._qProgress = qProgress
+        self._pending_multiplier = pending_multiplier
+        self._max_queued_merges = max_queued_merges
 
         # Create time windows
         self._windows = create_time_windows(filenames, self._window_config)
@@ -369,7 +379,7 @@ class FilesMergePipeline:
         # Limit in-flight file loads to keep workers busy without excessive
         # shared memory accumulation.  Each loaded-but-not-interpolated file
         # holds ~376 KB of shared memory (intensity + theta + ground_range).
-        max_pending = self._n_workers * 3
+        max_pending = int(self._n_workers * self._pending_multiplier)
 
         def submit_batch(n: int) -> int:
             """Submit up to n file tasks. Returns number submitted.
@@ -472,7 +482,7 @@ class FilesMergePipeline:
         # Cap queued merges to bound memory: each window holds ~42 frame dicts
         # with projected arrays. 4 windows ≈ 25 MB — keeps merge thread fed
         # without unbounded growth on 100K+ file runs.
-        max_queued_merges = 4
+        max_queued_merges = self._max_queued_merges
 
         # Submit initial batch to get workers started
         submit_batch(max_pending)
@@ -910,6 +920,24 @@ def _add_arguments(parser) -> None:
         "Useful for testing or batch processing large datasets.",
     )
 
+    # Backpressure tuning
+    parser.add_argument(
+        "--pending-multiplier",
+        type=float,
+        default=3.0,
+        metavar="N",
+        help="Multiplier for n_workers to set max in-flight file loads. "
+        "Higher = workers busier but more shared memory (~376KB/file). Default: 3.0",
+    )
+    parser.add_argument(
+        "--max-queued-merges",
+        type=int,
+        default=4,
+        metavar="N",
+        help="Max windows queued for merge thread. "
+        "Higher = fewer stalls but more memory (~25MB/window). Default: 4",
+    )
+
 
 def add_subparser(subparsers) -> None:
     """Register the 'files-pipeline' subcommand."""
@@ -986,6 +1014,8 @@ def _run_streaming(args, config) -> None:
         qTiming=args.timing,
         qProgress=args.progress,
         max_windows=getattr(args, "max_windows", None),
+        pending_multiplier=getattr(args, "pending_multiplier", 3.0),
+        max_queued_merges=getattr(args, "max_queued_merges", 4),
     )
 
     logging.info("Created streaming pipeline with %d time windows", pipeline.n_windows)
@@ -1114,6 +1144,8 @@ def run(args) -> None:
         qTiming=args.timing,
         qProgress=args.progress,
         max_windows=getattr(args, "max_windows", None),
+        pending_multiplier=getattr(args, "pending_multiplier", 3.0),
+        max_queued_merges=getattr(args, "max_queued_merges", 4),
     )
 
     logging.info("Created %d time windows", pipeline.n_windows)
