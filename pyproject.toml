@@ -71,6 +71,7 @@ all = [
 
 [project.scripts]
 wamos = "wamos_tpw.cli:main"
+revelle = "wamos_tpw.instruments.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/wamos_tpw"]

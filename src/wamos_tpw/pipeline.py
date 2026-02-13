@@ -130,7 +130,7 @@ class ProgressReporter:
     def on_event(self, event: ProgressEvent) -> None:
         """Handle a progress event (callback interface)."""
         if self._verbose:
-            pct = f" ({100*event.current/event.total:.1f}%)" if event.total > 0 else ""
+            pct = f" ({100 * event.current / event.total:.1f}%)" if event.total > 0 else ""
             msg = f"{self._prefix}{event.event_type}: {event.current}/{event.total}{pct}"
             if event.message:
                 msg += f" - {event.message}"
@@ -148,7 +148,7 @@ class ProgressReporter:
         """Update progress."""
         self._current = current
         if self._verbose:
-            pct = f" ({100*current/self._total:.1f}%)" if self._total > 0 else ""
+            pct = f" ({100 * current / self._total:.1f}%)" if self._total > 0 else ""
             msg = f"{self._prefix}{self._task}: {current}/{self._total}{pct}"
             if message:
                 msg += f" - {message}"

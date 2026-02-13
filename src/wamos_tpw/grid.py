@@ -463,13 +463,11 @@ def remap_to_common_grid(
     )
 
     if sub_count is not None:
-        dst_count = np.bincount(
-            valid_linear_idx, weights=valid_count, minlength=grid_size
-        ).reshape((dst_n_y, dst_n_x))
-    else:
-        dst_count = np.bincount(valid_linear_idx, minlength=grid_size).reshape(
+        dst_count = np.bincount(valid_linear_idx, weights=valid_count, minlength=grid_size).reshape(
             (dst_n_y, dst_n_x)
         )
+    else:
+        dst_count = np.bincount(valid_linear_idx, minlength=grid_size).reshape((dst_n_y, dst_n_x))
 
     return dst_sum.astype(np.float64), dst_count.astype(np.int32)
 
