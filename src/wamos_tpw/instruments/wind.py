@@ -99,9 +99,7 @@ def parse_wind_directory(
     else:
         files = sorted(input_path.glob(glob_pattern))
         if not files:
-            raise FileNotFoundError(
-                f"No wind files matching '{glob_pattern}' in {input_path}"
-            )
+            raise FileNotFoundError(f"No wind files matching '{glob_pattern}' in {input_path}")
 
     all_records: dict[str, list] = {
         "time": [],
@@ -147,11 +145,12 @@ def parse_wind_directory(
 
 def _add_arguments(parser) -> None:
     parser.add_argument("input", type=str, help="Log file or directory of wind files")
+    parser.add_argument("--output-dir", "-o", type=str, default=".", help="Output directory")
     parser.add_argument(
-        "--output-dir", "-o", type=str, default=".", help="Output directory"
-    )
-    parser.add_argument(
-        "--glob", "-g", type=str, default=DEFAULT_GLOB,
+        "--glob",
+        "-g",
+        type=str,
+        default=DEFAULT_GLOB,
         help="Glob pattern for file matching in directory mode",
     )
 

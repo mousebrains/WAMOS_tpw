@@ -70,9 +70,7 @@ Examples:
         type=str,
         help="Cruise data directory (containing serialinstruments/ and met/data/)",
     )
-    p_all.add_argument(
-        "--output-dir", "-o", type=str, default=".", help="Output directory"
-    )
+    p_all.add_argument("--output-dir", "-o", type=str, default=".", help="Output directory")
     p_all.set_defaults(func=_run_all)
 
     # Parse arguments

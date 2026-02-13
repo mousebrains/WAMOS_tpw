@@ -29,17 +29,65 @@ OUTPUT_FILENAME = "met_revelle.nc"
 # Columns to extract and their output variable mapping
 # (column_name, var_name, attrs, convert_knots)
 _COLUMN_MAP = [
-    ("WS", "wind_speed", {"standard_name": "wind_speed", "long_name": "Wind speed", "units": "m s-1"}, True),
-    ("WD", "wind_direction", {"standard_name": "wind_from_direction", "long_name": "Wind direction", "units": "degrees"}, False),
+    (
+        "WS",
+        "wind_speed",
+        {"standard_name": "wind_speed", "long_name": "Wind speed", "units": "m s-1"},
+        True,
+    ),
+    (
+        "WD",
+        "wind_direction",
+        {"standard_name": "wind_from_direction", "long_name": "Wind direction", "units": "degrees"},
+        False,
+    ),
     ("WS-2", "wind_speed_2", {"long_name": "Wind speed (sensor 2)", "units": "m s-1"}, True),
-    ("WD-2", "wind_direction_2", {"long_name": "Wind direction (sensor 2)", "units": "degrees"}, False),
+    (
+        "WD-2",
+        "wind_direction_2",
+        {"long_name": "Wind direction (sensor 2)", "units": "degrees"},
+        False,
+    ),
     ("TW", "true_wind_speed", {"long_name": "True wind speed", "units": "m s-1"}, True),
     ("TI", "true_wind_index", {"long_name": "True wind quality index", "units": "1"}, False),
-    ("LA", "latitude", {"standard_name": "latitude", "long_name": "Latitude", "units": "degrees_north"}, False),
-    ("LO", "longitude", {"standard_name": "longitude", "long_name": "Longitude", "units": "degrees_east"}, False),
-    ("GY", "heading", {"standard_name": "platform_azimuth_angle", "long_name": "Gyro heading", "units": "degrees"}, False),
-    ("CR", "course", {"standard_name": "platform_course", "long_name": "Course", "units": "degrees"}, False),
-    ("SP", "speed", {"standard_name": "platform_speed_wrt_ground", "long_name": "Speed over ground", "units": "m s-1"}, True),
+    (
+        "LA",
+        "latitude",
+        {"standard_name": "latitude", "long_name": "Latitude", "units": "degrees_north"},
+        False,
+    ),
+    (
+        "LO",
+        "longitude",
+        {"standard_name": "longitude", "long_name": "Longitude", "units": "degrees_east"},
+        False,
+    ),
+    (
+        "GY",
+        "heading",
+        {
+            "standard_name": "platform_azimuth_angle",
+            "long_name": "Gyro heading",
+            "units": "degrees",
+        },
+        False,
+    ),
+    (
+        "CR",
+        "course",
+        {"standard_name": "platform_course", "long_name": "Course", "units": "degrees"},
+        False,
+    ),
+    (
+        "SP",
+        "speed",
+        {
+            "standard_name": "platform_speed_wrt_ground",
+            "long_name": "Speed over ground",
+            "units": "m s-1",
+        },
+        True,
+    ),
 ]
 
 _MISSING_VALUES = {-99.0, -99.00}
@@ -56,9 +104,7 @@ def _parse_met_date(header_line: str) -> datetime:
         raise ValueError(f"Cannot parse MET date from: {header_line!r}")
     date_time_str = parts[1].strip()
     # Parse: 02-Apr-22  00:00:00
-    return datetime.strptime(date_time_str, "%d-%b-%y  %H:%M:%S").replace(
-        tzinfo=timezone.utc
-    )
+    return datetime.strptime(date_time_str, "%d-%b-%y  %H:%M:%S").replace(tzinfo=timezone.utc)
 
 
 def _hhmmss_to_datetime64(time_val: int, base_date: datetime) -> np.datetime64:
@@ -170,9 +216,7 @@ def parse_met_directory(
     else:
         files = sorted(input_path.glob(glob_pattern))
         if not files:
-            raise FileNotFoundError(
-                f"No MET files matching '{glob_pattern}' in {input_path}"
-            )
+            raise FileNotFoundError(f"No MET files matching '{glob_pattern}' in {input_path}")
 
     var_names = [entry[1] for entry in _COLUMN_MAP]
     all_records: dict[str, list] = {"time": []}
@@ -207,14 +251,13 @@ def parse_met_directory(
 
 
 def _add_arguments(parser) -> None:
+    parser.add_argument("input", type=str, help="MET file or directory of MET files")
+    parser.add_argument("--output-dir", "-o", type=str, default=".", help="Output directory")
     parser.add_argument(
-        "input", type=str, help="MET file or directory of MET files"
-    )
-    parser.add_argument(
-        "--output-dir", "-o", type=str, default=".", help="Output directory"
-    )
-    parser.add_argument(
-        "--glob", "-g", type=str, default=DEFAULT_GLOB,
+        "--glob",
+        "-g",
+        type=str,
+        default=DEFAULT_GLOB,
         help="Glob pattern for file matching in directory mode",
     )
 

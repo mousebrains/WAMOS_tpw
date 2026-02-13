@@ -35,9 +35,20 @@ _GROUP_GAP_S = 0.250
 
 # Variable names in output order
 _VAR_NAMES = [
-    "latitude", "longitude", "altitude", "heading", "roll", "pitch",
-    "sog", "cog", "n_satellites", "hdop",
-    "lat_error", "lon_error", "alt_error", "fix_quality",
+    "latitude",
+    "longitude",
+    "altitude",
+    "heading",
+    "roll",
+    "pitch",
+    "sog",
+    "cog",
+    "n_satellites",
+    "hdop",
+    "lat_error",
+    "lon_error",
+    "alt_error",
+    "fix_quality",
 ]
 
 
@@ -228,9 +239,7 @@ def parse_gps_directory(
     else:
         files = sorted(input_path.glob(glob_pattern))
         if not files:
-            raise FileNotFoundError(
-                f"No GPS files matching '{glob_pattern}' in {input_path}"
-            )
+            raise FileNotFoundError(f"No GPS files matching '{glob_pattern}' in {input_path}")
 
     all_records: dict[str, list] = {"time": []}
     for key in _VAR_NAMES:
@@ -258,7 +267,11 @@ def parse_gps_directory(
         ),
         "heading": (
             np.array(all_records["heading"], dtype=np.float64),
-            {"standard_name": "platform_azimuth_angle", "long_name": "True heading", "units": "degrees"},
+            {
+                "standard_name": "platform_azimuth_angle",
+                "long_name": "True heading",
+                "units": "degrees",
+            },
         ),
         "roll": (
             np.array(all_records["roll"], dtype=np.float64),
@@ -270,11 +283,19 @@ def parse_gps_directory(
         ),
         "sog": (
             np.array(all_records["sog"], dtype=np.float64),
-            {"standard_name": "platform_speed_wrt_ground", "long_name": "Speed over ground", "units": "m s-1"},
+            {
+                "standard_name": "platform_speed_wrt_ground",
+                "long_name": "Speed over ground",
+                "units": "m s-1",
+            },
         ),
         "cog": (
             np.array(all_records["cog"], dtype=np.float64),
-            {"standard_name": "platform_course", "long_name": "Course over ground", "units": "degrees"},
+            {
+                "standard_name": "platform_course",
+                "long_name": "Course over ground",
+                "units": "degrees",
+            },
         ),
         "n_satellites": (
             np.array(all_records["n_satellites"], dtype=np.float64),
@@ -316,11 +337,12 @@ def parse_gps_directory(
 
 def _add_arguments(parser) -> None:
     parser.add_argument("input", type=str, help="Log file or directory of GPS files")
+    parser.add_argument("--output-dir", "-o", type=str, default=".", help="Output directory")
     parser.add_argument(
-        "--output-dir", "-o", type=str, default=".", help="Output directory"
-    )
-    parser.add_argument(
-        "--glob", "-g", type=str, default=DEFAULT_GLOB,
+        "--glob",
+        "-g",
+        type=str,
+        default=DEFAULT_GLOB,
         help="Glob pattern for file matching in directory mode",
     )
 

@@ -136,7 +136,12 @@ def parse_time_hhmmss(time_str: str, day: date) -> datetime:
     seconds = int(whole[4:6])
 
     return datetime(
-        day.year, day.month, day.day,
-        hours, minutes, seconds, microseconds,
+        day.year,
+        day.month,
+        day.day,
+        hours,
+        minutes,
+        seconds,
+        microseconds,
         tzinfo=timezone.utc,
     )

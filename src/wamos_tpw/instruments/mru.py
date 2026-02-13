@@ -35,8 +35,15 @@ DEFAULT_GLOB = "mru_phinsiii_rr_navbho-*"
 OUTPUT_FILENAME = "mru_phins.nc"
 
 _VAR_NAMES = [
-    "latitude", "longitude", "altitude", "heading",
-    "roll", "pitch", "heave", "sog", "cog",
+    "latitude",
+    "longitude",
+    "altitude",
+    "heading",
+    "roll",
+    "pitch",
+    "heave",
+    "sog",
+    "cog",
 ]
 
 
@@ -174,9 +181,7 @@ def parse_mru_file(filepath: Path) -> dict[str, list]:
                 try:
                     current_ts, sentence = parse_log_timestamp(line)
                 except ValueError:
-                    logger.debug(
-                        "Bad timestamp at line %d in %s", line_no, filepath
-                    )
+                    logger.debug("Bad timestamp at line %d in %s", line_no, filepath)
                     current_ts = None
                     current_sentences = []
                     continue
@@ -215,9 +220,7 @@ def parse_mru_directory(
     else:
         files = sorted(input_path.glob(glob_pattern))
         if not files:
-            raise FileNotFoundError(
-                f"No MRU files matching '{glob_pattern}' in {input_path}"
-            )
+            raise FileNotFoundError(f"No MRU files matching '{glob_pattern}' in {input_path}")
 
     all_records: dict[str, list] = {"time": []}
     for key in _VAR_NAMES:
@@ -245,7 +248,11 @@ def parse_mru_directory(
         ),
         "heading": (
             np.array(all_records["heading"], dtype=np.float64),
-            {"standard_name": "platform_azimuth_angle", "long_name": "PHINS heading", "units": "degrees"},
+            {
+                "standard_name": "platform_azimuth_angle",
+                "long_name": "PHINS heading",
+                "units": "degrees",
+            },
         ),
         "roll": (
             np.array(all_records["roll"], dtype=np.float64),
@@ -261,11 +268,19 @@ def parse_mru_directory(
         ),
         "sog": (
             np.array(all_records["sog"], dtype=np.float64),
-            {"standard_name": "platform_speed_wrt_ground", "long_name": "Speed over ground", "units": "m s-1"},
+            {
+                "standard_name": "platform_speed_wrt_ground",
+                "long_name": "Speed over ground",
+                "units": "m s-1",
+            },
         ),
         "cog": (
             np.array(all_records["cog"], dtype=np.float64),
-            {"standard_name": "platform_course", "long_name": "Course over ground", "units": "degrees"},
+            {
+                "standard_name": "platform_course",
+                "long_name": "Course over ground",
+                "units": "degrees",
+            },
         ),
     }
 
@@ -283,11 +298,12 @@ def parse_mru_directory(
 
 def _add_arguments(parser) -> None:
     parser.add_argument("input", type=str, help="Log file or directory of MRU files")
+    parser.add_argument("--output-dir", "-o", type=str, default=".", help="Output directory")
     parser.add_argument(
-        "--output-dir", "-o", type=str, default=".", help="Output directory"
-    )
-    parser.add_argument(
-        "--glob", "-g", type=str, default=DEFAULT_GLOB,
+        "--glob",
+        "-g",
+        type=str,
+        default=DEFAULT_GLOB,
         help="Glob pattern for file matching in directory mode",
     )
 

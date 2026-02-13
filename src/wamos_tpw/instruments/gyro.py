@@ -92,9 +92,7 @@ def parse_gyro_directory(
     else:
         files = sorted(input_path.glob(glob_pattern))
         if not files:
-            raise FileNotFoundError(
-                f"No gyro files matching '{glob_pattern}' in {input_path}"
-            )
+            raise FileNotFoundError(f"No gyro files matching '{glob_pattern}' in {input_path}")
 
     all_records: dict[str, list] = {"time": [], "heading": []}
 
@@ -129,11 +127,12 @@ def parse_gyro_directory(
 
 def _add_arguments(parser) -> None:
     parser.add_argument("input", type=str, help="Log file or directory of gyro files")
+    parser.add_argument("--output-dir", "-o", type=str, default=".", help="Output directory")
     parser.add_argument(
-        "--output-dir", "-o", type=str, default=".", help="Output directory"
-    )
-    parser.add_argument(
-        "--glob", "-g", type=str, default=DEFAULT_GLOB,
+        "--glob",
+        "-g",
+        type=str,
+        default=DEFAULT_GLOB,
         help="Glob pattern for file matching in directory mode",
     )
 
