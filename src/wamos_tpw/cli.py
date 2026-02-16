@@ -6,7 +6,6 @@ Master command that provides access to all WAMOS processing tools via subcommand
 """
 
 import argparse
-import importlib
 import logging
 import sys
 from pathlib import Path
@@ -99,15 +98,19 @@ Examples:
         files,
         files_pipeline,
         frame_pipeline,
+        hard_returns,
         interpolator,
         list_frames,
+        metadata,
         polarfile,
         pps,
+        pps_timing,
         shadow,
         stitch,
         streaming_filenames,
         streaming_pipeline,
         theta,
+        timeshift,
     )
     from wamos_tpw import range as range_module  # Avoid shadowing builtin
 
@@ -130,14 +133,10 @@ Examples:
     streaming_filenames.add_subparser(subparsers)  # wamos stream-list
     streaming_pipeline.add_subparser(subparsers)  # wamos stream-pipeline
     stitch.add_subparser(subparsers)  # wamos stitch
-
-    # Optional subcommands (not yet committed to the repository)
-    for _mod_name in ("metadata", "timeshift", "pps_timing", "hard_returns"):
-        try:
-            _mod = importlib.import_module(f"wamos_tpw.{_mod_name}")
-            _mod.add_subparser(subparsers)
-        except ImportError:
-            pass
+    metadata.add_subparser(subparsers)  # wamos metadata
+    timeshift.add_subparser(subparsers)  # wamos timeshift
+    pps_timing.add_subparser(subparsers)  # wamos pps-timing
+    hard_returns.add_subparser(subparsers)  # wamos hard-returns
 
     # Parse arguments
     args = parser.parse_args()
