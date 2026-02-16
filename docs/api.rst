@@ -124,6 +124,7 @@ UTM grid computation and projection.
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: x_edges, y_edges, grid_spacing, utm_zone, hemisphere, center_lat, center_lon, n_x, n_y, x_edges_abs, y_edges_abs, ref_lat, ref_lon, m_per_deg_lon
 
 Window
 ~~~~~~

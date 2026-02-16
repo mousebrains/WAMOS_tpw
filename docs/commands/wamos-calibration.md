@@ -47,7 +47,7 @@ wamos pps-timing 2022040514 2022040515 /path/to/POLAR \
 
 | Argument | Description |
 |----------|-------------|
-| `stime` | Start time (see [Timestamp Formats](../../README.md#timestamp-formats)) |
+| `stime` | Start time (see Timestamp Formats in README) |
 | `etime` | End time |
 | `polar_path` | Root directory of POLAR files |
 | `--config`, `-c` | YAML configuration file |

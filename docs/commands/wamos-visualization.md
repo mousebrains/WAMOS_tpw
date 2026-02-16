@@ -23,7 +23,7 @@ wamos view 2022040514 2022040515 /path/to/POLAR --plot-bits-across
 
 | Argument | Description |
 |----------|-------------|
-| `stime` | Start time (see [Timestamp Formats](../../README.md#timestamp-formats)) |
+| `stime` | Start time (see Timestamp Formats in README) |
 | `etime` | End time |
 | `polar_path` | Root directory of POLAR files (`YYYY/MM/DD/HH/` structure) |
 | `--groupby`, `-g` | Groupby frequency for file batching (default: `h` for hourly) |

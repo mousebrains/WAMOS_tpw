@@ -99,6 +99,17 @@ Contents
 
 .. toctree::
    :maxdepth: 2
+   :caption: Command Reference:
+
+   commands/revelle
+   commands/wamos-processing
+   commands/wamos-files
+   commands/wamos-visualization
+   commands/wamos-analysis
+   commands/wamos-calibration
+
+.. toctree::
+   :maxdepth: 2
    :caption: API Reference:
 
    api
