@@ -89,23 +89,25 @@ def _process_one_file(
                 bright_bi = np.array([], dtype=np.int32)
                 bright_ri = np.array([], dtype=np.int32)
 
-            results.append({
-                "filepath": filepath,
-                "timestamp": md.timestamp,
-                "repeat_time": md.repeat_time or FrameInterpolator._DEFAULT_REPEAT_TIME,
-                "n_bearings": n_bearings,
-                "pps_indices": pps_indices,
-                "latitude": md.latitude,
-                "longitude": md.longitude,
-                "heading": md.heading,
-                "ship_speed": md.ship_speed,
-                "wind_speed": md.wind_speed,
-                "wind_direction": md.wind_direction,
-                "theta_array": fp.theta_array.copy(),
-                "ground_range": fp.ground_range.copy(),
-                "bright_bi": bright_bi.astype(np.int32),
-                "bright_ri": bright_ri.astype(np.int32),
-            })
+            results.append(
+                {
+                    "filepath": filepath,
+                    "timestamp": md.timestamp,
+                    "repeat_time": md.repeat_time or FrameInterpolator._DEFAULT_REPEAT_TIME,
+                    "n_bearings": n_bearings,
+                    "pps_indices": pps_indices,
+                    "latitude": md.latitude,
+                    "longitude": md.longitude,
+                    "heading": md.heading,
+                    "ship_speed": md.ship_speed,
+                    "wind_speed": md.wind_speed,
+                    "wind_direction": md.wind_direction,
+                    "theta_array": fp.theta_array.copy(),
+                    "ground_range": fp.ground_range.copy(),
+                    "bright_bi": bright_bi.astype(np.int32),
+                    "bright_ri": bright_ri.astype(np.int32),
+                }
+            )
     except Exception as e:
         logger.warning("Error reading %s: %s", filepath, e)
 
@@ -196,7 +198,9 @@ def find_hard_return_offset(
     if not files:
         logger.warning(
             "No files found in %s for time range %s to %s",
-            polar_path, stime, etime,
+            polar_path,
+            stime,
+            etime,
         )
         return {"best_offset": 0.0, "offsets": np.array([]), "metrics": np.array([])}
 
@@ -213,6 +217,7 @@ def find_hard_return_offset(
     if workers <= 1:
         try:
             from tqdm import tqdm
+
             file_iter = tqdm(files, desc="Parsing", unit="file", disable=not progress)
         except ImportError:
             file_iter = files
@@ -222,6 +227,7 @@ def find_hard_return_offset(
     else:
         try:
             from tqdm import tqdm
+
             pbar = tqdm(total=len(files), desc="Parsing", unit="file", disable=not progress)
         except ImportError:
             pbar = None
@@ -243,7 +249,9 @@ def find_hard_return_offset(
     elapsed_parse = time.perf_counter() - t0
     logger.info(
         "Parsed %d frames from %d files in %.1fs (%.0f files/sec)",
-        len(all_records), len(files), elapsed_parse,
+        len(all_records),
+        len(files),
+        elapsed_parse,
         len(files) / elapsed_parse if elapsed_parse > 0 else 0,
     )
 
@@ -279,7 +287,10 @@ def find_hard_return_offset(
 
     try:
         from tqdm import tqdm
-        triplet_iter = tqdm(range(n_frames), desc="Interpolating", unit="frame", disable=not progress)
+
+        triplet_iter = tqdm(
+            range(n_frames), desc="Interpolating", unit="frame", disable=not progress
+        )
     except ImportError:
         triplet_iter = range(n_frames)
 
@@ -331,21 +342,24 @@ def find_hard_return_offset(
         if lons is None:
             lons = interp.longitudes
 
-        frame_bright_data.append({
-            "theta": rec["theta_array"],
-            "ground_range": rec["ground_range"],
-            "headings": headings,
-            "dH_dt": dH_dt,
-            "lats": lats,
-            "lons": lons,
-            "bright_bi": rec["bright_bi"],
-            "bright_ri": rec["bright_ri"],
-        })
+        frame_bright_data.append(
+            {
+                "theta": rec["theta_array"],
+                "ground_range": rec["ground_range"],
+                "headings": headings,
+                "dH_dt": dH_dt,
+                "lats": lats,
+                "lons": lons,
+                "bright_bi": rec["bright_bi"],
+                "bright_ri": rec["bright_ri"],
+            }
+        )
 
     elapsed_interp = time.perf_counter() - t1
     logger.info(
         "Interpolated %d frames with bright pixels in %.1fs",
-        len(frame_bright_data), elapsed_interp,
+        len(frame_bright_data),
+        elapsed_interp,
     )
 
     if not frame_bright_data:
@@ -417,7 +431,8 @@ def find_hard_return_offset(
     elapsed_precomp = time.perf_counter() - t2
     logger.info(
         "Pre-computed %d bright pixel positions in %.2fs",
-        n_points, elapsed_precomp,
+        n_points,
+        elapsed_precomp,
     )
 
     # ------------------------------------------------------------------
@@ -442,7 +457,11 @@ def find_hard_return_offset(
 
     logger.info(
         "Sweep: %d offsets x %d points, grid %d x %d (%.0fm spacing)",
-        n_offsets, n_points, n_gx, n_gy, grid_spacing,
+        n_offsets,
+        n_points,
+        n_gx,
+        n_gy,
+        grid_spacing,
     )
 
     inv_spacing = 1.0 / grid_spacing
@@ -450,6 +469,7 @@ def find_hard_return_offset(
 
     try:
         from tqdm import tqdm
+
         sweep_iter = tqdm(range(n_offsets), desc="Sweeping", unit="offset", disable=not progress)
     except ImportError:
         sweep_iter = range(n_offsets)
@@ -480,9 +500,9 @@ def find_hard_return_offset(
     zero_idx = int(np.argmin(np.abs(offsets)))
     improvement = (metrics[best_idx] / metrics[zero_idx] - 1) * 100 if metrics[zero_idx] > 0 else 0
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("Hard return timing offset analysis")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"  Frames:           {n_frames}")
     print(f"  Bright pixels:    {n_points} (>{threshold_pct:.0f}th percentile)")
     print(f"  Sweep range:      [{-sweep_range:+.3f}, {+sweep_range:+.3f}] s")
@@ -492,7 +512,7 @@ def find_hard_return_offset(
     print(f"  Metric at best:   {metrics[best_idx]:.0f}")
     print(f"  Metric at zero:   {metrics[zero_idx]:.0f}")
     print(f"  Improvement:      {improvement:+.1f}%")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     result = {
         "best_offset": best_offset,
@@ -545,7 +565,9 @@ def _plot_results(result: dict) -> None:
     # 1. Metric curve
     ax = axes[0]
     ax.plot(offsets, metrics, "b-", linewidth=1)
-    ax.axvline(best_offset, color="r", linestyle="--", linewidth=1, label=f"Best: {best_offset:+.3f} s")
+    ax.axvline(
+        best_offset, color="r", linestyle="--", linewidth=1, label=f"Best: {best_offset:+.3f} s"
+    )
     ax.axvline(0, color="gray", linestyle=":", linewidth=0.5)
     ax.set_xlabel("Timing offset (s)")
     ax.set_ylabel("L2 concentration metric")
@@ -563,8 +585,12 @@ def _plot_results(result: dict) -> None:
     density_zero = counts_zero.astype(np.float64)
     density_zero[density_zero == 0] = np.nan
     ax.imshow(
-        density_zero, origin="lower", aspect="auto",
-        vmin=0, vmax=vmax, cmap="hot",
+        density_zero,
+        origin="lower",
+        aspect="auto",
+        vmin=0,
+        vmax=vmax,
+        cmap="hot",
     )
     ax.set_title("Density at zero offset")
     ax.set_xlabel("x grid index")
@@ -581,16 +607,19 @@ def _plot_results(result: dict) -> None:
     density_best = counts_best.astype(np.float64)
     density_best[density_best == 0] = np.nan
     ax.imshow(
-        density_best, origin="lower", aspect="auto",
-        vmin=0, vmax=vmax, cmap="hot",
+        density_best,
+        origin="lower",
+        aspect="auto",
+        vmin=0,
+        vmax=vmax,
+        cmap="hot",
     )
     ax.set_title(f"Density at best offset ({best_offset:+.3f} s)")
     ax.set_xlabel("x grid index")
     ax.set_ylabel("y grid index")
 
     fig.suptitle(
-        f"Hard return analysis: {result['n_frames']} frames, "
-        f"{result['n_points']} bright pixels",
+        f"Hard return analysis: {result['n_frames']} frames, {result['n_points']} bright pixels",
         fontsize=12,
     )
     plt.tight_layout()
@@ -639,25 +668,38 @@ def _add_arguments(parser) -> None:
         help="Grid cell size in meters (default: 20)",
     )
     parser.add_argument(
-        "--workers", "-w", type=int, default=None,
+        "--workers",
+        "-w",
+        type=int,
+        default=None,
         help="Number of parallel workers (default: auto)",
     )
     progress_group = parser.add_mutually_exclusive_group()
     progress_group.add_argument(
-        "--progress", dest="progress", action="store_true", default=True,
+        "--progress",
+        dest="progress",
+        action="store_true",
+        default=True,
         help="Show progress bar (default)",
     )
     progress_group.add_argument(
-        "--no-progress", dest="progress", action="store_false",
+        "--no-progress",
+        dest="progress",
+        action="store_false",
         help="Hide progress bar",
     )
     plot_group = parser.add_mutually_exclusive_group()
     plot_group.add_argument(
-        "--plot", dest="plot", action="store_true", default=True,
+        "--plot",
+        dest="plot",
+        action="store_true",
+        default=True,
         help="Show result plots (default)",
     )
     plot_group.add_argument(
-        "--no-plot", dest="plot", action="store_false",
+        "--no-plot",
+        dest="plot",
+        action="store_false",
         help="Suppress plots",
     )
 
@@ -702,7 +744,8 @@ def run(args) -> None:
 from wamos_tpw.cli_utils import create_standalone_main  # noqa: E402
 
 main = create_standalone_main(
-    _add_arguments, run,
+    _add_arguments,
+    run,
     "Find timing offset that stabilizes hard returns",
 )
 

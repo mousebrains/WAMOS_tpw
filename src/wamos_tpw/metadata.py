@@ -156,9 +156,7 @@ def extract_metadata(
             pbar = None
 
         with ProcessPoolExecutor(max_workers=workers) as executor:
-            futures = {
-                executor.submit(_parse_one_file, fp, config_dict): fp for fp in files
-            }
+            futures = {executor.submit(_parse_one_file, fp, config_dict): fp for fp in files}
             for future in as_completed(futures):
                 records = future.result()
                 all_records.extend(records)
@@ -274,8 +272,7 @@ def extract_metadata(
             "first_pps_index": (
                 "time",
                 _int_array("first_pps_index"),
-                {"long_name": "Radial index of first PPS pulse (-1 if none)",
-                 "units": "1"},
+                {"long_name": "Radial index of first PPS pulse (-1 if none)", "units": "1"},
             ),
         },
         coords={

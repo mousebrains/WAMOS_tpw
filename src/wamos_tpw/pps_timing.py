@@ -62,20 +62,22 @@ def _parse_one_file(filepath: str, config_dict: dict | None) -> list[dict]:
             bit12_col = (frame.raw[:, _PPS_RANGE_BIN] & _MASK_BIT12) != 0
             pps_indices = np.where(bit12_col)[0].astype(np.int32)
 
-            results.append({
-                "filepath": filepath,
-                "timestamp": md.timestamp,
-                "repeat_time": md.repeat_time,
-                "n_bearings": n_bearings,
-                "pps_indices": pps_indices,
-                "latitude": md.latitude,
-                "longitude": md.longitude,
-                "heading": md.heading,
-                "ship_speed": md.ship_speed,
-                "ship_course": md.ship_course,
-                "wind_speed": md.wind_speed,
-                "wind_direction": md.wind_direction,
-            })
+            results.append(
+                {
+                    "filepath": filepath,
+                    "timestamp": md.timestamp,
+                    "repeat_time": md.repeat_time,
+                    "n_bearings": n_bearings,
+                    "pps_indices": pps_indices,
+                    "latitude": md.latitude,
+                    "longitude": md.longitude,
+                    "heading": md.heading,
+                    "ship_speed": md.ship_speed,
+                    "ship_course": md.ship_course,
+                    "wind_speed": md.wind_speed,
+                    "wind_direction": md.wind_direction,
+                }
+            )
     except Exception as e:
         logger.warning("Error reading %s: %s", filepath, e)
 
@@ -135,21 +137,23 @@ def _process_triplets(all_records: list[dict], tolerance: float) -> list[dict]:
         offset_ns = (first_radial_time - curr_fd.timestamp) / np.timedelta64(1, "ns")
         offset_ms = offset_ns / 1e6
 
-        results.append({
-            "timestamp": curr_fd.timestamp,
-            "first_radial_time": first_radial_time,
-            "time_offset_ms": offset_ms,
-            "pps_count": len(all_records[i]["pps_indices"]),
-            "timing_method": interp.timing_method,
-            "n_bearings": curr_fd.n_bearings,
-            "repeat_time": curr_fd.repeat_time,
-            "latitude": curr_fd.latitude,
-            "longitude": curr_fd.longitude,
-            "heading": curr_fd.heading,
-            "ship_speed": curr_fd.ship_speed,
-            "wind_speed": curr_fd.wind_speed,
-            "wind_direction": curr_fd.wind_direction,
-        })
+        results.append(
+            {
+                "timestamp": curr_fd.timestamp,
+                "first_radial_time": first_radial_time,
+                "time_offset_ms": offset_ms,
+                "pps_count": len(all_records[i]["pps_indices"]),
+                "timing_method": interp.timing_method,
+                "n_bearings": curr_fd.n_bearings,
+                "repeat_time": curr_fd.repeat_time,
+                "latitude": curr_fd.latitude,
+                "longitude": curr_fd.longitude,
+                "heading": curr_fd.heading,
+                "ship_speed": curr_fd.ship_speed,
+                "wind_speed": curr_fd.wind_speed,
+                "wind_direction": curr_fd.wind_direction,
+            }
+        )
 
     return results
 
@@ -197,7 +201,9 @@ def extract_pps_timing(
     if not files:
         logging.warning(
             "No files found in %s for time range %s to %s",
-            polar_path, stime, etime,
+            polar_path,
+            stime,
+            etime,
         )
         return ""
 
@@ -215,6 +221,7 @@ def extract_pps_timing(
     if workers <= 1:
         try:
             from tqdm import tqdm
+
             file_iter = tqdm(files, desc="Parsing", unit="file", disable=not progress)
         except ImportError:
             file_iter = files
@@ -224,15 +231,13 @@ def extract_pps_timing(
     else:
         try:
             from tqdm import tqdm
+
             pbar = tqdm(total=len(files), desc="Parsing", unit="file", disable=not progress)
         except ImportError:
             pbar = None
 
         with ProcessPoolExecutor(max_workers=workers) as executor:
-            futures = {
-                executor.submit(_parse_one_file, fp, config_dict): fp
-                for fp in files
-            }
+            futures = {executor.submit(_parse_one_file, fp, config_dict): fp for fp in files}
             for future in as_completed(futures):
                 records = future.result()
                 all_records.extend(records)
@@ -245,7 +250,9 @@ def extract_pps_timing(
     elapsed_parse = time.perf_counter() - t0
     logging.info(
         "Parsed %d frames from %d files in %.1fs (%.0f files/sec)",
-        len(all_records), len(files), elapsed_parse,
+        len(all_records),
+        len(files),
+        elapsed_parse,
         len(files) / elapsed_parse if elapsed_parse > 0 else 0,
     )
 
@@ -262,16 +269,15 @@ def extract_pps_timing(
     elapsed_triplet = time.perf_counter() - t1
     logging.info(
         "Triplet processing: %d frames in %.1fs (%.0f frames/sec)",
-        len(results), elapsed_triplet,
+        len(results),
+        elapsed_triplet,
         len(results) / elapsed_triplet if elapsed_triplet > 0 else 0,
     )
 
     # Build arrays
     n = len(results)
     time_arr = np.array([r["timestamp"] for r in results], dtype="datetime64[ns]")
-    first_radial_arr = np.array(
-        [r["first_radial_time"] for r in results], dtype="datetime64[ns]"
-    )
+    first_radial_arr = np.array([r["first_radial_time"] for r in results], dtype="datetime64[ns]")
 
     def _float_array(key):
         return np.array(
@@ -298,60 +304,73 @@ def extract_pps_timing(
     ds = xr.Dataset(
         data_vars={
             "first_radial_time": (
-                "time", first_radial_arr,
-                {"long_name": "Triplet PPS-derived timestamp of first radial",
-                 "standard_name": "time"},
+                "time",
+                first_radial_arr,
+                {
+                    "long_name": "Triplet PPS-derived timestamp of first radial",
+                    "standard_name": "time",
+                },
             ),
             "time_offset_ms": (
-                "time", _float_array("time_offset_ms"),
-                {"long_name": "First radial time minus metadata timestamp",
-                 "units": "ms"},
+                "time",
+                _float_array("time_offset_ms"),
+                {"long_name": "First radial time minus metadata timestamp", "units": "ms"},
             ),
             "pps_count": (
-                "time", _int_array("pps_count"),
+                "time",
+                _int_array("pps_count"),
                 {"long_name": "Number of PPS pulses in frame", "units": "1"},
             ),
             "timing_method": (
-                "time", timing_method_arr,
-                {"long_name": "Timing method (0=linear, N=PPS pulse count)",
-                 "units": "1"},
+                "time",
+                timing_method_arr,
+                {"long_name": "Timing method (0=linear, N=PPS pulse count)", "units": "1"},
             ),
             "latitude": (
-                "time", _float_array("latitude"),
+                "time",
+                _float_array("latitude"),
                 {"standard_name": "latitude", "units": "degrees_north"},
             ),
             "longitude": (
-                "time", _float_array("longitude"),
+                "time",
+                _float_array("longitude"),
                 {"standard_name": "longitude", "units": "degrees_east"},
             ),
             "heading": (
-                "time", _float_array("heading"),
+                "time",
+                _float_array("heading"),
                 {"standard_name": "platform_azimuth_angle", "units": "degrees"},
             ),
             "ship_speed": (
-                "time", _float_array("ship_speed"),
+                "time",
+                _float_array("ship_speed"),
                 {"long_name": "Ship speed", "units": "m s-1"},
             ),
             "wind_speed": (
-                "time", _float_array("wind_speed"),
+                "time",
+                _float_array("wind_speed"),
                 {"long_name": "Wind speed", "units": "m s-1"},
             ),
             "wind_direction": (
-                "time", _float_array("wind_direction"),
+                "time",
+                _float_array("wind_direction"),
                 {"long_name": "Wind direction", "units": "degrees"},
             ),
             "repeat_time": (
-                "time", _float_array("repeat_time"),
+                "time",
+                _float_array("repeat_time"),
                 {"long_name": "Frame repeat time", "units": "s"},
             ),
             "n_bearings": (
-                "time", _int_array("n_bearings"),
+                "time",
+                _int_array("n_bearings"),
                 {"long_name": "Number of radials in frame", "units": "1"},
             ),
         },
         coords={
             "time": (
-                "time", time_arr,
+                "time",
+                time_arr,
                 {"standard_name": "time", "axis": "T"},
             ),
         },
@@ -391,9 +410,9 @@ def extract_pps_timing(
     offsets = _float_array("time_offset_ms")
     n_pps = int(np.sum(timing_method_arr > 0))
     n_linear = int(np.sum(timing_method_arr == 0))
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"PPS timing (triplet): {n} frames ({n_pps} PPS, {n_linear} linear)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print("  Time offset (first_radial - metadata) in ms:")
     print(f"    mean   = {np.nanmean(offsets):+.1f}")
     print(f"    median = {np.nanmedian(offsets):+.1f}")
@@ -419,24 +438,37 @@ def _add_arguments(parser) -> None:
     add_common_arguments(parser)
     parser.add_argument("--config", "-c", type=str, help="Config YAML filename")
     parser.add_argument(
-        "--output", "-o", type=str, default="pps_timing.nc",
+        "--output",
+        "-o",
+        type=str,
+        default="pps_timing.nc",
         help="Output NetCDF file path (default: pps_timing.nc)",
     )
     parser.add_argument(
-        "--tolerance", type=float, default=1.2,
+        "--tolerance",
+        type=float,
+        default=1.2,
         help="Time tolerance multiplier for triplet matching (default: 1.2)",
     )
     parser.add_argument(
-        "--workers", "-w", type=int, default=None,
+        "--workers",
+        "-w",
+        type=int,
+        default=None,
         help="Number of parallel workers (default: auto)",
     )
     progress_group = parser.add_mutually_exclusive_group()
     progress_group.add_argument(
-        "--progress", dest="progress", action="store_true", default=True,
+        "--progress",
+        dest="progress",
+        action="store_true",
+        default=True,
         help="Show progress bar (default)",
     )
     progress_group.add_argument(
-        "--no-progress", dest="progress", action="store_false",
+        "--no-progress",
+        dest="progress",
+        action="store_false",
         help="Hide progress bar",
     )
 
@@ -476,7 +508,8 @@ def run(args) -> None:
 from wamos_tpw.cli_utils import create_standalone_main  # noqa: E402
 
 main = create_standalone_main(
-    _add_arguments, run,
+    _add_arguments,
+    run,
     "Compute first-radial timestamps using triplet PPS timing",
 )
 

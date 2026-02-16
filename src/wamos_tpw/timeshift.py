@@ -252,9 +252,9 @@ def run(args) -> None:
     )
 
     # Print results
-    print(f"\n{'='*72}")
+    print(f"\n{'=' * 72}")
     print(f"Time shift analysis: {result['n_frames']} frames")
-    print(f"{'='*72}")
+    print(f"{'=' * 72}")
     print(f"  Overall best lag:  {result['overall_lag']:+.2f} s")
     print(f"  RMS at best lag:   {result['overall_rms']:.2f} m")
     print(f"  RMS at zero lag:   {result['zero_rms']:.2f} m")
