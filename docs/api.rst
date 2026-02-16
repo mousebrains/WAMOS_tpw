@@ -247,4 +247,3 @@ Custom exception hierarchy for error handling.
    :members:
    :undoc-members:
    :show-inheritance:
-
