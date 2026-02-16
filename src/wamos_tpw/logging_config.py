@@ -10,6 +10,8 @@ import logging
 from argparse import ArgumentParser, Namespace
 from logging.handlers import RotatingFileHandler
 
+logger = logging.getLogger(__name__)
+
 
 def add_logging_arguments(parser: ArgumentParser) -> None:
     """
@@ -93,6 +95,6 @@ def setup_logging(
         file_format = "%(asctime)s %(name)s %(levelname)s %(message)s"
         file_handler.setFormatter(logging.Formatter(file_format))
         logger.addHandler(file_handler)
-        logging.info(f"Logging to file: {log_file} (max {log_max_mb}MB)")
+        logger.info("Logging to file: %s (max %dMB)", log_file, log_max_mb)
 
     return logger

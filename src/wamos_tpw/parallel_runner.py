@@ -342,8 +342,8 @@ def display_timing_stats(all_timings: dict[str, list[float]]) -> None:
         arr = np.array(vals) * 1000  # Convert to ms
         pct = (sum(vals) / total_time * 100) if total_time > 0 else 0
         logger.info(
-            f"    {key:<12} {arr.mean():>10.2f} {arr.std():>10.2f} "
-            f"{arr.min():>10.2f} {arr.max():>10.2f} {pct:>6.1f}"
+            "    %-12s %10.2f %10.2f %10.2f %10.2f %6.1f",
+            key, arr.mean(), arr.std(), arr.min(), arr.max(), pct,
         )
 
 

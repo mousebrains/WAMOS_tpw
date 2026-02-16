@@ -357,6 +357,7 @@ def timed_section(name: str, logger: logging.Logger | None = None) -> Iterator[d
 
         if logger:
             logger.debug(
-                f"{name} completed",
+                "%s completed",
+                name,
                 extra={"operation": name, **timing},
             )

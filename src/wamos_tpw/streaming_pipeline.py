@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from wamos_tpw.grid import compute_common_grid_from_stats
 from wamos_tpw.merged_image import MergedImage, TimeWindowConfig
 from wamos_tpw.streaming_filenames import (
     DiscoveredFile,
@@ -26,7 +27,7 @@ from wamos_tpw.streaming_filenames import (
     WindowTracker,
     create_time_windows_from_bounds,
 )
-from wamos_tpw.window import WindowAccumulator
+from wamos_tpw.window import merge_frames
 
 if TYPE_CHECKING:
     from wamos_tpw.config import Config
@@ -251,44 +252,40 @@ class StreamingMergePipeline:
         pending_merges = 0
 
         def _merge_window(window_idx: int, frames: list[dict]) -> MergedImage | None:
-            """Merge frames into a single image."""
+            """Merge frames into a single image on a common grid."""
             if not frames:
                 return None
 
-            # Get grid parameters from first frame
-            first = frames[0]
-            if "x_edges" not in first:
+            frames.sort(key=lambda x: x["timestamp"])
+
+            # Collect grid computation inputs
+            max_ranges = []
+            range_resolutions = []
+            position_stats = []
+
+            for f in frames:
+                max_ranges.append(f.get("ground_range_max", 3000.0))
+                frame_gp = f.get("grid_params") or {}
+                range_resolutions.append(frame_gp.get("grid_spacing", 7.5))
+                if "position_stats" in f:
+                    position_stats.append(f["position_stats"])
+
+            if not position_stats:
                 return None
 
-            # Create accumulator
-            accumulator = WindowAccumulator(
-                x_edges=first["x_edges"],
-                y_edges=first["y_edges"],
-                grid_spacing=first.get("grid_spacing", 10.0),
-                utm_zone=first.get("utm_zone", 0),
-                hemisphere=first.get("hemisphere", "north"),
-                center_lat=first.get("center_lat", 0.0),
-                center_lon=first.get("center_lon", 0.0),
+            grid_params = compute_common_grid_from_stats(
+                position_stats=position_stats,
+                max_ranges=max_ranges,
+                range_resolutions=range_resolutions,
+                resolution_scale=self._window_config.resolution_scale,
             )
 
-            # Add all frames
-            for frame_data in frames:
-                if "projected_intensity" not in frame_data:
-                    continue
-                accumulator.add_projected(
-                    projected_intensity=frame_data["projected_intensity"],
-                    projected_count=frame_data["projected_count"],
-                    timestamp=frame_data["timestamp"],
-                    heading=frame_data.get("heading", 0.0),
-                    ship_speed=frame_data.get("ship_speed"),
-                    wind_speed=frame_data.get("wind_speed"),
-                    wind_direction=frame_data.get("wind_direction"),
-                )
-
-            if accumulator.n_frames == 0:
-                return None
-
-            return accumulator.finalize(window_index=window_idx)
+            return merge_frames(
+                frames,
+                grid_params,
+                window_idx=window_idx,
+                interpolate_gaps=self._window_config.interpolate_gaps,
+            )
 
         def _merge_thread_fn():
             while not merge_shutdown.is_set():
@@ -521,9 +518,10 @@ class StreamingMergePipeline:
 
         elapsed = time.perf_counter() - t0_total
         logger.info(
-            f"Streaming pipeline complete: {self._n_files_discovered} files discovered, "
-            f"{self._n_files_processed} processed, {self._n_merged} windows merged "
-            f"in {elapsed:.1f}s"
+            "Streaming pipeline complete: %d files discovered, "
+            "%d processed, %d windows merged in %.1fs",
+            self._n_files_discovered, self._n_files_processed,
+            self._n_merged, elapsed,
         )
 
         # Yield any remaining results
@@ -669,7 +667,6 @@ def _add_arguments(parser) -> None:
 
 def run(args) -> None:
     """Run streaming pipeline with full output support."""
-    import logging
     from pathlib import Path
 
     from wamos_tpw.config import Config
@@ -693,7 +690,7 @@ def run(args) -> None:
         interpolate_gaps=args.interpolate,
     )
 
-    logging.info(
+    logger.info(
         "Window config: %.1fs duration, %.0f%% overlap, min %d frames, %.1fx resolution%s",
         window_config.window_seconds,
         window_config.overlap_fraction * 100,
@@ -708,12 +705,12 @@ def run(args) -> None:
         from wamos_tpw.instruments.ship_data import ShipData
 
         sd = ShipData(Path(ship_data_dir))
-        logging.info("Ship data: %s", sd)
+        logger.info("Ship data: %s", sd)
 
     # Create output directory if specified
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-        logging.info("Output directory: %s", args.output_dir)
+        logger.info("Output directory: %s", args.output_dir)
 
     pipeline = StreamingMergePipeline(
         stime=args.stime,
@@ -729,7 +726,7 @@ def run(args) -> None:
         grid_spacing=getattr(args, "grid_spacing", None),
     )
 
-    logging.info("Created streaming pipeline with %d time windows", pipeline.n_windows)
+    logger.info("Created streaming pipeline with %d time windows", pipeline.n_windows)
 
     # Only accumulate merged images in memory when bulk output is requested
     needs_bulk = bool(args.mp4 or args.kml or args.kmz or args.plot)
@@ -756,7 +753,7 @@ def run(args) -> None:
             if args.geotiff:
                 write_geotiff(merged, args.output_dir)
 
-    logging.info("Created %d merged images (streaming mode)", n_merged)
+    logger.info("Created %d merged images (streaming mode)", n_merged)
 
     # Bulk outputs (require all images in memory)
     if merged_images:

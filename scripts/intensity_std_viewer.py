@@ -828,7 +828,7 @@ class Config:
                 self._config = yaml.safe_load(f)
         except Exception:
             self._config = {}
-            logging.exception("Failed to load config file %s", filename)
+            logger.exception("Failed to load config file %s", filename)
 
     def __repr__(self) -> str:
         return f"Config({self._config})"

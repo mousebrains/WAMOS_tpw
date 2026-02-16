@@ -14,6 +14,8 @@ from numpy.polynomial import Polynomial
 from wamos_tpw.config import Config
 from wamos_tpw.range import Range
 
+logger = logging.getLogger(__name__)
+
 __all__ = ["Deramp"]
 
 
@@ -261,7 +263,7 @@ def run(args) -> None:
     # Load polar file
     pf = PolarFile(args.filename, config=config)
     if not pf:
-        logging.warning("No frames in %s", args.filename)
+        logger.warning("No frames in %s", args.filename)
         return
 
     frame = pf.frame()
@@ -279,16 +281,16 @@ def run(args) -> None:
     deramp = Deramp(masked_intensity, rng)
 
     # Display results
-    logging.info("File: %s", args.filename)
-    logging.info("Frame: %s", frame.timestamp)
-    logging.info("Shape: %s", frame.shape)
-    logging.info("Polynomial order: %d", deramp.order)
-    logging.info(
+    logger.info("File: %s", args.filename)
+    logger.info("Frame: %s", frame.timestamp)
+    logger.info("Shape: %s", frame.shape)
+    logger.info("Polynomial order: %d", deramp.order)
+    logger.info(
         "Original intensity: [%.1f, %.1f]",
         np.nanmin(original_intensity if original_intensity is not None else masked_intensity),
         np.nanmax(original_intensity if original_intensity is not None else masked_intensity),
     )
-    logging.info(
+    logger.info(
         "Deramped intensity: [%.1f, %.1f]", np.nanmin(deramp.intensity), np.nanmax(deramp.intensity)
     )
 

@@ -274,7 +274,7 @@ def run(args) -> None:
     pf = PolarFile(args.filename, config=config)
 
     if not pf:
-        logging.error("No frames found in %s", args.filename)
+        logger.error("No frames found in %s", args.filename)
         return
 
     frame_idx = min(args.frame, len(pf) - 1)
@@ -296,24 +296,24 @@ def run(args) -> None:
     )
 
     # Display results
-    logging.info("File: %s", args.filename)
-    logging.info("Frame: %s (index %d)", frame.timestamp, frame_idx)
-    logging.info("Shape: %s", frame.shape)
-    logging.info("")
-    logging.info("Theta range: [%.2f, %.2f] degrees", theta_obj.theta.min(), theta_obj.theta.max())
-    logging.info("Ship heading: %.1f degrees", ship_heading)
-    logging.info("")
+    logger.info("File: %s", args.filename)
+    logger.info("Frame: %s (index %d)", frame.timestamp, frame_idx)
+    logger.info("Shape: %s", frame.shape)
+    logger.info("")
+    logger.info("Theta range: [%.2f, %.2f] degrees", theta_obj.theta.min(), theta_obj.theta.max())
+    logger.info("Ship heading: %.1f degrees", ship_heading)
+    logger.info("")
 
     heading_ship = bearing.heading_ship()
     heading_earth = bearing.heading_earth()
-    logging.info("Heading ship:  [%.1f, %.1f] degrees", heading_ship.min(), heading_ship.max())
-    logging.info("Heading earth: [%.1f, %.1f] degrees", heading_earth.min(), heading_earth.max())
+    logger.info("Heading ship:  [%.1f, %.1f] degrees", heading_ship.min(), heading_ship.max())
+    logger.info("Heading earth: [%.1f, %.1f] degrees", heading_earth.min(), heading_earth.max())
 
     x_earth, y_earth = bearing.xy_earth()
-    logging.info("")
-    logging.info("Earth coordinates:")
-    logging.info("  X (East):  [%.1f, %.1f] m", x_earth.min(), x_earth.max())
-    logging.info("  Y (North): [%.1f, %.1f] m", y_earth.min(), y_earth.max())
+    logger.info("")
+    logger.info("Earth coordinates:")
+    logger.info("  X (East):  [%.1f, %.1f] m", x_earth.min(), x_earth.max())
+    logger.info("  Y (North): [%.1f, %.1f] m", y_earth.min(), y_earth.max())
 
 
 # ============================================================================

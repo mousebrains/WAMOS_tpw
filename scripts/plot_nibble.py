@@ -163,7 +163,7 @@ def main() -> int:
             logger.error("Must specify exactly 3 bins")
             return 1
     except ValueError:
-        logger.error(f"Invalid bins format: {args.bins}")
+        logger.error("Invalid bins format: %s", args.bins)
         return 1
 
     # Parse transition argument
@@ -175,7 +175,7 @@ def main() -> int:
             transition_bin = int(match.group(1))
             transition_bit = int(match.group(2))
             if transition_bit not in (12, 13, 14, 15):
-                logger.error(f"Invalid bit in --transition: {transition_bit}. Must be 12-15.")
+                logger.error("Invalid bit in --transition: %s. Must be 12-15.", transition_bit)
                 return 1
         else:
             logger.error(
@@ -187,7 +187,7 @@ def main() -> int:
     try:
         figsize = tuple(float(x) for x in args.figsize.split(","))
     except ValueError:
-        logger.error(f"Invalid figsize: {args.figsize}")
+        logger.error("Invalid figsize: %s", args.figsize)
         return 1
 
     # Load frames
@@ -298,7 +298,7 @@ def main() -> int:
         print(f"Peak memory: {peak_mem_mb:.1f} MB")
 
     except (FileNotFoundError, ValueError, OSError) as e:
-        logger.exception(f"Error: {e}")
+        logger.exception("Error: %s", e)
         return 1
 
     return 0

@@ -199,7 +199,7 @@ def extract_pps_timing(
     files = list(filenames)
 
     if not files:
-        logging.warning(
+        logger.warning(
             "No files found in %s for time range %s to %s",
             polar_path,
             stime,
@@ -207,7 +207,7 @@ def extract_pps_timing(
         )
         return ""
 
-    logging.info("Found %d files to process", len(files))
+    logger.info("Found %d files to process", len(files))
 
     if workers is None:
         workers = min(len(files), os.cpu_count() or 1)
@@ -248,7 +248,7 @@ def extract_pps_timing(
             pbar.close()
 
     elapsed_parse = time.perf_counter() - t0
-    logging.info(
+    logger.info(
         "Parsed %d frames from %d files in %.1fs (%.0f files/sec)",
         len(all_records),
         len(files),
@@ -257,7 +257,7 @@ def extract_pps_timing(
     )
 
     if not all_records:
-        logging.warning("No valid frame data found")
+        logger.warning("No valid frame data found")
         return ""
 
     # Sort by timestamp
@@ -267,7 +267,7 @@ def extract_pps_timing(
     t1 = time.perf_counter()
     results = _process_triplets(all_records, tolerance)
     elapsed_triplet = time.perf_counter() - t1
-    logging.info(
+    logger.info(
         "Triplet processing: %d frames in %.1fs (%.0f frames/sec)",
         len(results),
         elapsed_triplet,
@@ -404,7 +404,7 @@ def extract_pps_timing(
     output_path = Path(output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     ds.to_netcdf(output_path, encoding=encoding)
-    logging.info("Wrote %s (%d records)", output_path, n)
+    logger.info("Wrote %s (%d records)", output_path, n)
 
     # Print summary
     offsets = _float_array("time_offset_ms")

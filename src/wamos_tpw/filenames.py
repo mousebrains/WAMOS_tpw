@@ -16,6 +16,8 @@ from pathlib import Path
 
 import numpy as np
 
+logger = logging.getLogger(__name__)
+
 __all__ = ["Filenames"]
 
 
@@ -752,7 +754,7 @@ def run(args) -> None:
     _ = filenames.files
     t1 = time.time()
 
-    logging.info(f"Found {len(filenames)} files in {t1 - t0:.3f}s")
+    logger.info("Found %d files in %.3fs", len(filenames), t1 - t0)
 
 
 from wamos_tpw.cli_utils import create_standalone_main  # noqa: E402

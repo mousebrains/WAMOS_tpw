@@ -267,7 +267,7 @@ class PipelineCheckpoint:
         if cp.can_resume():
             state = cp.state
             start_idx = state.last_completed + 1
-            logger.info(f"Resuming from window {start_idx}")
+            logger.info("Resuming from window %d", start_idx)
         else:
             cp.initialize(total_windows=100)
             start_idx = 0

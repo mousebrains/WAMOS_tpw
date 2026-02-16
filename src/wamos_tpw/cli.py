@@ -42,19 +42,19 @@ def _validate_path(path: str, must_exist: bool = True, is_file: bool = False) ->
 def _handle_error(error: Exception) -> None:
     """Log user-friendly error message and exit."""
     if isinstance(error, ConfigError):
-        logger.error(f"Configuration error: {error}")
+        logger.error("Configuration error: %s", error)
     elif isinstance(error, PolarFileError):
-        logger.error(f"Polar file error: {error}")
+        logger.error("Polar file error: %s", error)
     elif isinstance(error, ValidationError):
-        logger.error(f"Validation error: {error}")
+        logger.error("Validation error: %s", error)
     elif isinstance(error, WamosError):
-        logger.error(f"Error: {error}")
+        logger.error("Error: %s", error)
     elif isinstance(error, FileNotFoundError):
-        logger.error(f"File not found: {error}")
+        logger.error("File not found: %s", error)
     elif isinstance(error, ValueError):
-        logger.error(f"Invalid value: {error}")
+        logger.error("Invalid value: %s", error)
     else:
-        logger.error(f"Unexpected error: {error}")
+        logger.error("Unexpected error: %s", error)
     sys.exit(1)
 
 
@@ -151,8 +151,8 @@ Examples:
     # Handle dry-run mode
     if args.dry_run:
         logger.info("Dry-run mode enabled")
-        logger.info(f"[DRY-RUN] Would execute: wamos {args.command}")
-        logger.info(f"[DRY-RUN] Arguments: {vars(args)}")
+        logger.info("[DRY-RUN] Would execute: wamos %s", args.command)
+        logger.info("[DRY-RUN] Arguments: %s", vars(args))
         sys.exit(0)
 
     # Call the command's function with error handling
@@ -165,7 +165,7 @@ Examples:
         _handle_error(e)
     except Exception as e:
         # Unexpected error - show full traceback for debugging
-        logger.exception(f"Unexpected error: {e}")
+        logger.exception("Unexpected error: %s", e)
         sys.exit(1)
 
 

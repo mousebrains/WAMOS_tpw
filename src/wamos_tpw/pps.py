@@ -13,6 +13,8 @@ import numpy as np
 from wamos_tpw.config import Config
 from wamos_tpw.frame import Frame
 
+logger = logging.getLogger(__name__)
+
 
 class PPS:
     """
@@ -64,11 +66,11 @@ def run(args) -> None:
     for fn in args.filename:
         pf = PolarFile(fn, config=config)
         if not pf:
-            logging.warning("No frames in %s", fn)
+            logger.warning("No frames in %s", fn)
             continue
         for index, frame in enumerate(pf.frames):
             pps = PPS(frame)
-            logging.info("%s Frame(%d): PPS indices: %s", fn, index, pps.indices)
+            logger.info("%s Frame(%d): PPS indices: %s", fn, index, pps.indices)
 
 
 from wamos_tpw.cli_utils import create_standalone_main  # noqa: E402

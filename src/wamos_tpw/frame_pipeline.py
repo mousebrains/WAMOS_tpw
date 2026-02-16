@@ -399,12 +399,12 @@ def run(args) -> None:
     files = list(filenames)
 
     if not files:
-        logging.warning(
+        logger.warning(
             "No files found in %s for time range %s to %s", args.polar_path, args.stime, args.etime
         )
         return
 
-    logging.info("Found %d files to process", len(files))
+    logger.info("Found %d files to process", len(files))
 
     # Handle --view mode separately (interactive, no parallel processing)
     if args.view:
@@ -458,7 +458,7 @@ def run(args) -> None:
         successful = [r for r in bench.results if r["success"]]
         for r in bench.results:
             if not r["success"]:
-                logging.warning("No frame %d in %s", frame_index, r["filepath"])
+                logger.warning("No frame %d in %s", frame_index, r["filepath"])
 
         display_benchmark_header(
             executor_name=bench.executor_name,

@@ -91,7 +91,7 @@ def load_frame(fn: str) -> tuple:
         ts = frame.timestamp
         return ts, frame
     except Exception as e:
-        logger.warning(f"Failed to load {fn}: {e}")
+        logger.warning("Failed to load %s: %s", fn, e)
         return None, None
 
 
@@ -453,7 +453,7 @@ def main():
             transition_bin = int(match.group(1))
             transition_bit = int(match.group(2))
             if transition_bit not in (12, 13, 14, 15):
-                logger.error(f"Invalid bit in --transition: {transition_bit}. Must be 12-15.")
+                logger.error("Invalid bit in --transition: %s. Must be 12-15.", transition_bit)
                 return 1
         else:
             logger.error(
@@ -465,7 +465,7 @@ def main():
     try:
         figsize = tuple(float(x) for x in args.figsize.split(","))
     except ValueError:
-        logger.error(f"Invalid figsize: {args.figsize}")
+        logger.error("Invalid figsize: %s", args.figsize)
         return 1
 
     # Load frames in parallel
@@ -478,7 +478,7 @@ def main():
             logger.error("No files found in time range")
             return 1
 
-        logger.info(f"Loading {n_files} files with {args.workers or os.cpu_count()} workers")
+        logger.info("Loading %d files with %s workers", n_files, args.workers or os.cpu_count())
 
         # Load frames in parallel
         frames_dict = {}
@@ -593,7 +593,7 @@ def main():
         print(f"Peak memory: {peak_mem_mb:.1f} MB")
 
     except (FileNotFoundError, ValueError, OSError) as e:
-        logger.exception(f"Error: {e}")
+        logger.exception("Error: %s", e)
         return 1
 
     return 0

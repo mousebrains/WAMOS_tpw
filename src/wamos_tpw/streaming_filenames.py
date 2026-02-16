@@ -207,7 +207,7 @@ class StreamingFilenames:
                     files = future.result()
                     results.append((hour_start_ns, hour_end_ns, files))
                 except Exception as e:
-                    logger.warning(f"Error scanning directory: {e}")
+                    logger.warning("Error scanning directory: %s", e)
                     results.append((hour_start_ns, hour_end_ns, []))
 
         # Sort by hour start time to maintain chronological order
@@ -269,7 +269,7 @@ class StreamingFilenames:
                     try:
                         filepaths = future.result()
                     except Exception as e:
-                        logger.warning(f"Error scanning {dir_path}: {e}")
+                        logger.warning("Error scanning %s: %s", dir_path, e)
                         filepaths = []
 
                     results_by_hour[idx] = (hour_start_ns, hour_end_ns, filepaths)
@@ -602,12 +602,12 @@ def run(args) -> None:
             total_files += len(batch.files)
             elapsed = time.time() - t0
             logger.info(
-                f"Batch {total_batches}: {len(batch.files)} files, "
-                f"total {total_files}, elapsed {elapsed:.1f}s"
+                "Batch %d: %d files, total %d, elapsed %.1fs",
+                total_batches, len(batch.files), total_files, elapsed,
             )
 
     t1 = time.time()
-    logger.info(f"Discovery complete: {total_files} files in {t1 - t0:.2f}s")
+    logger.info("Discovery complete: %d files in %.2fs", total_files, t1 - t0)
 
 
 def add_subparser(subparsers) -> None:

@@ -18,6 +18,8 @@ from wamos_tpw.config import Config
 if TYPE_CHECKING:
     from wamos_tpw.theta import Theta
 
+logger = logging.getLogger(__name__)
+
 __all__ = ["Shadow"]
 
 
@@ -348,7 +350,7 @@ def run(args) -> None:
     pf = PolarFile(args.filename, config=Config(args.config) if args.config else Config())
 
     if not pf:
-        logging.error("No frames found in %s", args.filename)
+        logger.error("No frames found in %s", args.filename)
         return
 
     frame_idx = min(args.frame, len(pf) - 1)
@@ -362,13 +364,13 @@ def run(args) -> None:
     diag = ShadowDiag(destreak.intensity, shadow)
 
     # Display results
-    logging.info("File: %s", args.filename)
-    logging.info("Frame: %s (index %s)", frame.timestamp, frame_idx)
-    logging.info("Shape: %s", frame.shape)
-    logging.info("Shadow regions: %d", len(shadow.indices))
-    logging.info("Shadow pixels: %d (%.2f%%)", diag.n_shadow_pixels, diag.shadow_fraction * 100)
+    logger.info("File: %s", args.filename)
+    logger.info("Frame: %s (index %s)", frame.timestamp, frame_idx)
+    logger.info("Shape: %s", frame.shape)
+    logger.info("Shadow regions: %d", len(shadow.indices))
+    logger.info("Shadow pixels: %d (%.2f%%)", diag.n_shadow_pixels, diag.shadow_fraction * 100)
     for i, (t, idx) in enumerate(zip(shadow.thetas, shadow.indices, strict=False)):
-        logging.info(
+        logger.info(
             "  Region %d: theta=[%.2f, %.2f], indices=[%d, %d]", i, t[0], t[1], idx[0], idx[1]
         )
 

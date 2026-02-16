@@ -106,7 +106,7 @@ def iter_netcdf_files(
             ds.close()
             files_with_times.append((filepath, start_time))
         except Exception as e:
-            logger.warning(f"Could not read {filepath}: {e}")
+            logger.warning("Could not read %s: %s", filepath, e)
             continue
 
     # Sort by start time
@@ -142,10 +142,10 @@ def load_netcdf_files(
             merged = load_merged_from_netcdf(filepath)
             merged_images.append(merged)
         except Exception as e:
-            logger.warning(f"Could not load {filepath}: {e}")
+            logger.warning("Could not load %s: %s", filepath, e)
             continue
 
-    logger.info(f"Loaded {len(merged_images)} merged images from {input_dir}")
+    logger.info("Loaded %d merged images from %s", len(merged_images), input_dir)
     return merged_images
 
 
@@ -224,14 +224,14 @@ def stitch_mp4_files(
                 str(output_path),
             ]
 
-        logger.info(f"Stitching {len(input_files)} MP4 files into {output_path}")
+        logger.info("Stitching %d MP4 files into %s", len(input_files), output_path)
         result = subprocess.run(cmd, capture_output=True, text=True)
 
         if result.returncode != 0:
-            logger.error(f"ffmpeg error: {result.stderr}")
+            logger.error("ffmpeg error: %s", result.stderr)
             raise RuntimeError(f"ffmpeg failed: {result.stderr}")
 
-        logger.info(f"Created stitched movie: {output_path}")
+        logger.info("Created stitched movie: %s", output_path)
         return str(output_path)
 
     finally:
@@ -428,7 +428,7 @@ def _run_stitch_movies(args) -> None:
         logger.error("No input MP4 files found")
         return
 
-    logger.info(f"Found {len(input_files)} MP4 files to stitch")
+    logger.info("Found %d MP4 files to stitch", len(input_files))
 
     stitch_mp4_files(
         input_files,

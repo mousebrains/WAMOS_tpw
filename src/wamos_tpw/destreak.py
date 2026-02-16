@@ -16,6 +16,8 @@ from scipy import ndimage
 from wamos_tpw.config import Config
 from wamos_tpw.frame import Frame
 
+logger = logging.getLogger(__name__)
+
 __all__ = ["Destreak"]
 
 
@@ -353,14 +355,14 @@ def run(args) -> None:
         frame = pf.frame()
         ds = Destreak(frame, save_mask=args.plot)
 
-        logging.info("File: %s", filepath)
-        logging.info("Frame: %s", frame.timestamp)
-        logging.info("Shape: %s", frame.shape)
-        logging.info("Streaks: %d pixels (%.2f%%)", ds.n_streak_pixels, ds.streak_fraction * 100)
-        logging.info(
+        logger.info("File: %s", filepath)
+        logger.info("Frame: %s", frame.timestamp)
+        logger.info("Shape: %s", frame.shape)
+        logger.info("Streaks: %d pixels (%.2f%%)", ds.n_streak_pixels, ds.streak_fraction * 100)
+        logger.info(
             "Original intensity: [%.1f, %.1f]", frame.intensity.min(), frame.intensity.max()
         )
-        logging.info("Destreaked intensity: [%.1f, %.1f]", ds.intensity.min(), ds.intensity.max())
+        logger.info("Destreaked intensity: [%.1f, %.1f]", ds.intensity.min(), ds.intensity.max())
 
         if args.plot:
             diag = DestreakDiag(frame, ds)

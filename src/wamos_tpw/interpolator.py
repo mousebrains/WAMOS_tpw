@@ -490,7 +490,7 @@ def run(args) -> None:
     netcdf_dir = args.netcdf_dir
     if netcdf_dir:
         os.makedirs(netcdf_dir, exist_ok=True)
-        logging.info("NetCDF output directory: %s", netcdf_dir)
+        logger.info("NetCDF output directory: %s", netcdf_dir)
 
     config = Config(args.config) if args.config else Config()
 
@@ -502,18 +502,18 @@ def run(args) -> None:
         from wamos_tpw.instruments.ship_data import ShipData
 
         sd = ShipData(Path(ship_data_dir))
-        logging.info("Ship data: %s", sd)
+        logger.info("Ship data: %s", sd)
 
     filenames = Filenames(args.stime, args.etime, args.polar_path)
     files = list(filenames)
 
     if not files:
-        logging.warning(
+        logger.warning(
             "No files found in %s for time range %s to %s", args.polar_path, args.stime, args.etime
         )
         return
 
-    logging.info("Found %d files to process", len(files))
+    logger.info("Found %d files to process", len(files))
 
     n_workers = args.workers
     if n_workers is None:
@@ -530,7 +530,7 @@ def run(args) -> None:
     executor.start()
     shm_manager = SharedMemoryManager()
 
-    logging.info("Processing with %d workers", n_workers)
+    logger.info("Processing with %d workers", n_workers)
 
     t0_total = time.perf_counter()
 
@@ -578,7 +578,7 @@ def run(args) -> None:
             continue
 
         if result.error:
-            logging.error("Error: %s", result.error)
+            logger.error("Error: %s", result.error)
             if result.task_type == "process_file":
                 pending_files -= 1
                 pbar_files.update(1)
@@ -675,22 +675,22 @@ def run(args) -> None:
     # Clean up any remaining shared memory
     orphaned = shm_manager.cleanup()
     if orphaned > 0:
-        logging.debug("Cleaned up %d orphaned shared memory blocks", orphaned)
+        logger.debug("Cleaned up %d orphaned shared memory blocks", orphaned)
 
     # Sort results by (file_index, frame_index)
     interp_results.sort(key=lambda r: (r["file_index"], r["frame_index"]))
 
     # Display results
-    logging.info("=" * 60)
-    logging.info(
+    logger.info("=" * 60)
+    logger.info(
         "Processed %d files, %d frames in %.2fs (%.1f frames/sec)",
         len(files),
         total_frames_expected,
         elapsed,
         total_frames_expected / elapsed if elapsed > 0 else 0,
     )
-    logging.info("Workers: %d", n_workers)
-    logging.info(
+    logger.info("Workers: %d", n_workers)
+    logger.info(
         "Summary: position: %d interpolated, %d extrapolated; timing: %d pps, %d linear",
         n_interpolated,
         n_extrapolated,
@@ -724,18 +724,18 @@ def run(args) -> None:
                         timing_sums[k] += data["timings"][k]
                         timing_counts[k] += 1
 
-        logging.info("=" * 60)
-        logging.info("Per-frame timing statistics (averages over %d frames):", len(interp_results))
+        logger.info("=" * 60)
+        logger.info("Per-frame timing statistics (averages over %d frames):", len(interp_results))
         for k in timing_keys:
             if timing_counts[k] > 0:
                 avg_ms = timing_sums[k] / timing_counts[k] * 1000
                 total_s = timing_sums[k]
-                logging.info("  %-18s: %7.2f ms avg, %7.2f s total", k, avg_ms, total_s)
+                logger.info("  %-18s: %7.2f ms avg, %7.2f s total", k, avg_ms, total_s)
 
     # Finalize viewer and wait for user to close
     if viewer:
         viewer.mark_loading_complete()
-        logging.info("Loading complete. Use viewer controls to navigate frames.")
+        logger.info("Loading complete. Use viewer controls to navigate frames.")
         viewer.wait()
 
     # Memory stats
@@ -747,7 +747,7 @@ def run(args) -> None:
             max_rss_mb = max_rss / (1024 * 1024)
         else:
             max_rss_mb = max_rss / 1024
-        logging.info("Peak worker RSS: %.1f MB", max_rss_mb)
+        logger.info("Peak worker RSS: %.1f MB", max_rss_mb)
 
     return interp_results
 

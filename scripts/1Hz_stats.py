@@ -106,7 +106,7 @@ def load_frame_bits(args: tuple) -> list | None:
 
         rpt = frame.metadata.repeat_time
         if rpt is None or rpt <= 0:
-            logger.warning(f"Invalid RPT {rpt} in {fn}, skipping")
+            logger.warning("Invalid RPT %s in %s, skipping", rpt, fn)
             return None
 
         row = [rpt]
@@ -117,7 +117,7 @@ def load_frame_bits(args: tuple) -> list | None:
 
         return row
     except Exception as e:
-        logger.warning(f"Failed to load {fn}: {e}")
+        logger.warning("Failed to load %s: %s", fn, e)
         return None
 
 
@@ -179,7 +179,7 @@ def main():
         filenames = Filenames(args.stime, args.etime, str(args.polar_path))
         files = filenames.files
         n_files = len(files)
-        logger.info(f"Loading {n_files} files with {args.workers or os.cpu_count()} workers")
+        logger.info("Loading %d files with %s workers", n_files, args.workers or os.cpu_count())
 
         # Load frames in parallel using ThreadPoolExecutor
         work_items = [(fn, distance_bins) for fn in files]
@@ -248,7 +248,7 @@ def main():
         print(f"Peak memory: {peak_mem_mb:.1f} MB")
 
     except (FileNotFoundError, ValueError, OSError) as e:
-        logger.exception(f"Error: {e}")
+        logger.exception("Error: %s", e)
         return 1
 
     return 0

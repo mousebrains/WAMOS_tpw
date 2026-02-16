@@ -16,6 +16,8 @@ import numpy as np
 from wamos_tpw.config import Config
 from wamos_tpw.frame import Frame
 
+logger = logging.getLogger(__name__)
+
 __all__ = ["Theta"]
 
 
@@ -355,7 +357,7 @@ def run(args) -> None:
     pf = PolarFile(args.filename, config=config)
 
     if not pf:
-        logging.error("No frames found in %s", args.filename)
+        logger.error("No frames found in %s", args.filename)
         return
 
     frame_idx = min(args.frame, len(pf) - 1)
@@ -365,17 +367,17 @@ def run(args) -> None:
     theta = Theta(frame)
 
     # Display results
-    logging.info("File: %s", args.filename)
-    logging.info("Frame: %s (index %s)", frame.timestamp, frame_idx)
-    logging.info("Shape: %s", frame.shape)
-    logging.info("Theta range: [%.2f, %.2f] degrees", theta.theta.min(), theta.theta.max())
-    logging.info("Number of radials: %s", len(theta))
+    logger.info("File: %s", args.filename)
+    logger.info("Frame: %s (index %s)", frame.timestamp, frame_idx)
+    logger.info("Shape: %s", frame.shape)
+    logger.info("Theta range: [%.2f, %.2f] degrees", theta.theta.min(), theta.theta.max())
+    logger.info("Number of radials: %s", len(theta))
 
     # Show some sample values
     n_samples = min(5, len(theta))
-    logging.info("Sample theta values (first %s):", n_samples)
+    logger.info("Sample theta values (first %s):", n_samples)
     for i in range(n_samples):
-        logging.info("  Radial %s: %.2f degrees", i, theta.theta[i])
+        logger.info("  Radial %s: %.2f degrees", i, theta.theta[i])
 
     if args.plot:
         diag = ThetaDiag(frame, theta)

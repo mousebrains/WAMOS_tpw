@@ -62,6 +62,8 @@ from wamos_tpw.constants import KNOTS_TO_MS
 from wamos_tpw.filenames import extract_file_timestamp
 from wamos_tpw.frame import Frame, FrameMetadata
 
+logger = logging.getLogger(__name__)
+
 __all__ = ["PolarFile"]
 
 
@@ -232,7 +234,7 @@ class PolarFile:
             return frame_data.reshape((n_radials, n_samples))
 
         usable = n_radials * n_samples
-        logging.warning(
+        logger.warning(
             "%s: Frame %s: truncating %s values",
             self._filepath,
             idx,
@@ -253,7 +255,7 @@ class PolarFile:
 
             # Read length field
             if offset + self._LENGTH_FIELD_SIZE > len(data):
-                logging.debug("End of data at frame %s", idx)
+                logger.debug("End of data at frame %s", idx)
                 break
 
             length_bytes = data[offset : offset + self._LENGTH_FIELD_SIZE]
@@ -262,12 +264,12 @@ class PolarFile:
             try:
                 length = int(length_bytes.decode("utf-8", errors="ignore").strip())
             except ValueError:
-                logging.warning("%s: Invalid length field at frame %s", self._filepath, idx)
+                logger.warning("%s: Invalid length field at frame %s", self._filepath, idx)
                 break
 
             # Check bounds
             if offset + length > len(data):
-                logging.warning(
+                logger.warning(
                     "%s: Frame %s: expected %s bytes, got %s",
                     self._filepath,
                     idx,
@@ -290,7 +292,7 @@ class PolarFile:
         if tower and self._config and tower in self._config:
             self._config = self._config[tower]
         elif tower:
-            logging.warning("Tower '%s' not found in config; using default settings", tower)
+            logger.warning("Tower '%s' not found in config; using default settings", tower)
 
         # Set tower.height from WINDH header if not in config
         if "tower.height" not in self._config:
@@ -471,7 +473,7 @@ class PolarFile:
                 metadata.wind_direction = float(parts[11])
 
         except (ValueError, IndexError) as e:
-            logging.debug("Failed to parse frame: %s", e)
+            logger.debug("Failed to parse frame: %s", e)
 
         return metadata
 
@@ -526,19 +528,19 @@ class PolarFile:
             # Read length field
             length_bytes = fp.read(self._LENGTH_FIELD_SIZE)
             if len(length_bytes) != self._LENGTH_FIELD_SIZE:
-                logging.debug("End of file at frame %s", idx)
+                logger.debug("End of file at frame %s", idx)
                 break
 
             try:
                 length = int(length_bytes.decode("utf-8", errors="ignore").strip())
             except ValueError:
-                logging.warning("%s: Invalid length field at frame %s", self._filepath, idx)
+                logger.warning("%s: Invalid length field at frame %s", self._filepath, idx)
                 break
 
             # Read binary data
             buffer = fp.read(length)
             if len(buffer) != length:
-                logging.warning(
+                logger.warning(
                     "%s: Frame %s: expected %s bytes, got %s",
                     self._filepath,
                     idx,
@@ -614,7 +616,7 @@ class PolarFile:
                     result = -result
                 return result
         except (ValueError, AttributeError) as e:
-            logging.debug("Failed to parse lat/lon: %s", e)
+            logger.debug("Failed to parse lat/lon: %s", e)
         return None
 
     # -------------------------------------------------------------------------
@@ -720,7 +722,7 @@ def load_polar_file(filepath: str, config: Config | None = None) -> Frame | None
             return pf.frame()
         return None
     except Exception as e:
-        logging.error("Error loading %s: %s", filepath, e)
+        logger.error("Error loading %s: %s", filepath, e)
         return None
 
 
@@ -739,7 +741,7 @@ def load_polar_file_all(filepath: str, config: Config | None = None) -> list[Fra
         pf = PolarFile(filepath, config=config)
         return pf.frames
     except Exception as e:
-        logging.error("Error loading %s: %s", filepath, e)
+        logger.error("Error loading %s: %s", filepath, e)
         return []
 
 
@@ -769,33 +771,33 @@ def add_subparser(subparsers) -> None:
 def run(args) -> None:
     """Execute the 'parse' command."""
     for filepath in args.filename:
-        logging.info("=" * 60)
-        logging.info("Parsing: %s", filepath)
-        logging.info("=" * 60)
+        logger.info("=" * 60)
+        logger.info("Parsing: %s", filepath)
+        logger.info("=" * 60)
 
         try:
             config = Config(args.config) if args.config else Config()
             pf = PolarFile(filepath, config=config)
-            logging.info("%s", pf)
+            logger.info("%s", pf)
 
             if args.show_header:
-                logging.info("Header:")
+                logger.info("Header:")
                 for key, value in sorted(pf.header.items()):
-                    logging.info("  %s: %s", key, value)
+                    logger.info("  %s: %s", key, value)
 
             if pf:
                 frame = pf.frame()
-                logging.info("First frame:")
-                logging.info("  Timestamp: %s", frame.timestamp)
-                logging.info("  Shape: %s", frame.shape)
-                logging.info(
+                logger.info("First frame:")
+                logger.info("  Timestamp: %s", frame.timestamp)
+                logger.info("  Shape: %s", frame.shape)
+                logger.info(
                     "  Intensity range: [%s, %s]", frame.intensity.min(), frame.intensity.max()
                 )
-                logging.info("  Bit12 (PPS) any: %s", frame.bit12.any())
-                logging.info("  Bit13 (bearing) any: %s", frame.bit13.any())
+                logger.info("  Bit12 (PPS) any: %s", frame.bit12.any())
+                logger.info("  Bit13 (bearing) any: %s", frame.bit13.any())
 
         except (OSError, ValueError) as e:
-            logging.error("Failed to parse %s: %s", filepath, e)
+            logger.error("Failed to parse %s: %s", filepath, e)
 
 
 from wamos_tpw.cli_utils import create_standalone_main  # noqa: E402

@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -15,7 +16,10 @@ import numpy as np
 from wamos_tpw.filenames import extract_file_timestamp
 
 if TYPE_CHECKING:
+    from wamos_tpw.grid import GridParams
     from wamos_tpw.merged_image import MergedImage, TimeWindowConfig
+
+logger = logging.getLogger(__name__)
 
 
 def _interpolate_nan_gaps(intensity: np.ndarray, max_distance: int = 3) -> np.ndarray:
@@ -284,3 +288,119 @@ class WindowAccumulator:
             mean_wind_direction=mean_wind_dir,
             window_index=window_index,
         )
+
+
+_DEG2M = 111_319.5
+
+
+def merge_frames(
+    frames: list[dict],
+    grid_params: GridParams | dict,
+    window_idx: int = 0,
+    interpolate_gaps: bool = False,
+) -> MergedImage | None:
+    """
+    Remap interpolated frames onto a common grid and merge.
+
+    Each frame's per-frame projected data is remapped onto ``grid_params``
+    and accumulated into a single :class:`MergedImage`.
+
+    Args:
+        frames: Interpolated frame data dicts (from ``_do_interpolate``).
+        grid_params: Common grid (from ``compute_common_grid*``).
+        window_idx: Window index for the output MergedImage.
+        interpolate_gaps: Fill NaN gaps via nearest-neighbor interpolation.
+
+    Returns:
+        MergedImage or None if no frames contributed valid data.
+    """
+    from wamos_tpw.grid import remap_to_common_grid
+
+    accumulator = WindowAccumulator(
+        x_edges=grid_params["x_edges"],
+        y_edges=grid_params["y_edges"],
+        grid_spacing=grid_params["grid_spacing"],
+        utm_zone=grid_params["utm_zone"],
+        hemisphere=grid_params["hemisphere"],
+        center_lat=grid_params["center_lat"],
+        center_lon=grid_params["center_lon"],
+    )
+
+    for frame_data in frames:
+        proj_intensity = frame_data.get("projected_intensity")
+        if proj_intensity is None:
+            logger.debug(
+                "Frame (%d, %d) has no projected data",
+                frame_data.get("file_index", -1),
+                frame_data.get("frame_index", -1),
+            )
+            continue
+
+        headings = frame_data.get("headings")
+        mean_heading = float(np.mean(headings)) if headings is not None else 0.0
+
+        proj_count = frame_data.get("projected_count")
+        frame_gp = frame_data.get("grid_params") or {}
+
+        frame_x_edges = frame_gp.get("x_edges")
+        frame_y_edges = frame_gp.get("y_edges")
+        frame_center_lat = frame_gp.get("center_lat")
+        frame_center_lon = frame_gp.get("center_lon")
+
+        if (
+            frame_x_edges is not None
+            and frame_y_edges is not None
+            and frame_center_lat is not None
+            and frame_center_lon is not None
+        ):
+            ref_lat = grid_params["ref_lat"]
+            ref_lon = grid_params["ref_lon"]
+            m_per_deg_lon = grid_params["m_per_deg_lon"]
+
+            frame_center_x = (frame_center_lon - ref_lon) * m_per_deg_lon
+            frame_center_y = (frame_center_lat - ref_lat) * _DEG2M
+            frame_x_abs = frame_x_edges + frame_center_x
+            frame_y_abs = frame_y_edges + frame_center_y
+
+            frame_sum, frame_count = remap_to_common_grid(
+                proj_intensity,
+                proj_count,
+                frame_x_abs,
+                frame_y_abs,
+                grid_params["x_edges_abs"],
+                grid_params["y_edges_abs"],
+                grid_params["n_x"],
+                grid_params["n_y"],
+            )
+        else:
+            frame_sum = np.zeros(
+                (grid_params["n_y"], grid_params["n_x"]), dtype=np.float64
+            )
+            frame_count = np.zeros(
+                (grid_params["n_y"], grid_params["n_x"]), dtype=np.int32
+            )
+            if proj_intensity.shape == frame_sum.shape:
+                valid = ~np.isnan(proj_intensity)
+                frame_sum[valid] = proj_intensity[valid]
+                if proj_count is not None:
+                    frame_count[valid] = proj_count[valid]
+                else:
+                    frame_count[valid] = 1
+
+        accumulator.add_projected(
+            projected_intensity=frame_sum,
+            projected_count=frame_count,
+            timestamp=frame_data["timestamp"],
+            heading=mean_heading,
+            ship_speed=frame_data.get("ship_speed"),
+            wind_speed=frame_data.get("wind_speed"),
+            wind_direction=frame_data.get("wind_direction"),
+        )
+
+    if accumulator.n_frames == 0:
+        return None
+
+    return accumulator.finalize(
+        window_index=window_idx,
+        interpolate_gaps=interpolate_gaps,
+    )

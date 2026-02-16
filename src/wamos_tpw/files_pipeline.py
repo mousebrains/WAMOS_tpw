@@ -22,10 +22,9 @@ import numpy as np
 from wamos_tpw.grid import (
     compute_common_grid,
     compute_common_grid_from_stats,
-    remap_to_common_grid,
 )
 from wamos_tpw.merged_image import MergedImage, TimeWindowConfig
-from wamos_tpw.window import WindowAccumulator, create_time_windows
+from wamos_tpw.window import create_time_windows, merge_frames
 
 if TYPE_CHECKING:
     from wamos_tpw.config import Config
@@ -189,110 +188,15 @@ class FilesMergePipeline:
             )
         t_grid = time.perf_counter() - t0
 
-        # Create accumulator
-        accumulator = WindowAccumulator(
-            x_edges=grid_params["x_edges"],
-            y_edges=grid_params["y_edges"],
-            grid_spacing=grid_params["grid_spacing"],
-            utm_zone=grid_params["utm_zone"],
-            hemisphere=grid_params["hemisphere"],
-            center_lat=grid_params["center_lat"],
-            center_lon=grid_params["center_lon"],
-        )
-
-        # Project each frame onto the common grid
-        t_remap_total = 0.0
-        t_accum_total = 0.0
-        n_remapped = 0
-        n_fallback = 0
-        n_no_proj = 0
-
-        for frame_data in frames:
-            if "latitudes" not in frame_data:
-                continue
-
-            headings = frame_data.get("headings")
-            mean_heading = float(np.mean(headings)) if headings is not None else 0.0
-
-            if frame_data.get("projected_intensity") is not None:
-                proj_intensity = frame_data["projected_intensity"]
-                proj_count = frame_data.get("projected_count")
-                frame_grid_params = frame_data.get("grid_params", {})
-
-                frame_x_edges_centered = frame_grid_params.get("x_edges")
-                frame_y_edges_centered = frame_grid_params.get("y_edges")
-                frame_center_lat = frame_grid_params.get("center_lat")
-                frame_center_lon = frame_grid_params.get("center_lon")
-
-                if (
-                    frame_x_edges_centered is not None
-                    and frame_y_edges_centered is not None
-                    and frame_center_lat is not None
-                    and frame_center_lon is not None
-                ):
-                    ref_lat = grid_params["ref_lat"]
-                    ref_lon = grid_params["ref_lon"]
-                    m_per_deg_lon = grid_params["m_per_deg_lon"]
-
-                    frame_center_x = (frame_center_lon - ref_lon) * m_per_deg_lon
-                    frame_center_y = (frame_center_lat - ref_lat) * 111_319.5
-                    frame_x_edges_abs = frame_x_edges_centered + frame_center_x
-                    frame_y_edges_abs = frame_y_edges_centered + frame_center_y
-
-                    t0 = time.perf_counter()
-                    frame_sum, frame_count = remap_to_common_grid(
-                        proj_intensity,
-                        proj_count,
-                        frame_x_edges_abs,
-                        frame_y_edges_abs,
-                        grid_params["x_edges_abs"],
-                        grid_params["y_edges_abs"],
-                        grid_params["n_x"],
-                        grid_params["n_y"],
-                    )
-                    t_remap_total += time.perf_counter() - t0
-                    n_remapped += 1
-                else:
-                    frame_sum = np.zeros((grid_params["n_y"], grid_params["n_x"]), dtype=np.float64)
-                    frame_count = np.zeros((grid_params["n_y"], grid_params["n_x"]), dtype=np.int32)
-                    if proj_intensity.shape == frame_sum.shape:
-                        valid = ~np.isnan(proj_intensity)
-                        frame_sum[valid] = proj_intensity[valid]
-                        if proj_count is not None:
-                            frame_count[valid] = proj_count[valid]
-                        else:
-                            frame_count[valid] = 1
-                    n_fallback += 1
-            else:
-                logger.debug(
-                    "Frame (%d, %d) has no projected data",
-                    frame_data.get("file_index", -1),
-                    frame_data.get("frame_index", -1),
-                )
-                frame_sum = np.zeros((grid_params["n_y"], grid_params["n_x"]), dtype=np.float64)
-                frame_count = np.zeros((grid_params["n_y"], grid_params["n_x"]), dtype=np.int32)
-                n_no_proj += 1
-
-            t0 = time.perf_counter()
-            accumulator.add_projected(
-                projected_intensity=frame_sum,
-                projected_count=frame_count,
-                timestamp=frame_data["timestamp"],
-                heading=mean_heading,
-                ship_speed=frame_data.get("ship_speed"),
-                wind_speed=frame_data.get("wind_speed"),
-                wind_direction=frame_data.get("wind_direction"),
-            )
-            t_accum_total += time.perf_counter() - t0
-
+        # Remap frames onto the common grid and merge
         t0 = time.perf_counter()
-        result = None
-        if accumulator.n_frames >= self._window_config.min_frames_per_window:
-            result = accumulator.finalize(
-                window_index=window_idx,
-                interpolate_gaps=self._window_config.interpolate_gaps,
-            )
-        t_finalize = time.perf_counter() - t0
+        result = merge_frames(
+            frames,
+            grid_params,
+            window_idx=window_idx,
+            interpolate_gaps=self._window_config.interpolate_gaps,
+        )
+        t_merge = time.perf_counter() - t0
 
         t_total = time.perf_counter() - t0_merge
 
@@ -300,13 +204,8 @@ class FilesMergePipeline:
             {
                 "total": t_total,
                 "grid": t_grid,
-                "remap": t_remap_total,
-                "accumulate": t_accum_total,
-                "finalize": t_finalize,
+                "merge": t_merge,
                 "n_frames": len(frames),
-                "n_remapped": n_remapped,
-                "n_fallback": n_fallback,
-                "n_no_proj": n_no_proj,
                 "n_y": grid_params["n_y"],
                 "n_x": grid_params["n_x"],
                 "grid_spacing": grid_params["grid_spacing"],
@@ -722,31 +621,17 @@ class FilesMergePipeline:
                 n_win = len(self._merge_stats)
                 tot = [s["total"] for s in self._merge_stats]
                 t_grid = [s["grid"] for s in self._merge_stats]
-                t_remap = [s["remap"] for s in self._merge_stats]
-                t_accum = [s["accumulate"] for s in self._merge_stats]
-                t_final = [s["finalize"] for s in self._merge_stats]
+                t_merge = [s["merge"] for s in self._merge_stats]
                 n_frames = [s["n_frames"] for s in self._merge_stats]
-                n_remap = [s["n_remapped"] for s in self._merge_stats]
                 grids = [f"{s['n_y']}x{s['n_x']}" for s in self._merge_stats]
                 spacing = self._merge_stats[0]["grid_spacing"]
-
-                # Per-frame remap across all windows
-                total_remapped = sum(n_remap)
-                total_remap_time = sum(t_remap)
-                avg_remap_per_frame = (
-                    (total_remap_time / total_remapped * 1000) if total_remapped else 0
-                )
 
                 print(f"\nMerge Breakdown ({n_win} windows, grid ~{grids[0]} @ {spacing:.1f}m):")
                 print(
                     f"  Per window (mean):  {np.mean(tot) * 1000:.0f}ms total, {np.mean(n_frames):.0f} frames"
                 )
                 print(f"    compute_grid:  {np.mean(t_grid) * 1000:.1f}ms")
-                print(
-                    f"    remap:         {np.mean(t_remap) * 1000:.1f}ms ({avg_remap_per_frame:.1f}ms/frame, {total_remapped} total)"
-                )
-                print(f"    accumulate:    {np.mean(t_accum) * 1000:.1f}ms")
-                print(f"    finalize:      {np.mean(t_final) * 1000:.1f}ms")
+                print(f"    remap+merge:   {np.mean(t_merge) * 1000:.1f}ms")
                 print(f"  Per window (range): {min(tot) * 1000:.0f}–{max(tot) * 1000:.0f}ms")
 
             print("\nMemory Management:")
@@ -993,7 +878,7 @@ def _run_streaming(args, config) -> None:
     )
     from wamos_tpw.streaming_pipeline import StreamingMergePipeline
 
-    logging.info("Using streaming file discovery mode")
+    logger.info("Using streaming file discovery mode")
 
     # Pre-build ship data cache in main process so workers just memmap
     ship_data_dir = getattr(args, "ship_data", None)
@@ -1001,7 +886,7 @@ def _run_streaming(args, config) -> None:
         from wamos_tpw.instruments.ship_data import ShipData
 
         sd = ShipData(Path(ship_data_dir))
-        logging.info("Ship data: %s", sd)
+        logger.info("Ship data: %s", sd)
 
     # Set up memory monitoring if requested
     memory_monitor = None
@@ -1019,7 +904,7 @@ def _run_streaming(args, config) -> None:
         interpolate_gaps=args.interpolate,
     )
 
-    logging.info(
+    logger.info(
         "Window config: %.1fs duration, %.0f%% overlap, min %d frames, %.1fx resolution%s",
         window_config.window_seconds,
         window_config.overlap_fraction * 100,
@@ -1031,7 +916,7 @@ def _run_streaming(args, config) -> None:
     # Create output directory if specified
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-        logging.info("Output directory: %s", args.output_dir)
+        logger.info("Output directory: %s", args.output_dir)
 
     # Create streaming pipeline
     pipeline = StreamingMergePipeline(
@@ -1051,7 +936,7 @@ def _run_streaming(args, config) -> None:
         grid_spacing=getattr(args, "grid_spacing", None),
     )
 
-    logging.info("Created streaming pipeline with %d time windows", pipeline.n_windows)
+    logger.info("Created streaming pipeline with %d time windows", pipeline.n_windows)
 
     # Only accumulate merged images in memory when bulk output is requested
     needs_bulk = bool(args.mp4 or args.kml or args.kmz or args.plot)
@@ -1078,7 +963,7 @@ def _run_streaming(args, config) -> None:
             if args.geotiff:
                 write_geotiff(merged, args.output_dir)
 
-    logging.info("Created %d merged images (streaming mode)", n_merged)
+    logger.info("Created %d merged images (streaming mode)", n_merged)
 
     if memory_monitor:
         memory_monitor.checkpoint("After pipeline iteration")
@@ -1134,7 +1019,7 @@ def run(args) -> None:
     files = list(filenames)
 
     if not files:
-        logging.warning(
+        logger.warning(
             "No files found in %s for time range %s to %s",
             args.polar_path,
             args.stime,
@@ -1142,7 +1027,7 @@ def run(args) -> None:
         )
         return
 
-    logging.info("Found %d files", len(files))
+    logger.info("Found %d files", len(files))
 
     # Create window config
     window_config = TimeWindowConfig(
@@ -1153,7 +1038,7 @@ def run(args) -> None:
         interpolate_gaps=args.interpolate,
     )
 
-    logging.info(
+    logger.info(
         "Window config: %.1fs duration, %.0f%% overlap, min %d frames, %.1fx resolution%s",
         window_config.window_seconds,
         window_config.overlap_fraction * 100,
@@ -1165,7 +1050,7 @@ def run(args) -> None:
     # Create output directory if specified
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-        logging.info("Output directory: %s", args.output_dir)
+        logger.info("Output directory: %s", args.output_dir)
 
     # Pre-build ship data cache in main process so workers just memmap
     ship_data_dir = getattr(args, "ship_data", None)
@@ -1173,7 +1058,7 @@ def run(args) -> None:
         from wamos_tpw.instruments.ship_data import ShipData
 
         sd = ShipData(Path(ship_data_dir))
-        logging.info("Ship data: %s", sd)
+        logger.info("Ship data: %s", sd)
 
     # Create pipeline
     pipeline = FilesMergePipeline(
@@ -1191,7 +1076,7 @@ def run(args) -> None:
         grid_spacing=getattr(args, "grid_spacing", None),
     )
 
-    logging.info("Created %d time windows", pipeline.n_windows)
+    logger.info("Created %d time windows", pipeline.n_windows)
 
     # Only accumulate merged images in memory when bulk output is requested
     needs_bulk = bool(args.mp4 or args.kml or args.kmz or args.plot)
@@ -1218,7 +1103,7 @@ def run(args) -> None:
             if args.geotiff:
                 write_geotiff(merged, args.output_dir)
 
-    logging.info("Created %d merged images", n_merged)
+    logger.info("Created %d merged images", n_merged)
 
     if memory_monitor:
         memory_monitor.checkpoint("After pipeline iteration")

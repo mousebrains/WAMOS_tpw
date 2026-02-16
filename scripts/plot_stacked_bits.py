@@ -108,7 +108,7 @@ def load_frame_bits(args: tuple) -> tuple:
 
         return ts, result, frame.n_bearings
     except Exception as e:
-        logger.warning(f"Failed to load {fn}: {e}")
+        logger.warning("Failed to load %s: %s", fn, e)
         return None, None, None
 
 
@@ -171,13 +171,13 @@ def main():
         return 1
 
     signal_names = [f"b{bit}_d{dist:02d}" for bit, dist in signals]
-    logger.info(f"Plotting signals: {', '.join(signal_names)}")
+    logger.info("Plotting signals: %s", ', '.join(signal_names))
 
     # Parse figure size
     try:
         figsize = tuple(float(x) for x in args.figsize.split(","))
     except ValueError:
-        logger.error(f"Invalid figsize: {args.figsize}")
+        logger.error("Invalid figsize: %s", args.figsize)
         return 1
 
     # Load files
@@ -190,7 +190,7 @@ def main():
             logger.error("No files found in time range")
             return 1
 
-        logger.info(f"Loading {n_files} files with {args.workers or os.cpu_count()} workers")
+        logger.info("Loading %d files with %s workers", n_files, args.workers or os.cpu_count())
 
         # Load frames in parallel
         frames_data = {}
@@ -283,7 +283,7 @@ def main():
         print(f"Peak memory: {peak_mem_mb:.1f} MB")
 
     except (FileNotFoundError, ValueError, OSError) as e:
-        logger.exception(f"Error: {e}")
+        logger.exception("Error: %s", e)
         return 1
 
     return 0

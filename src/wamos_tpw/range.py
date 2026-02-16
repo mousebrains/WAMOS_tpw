@@ -15,6 +15,8 @@ from wamos_tpw.config import Config
 from wamos_tpw.constants import C_AIR
 from wamos_tpw.frame import Frame
 
+logger = logging.getLogger(__name__)
+
 __all__ = ["Range"]
 
 
@@ -82,7 +84,7 @@ class Range:
         """
         sfreq_mhz = self._frame.metadata.sampling_frequency
         if sfreq_mhz <= 0:
-            logging.warning(
+            logger.warning(
                 "Frame %s has sampling_frequency=%s MHz (expected > 0); "
                 "range resolution will be 0 and all bins will have the same slant range. "
                 "This likely indicates corrupt or missing metadata.",
@@ -233,7 +235,7 @@ def run(args) -> None:
     pf = PolarFile(args.filename, config=config)
 
     if not pf:
-        logging.error("No frames found in %s", args.filename)
+        logger.error("No frames found in %s", args.filename)
         return
 
     frame_idx = min(args.frame, len(pf) - 1)
@@ -243,21 +245,21 @@ def run(args) -> None:
     rng = Range(frame)
 
     # Display results
-    logging.info("File: %s", args.filename)
-    logging.info("Frame: %s (index %s)", frame.timestamp, frame_idx)
-    logging.info("Shape: %s", frame.shape)
-    logging.info("Radar height: %s m", rng.radar_height)
-    logging.info("Range bias (from config): %s m", rng.range_bias)
-    logging.info("Range resolution: %.4f m/bin", rng.range_resolution)
-    logging.info("Number of bins: %s", len(rng))
-    logging.info("Slant range: [%.2f, %.2f] m", rng.slant_range.min(), rng.slant_range.max())
-    logging.info("Ground range: [%.2f, %.2f] m", rng.ground_range.min(), rng.ground_range.max())
+    logger.info("File: %s", args.filename)
+    logger.info("Frame: %s (index %s)", frame.timestamp, frame_idx)
+    logger.info("Shape: %s", frame.shape)
+    logger.info("Radar height: %s m", rng.radar_height)
+    logger.info("Range bias (from config): %s m", rng.range_bias)
+    logger.info("Range resolution: %.4f m/bin", rng.range_resolution)
+    logger.info("Number of bins: %s", len(rng))
+    logger.info("Slant range: [%.2f, %.2f] m", rng.slant_range.min(), rng.slant_range.max())
+    logger.info("Ground range: [%.2f, %.2f] m", rng.ground_range.min(), rng.ground_range.max())
 
     # Show some sample values
     n_samples = min(5, len(rng))
-    logging.info("Sample range values (first %s bins):", n_samples)
+    logger.info("Sample range values (first %s bins):", n_samples)
     for i in range(n_samples):
-        logging.info(
+        logger.info(
             "  Bin %s: slant=%.2f m, ground=%.2f m",
             i,
             rng.slant_range_at_bin(i),

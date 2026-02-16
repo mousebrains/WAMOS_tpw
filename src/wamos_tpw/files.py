@@ -23,6 +23,8 @@ from wamos_tpw.frame import Frame
 from wamos_tpw.plotting import BaseViewer, calc_bin_edges, format_nav_title, quantile_limits
 from wamos_tpw.polarfile import load_polar_file
 
+logger = logging.getLogger(__name__)
+
 __all__ = ["Files"]
 
 
@@ -85,7 +87,7 @@ class Files:
         # Check GIL status for optimal parallelization
         self._gil_disabled = self._check_gil_status()
         if self._gil_disabled:
-            logging.info("GIL-free mode detected - using optimized parallelization")
+            logger.info("GIL-free mode detected - using optimized parallelization")
 
     @staticmethod
     def _check_gil_status() -> bool:
@@ -176,7 +178,7 @@ class Files:
                     result = future.result()
                     yield period, result
                 except Exception as e:
-                    logging.error(f"Error processing group {period}: {e}")
+                    logger.error("Error processing group %s: %s", period, e)
 
     def _process_group(
         self, period: np.datetime64, file_list: list[str], process_fn: Callable
@@ -224,7 +226,7 @@ class Files:
                     if frame is not None:
                         frames.append(frame)
                 except Exception as e:
-                    logging.error(f"Error loading {filepath}: {e}")
+                    logger.error("Error loading %s: %s", filepath, e)
 
         # Sort by timestamp
         frames.sort(key=lambda f: f.timestamp)
@@ -276,7 +278,7 @@ class Files:
         """
         n_files = len(self.files)
         if n_files >= self._LARGE_DATASET_THRESHOLD:
-            logging.warning(
+            logger.warning(
                 "load_all() loading %d files into memory. "
                 "Consider using itergroups() for streaming processing "
                 "to reduce memory usage.",
@@ -955,7 +957,7 @@ def run(args) -> None:
         if args.output_dir:
             output_path = Path(args.output_dir)
             output_path.mkdir(parents=True, exist_ok=True)
-            logging.info(f"Saving plots to: {output_path}")
+            logger.info("Saving plots to: %s", output_path)
 
     t0 = time.time()
 
@@ -968,17 +970,17 @@ def run(args) -> None:
     )
 
     t1 = time.time()
-    logging.info(f"Discovered {len(files)} files in {t1 - t0:.3f}s")
-    logging.debug(f"{files}")
+    logger.info("Discovered %d files in %.3fs", len(files), t1 - t0)
+    logger.debug("%s", files)
 
     if args.load or do_plot:
-        logging.info("Loading files by group...")
+        logger.info("Loading files by group...")
         t2 = time.time()
         total_frames = 0
         frames_collected = []  # Collect frames for interactive viewer
 
         for period, frames in files.itergroups():
-            logging.debug(f"  {period}: loaded {len(frames)} frames")
+            logger.debug("  %s: loaded %d frames", period, len(frames))
             total_frames += len(frames)
 
             if do_plot:
@@ -988,14 +990,14 @@ def run(args) -> None:
                     frames_collected.append(frame)
 
                 if len(frames_collected) >= args.max_frames:
-                    logging.info(f"Reached max frames ({args.max_frames}), stopping load.")
+                    logger.info("Reached max frames (%d), stopping load.", args.max_frames)
                     break
 
         t3 = time.time()
-        logging.info(f"Loaded {total_frames} frames in {t3 - t2:.3f}s")
+        logger.info("Loaded %d frames in %.3fs", total_frames, t3 - t2)
 
         if do_plot and frames_collected:
-            logging.info(f"Plotting {len(frames_collected)} frames...")
+            logger.info("Plotting %d frames...", len(frames_collected))
 
             # Load configuration if provided
             config = Config(args.config) if args.config else Config()
@@ -1009,8 +1011,8 @@ def run(args) -> None:
                     config=config,
                     view=args.view,
                 )
-                logging.info("Navigation: <- -> keys or Prev/Next buttons (wraps around)")
-                logging.info("Views: 1=Polar, 2=Ship, 3=Earth (or click buttons)")
+                logger.info("Navigation: <- -> keys or Prev/Next buttons (wraps around)")
+                logger.info("Views: 1=Polar, 2=Ship, 3=Earth (or click buttons)")
                 viewer.show()
 
             # File output mode or other plot types
@@ -1030,7 +1032,7 @@ def run(args) -> None:
                         )
                         fname = output_path / f"intensity_{ts_str}.png"
                         fig.savefig(fname, dpi=args.dpi, bbox_inches="tight")
-                        logging.debug(f"    Saved: {fname.name}")
+                        logger.debug("    Saved: %s", fname.name)
                         plt.close(fig)
 
                     # Plot top 4 bits
@@ -1039,7 +1041,7 @@ def run(args) -> None:
                         if args.output_dir:
                             fname = output_path / f"bits_{ts_str}.png"
                             fig.savefig(fname, dpi=args.dpi, bbox_inches="tight")
-                            logging.debug(f"    Saved: {fname.name}")
+                            logger.debug("    Saved: %s", fname.name)
                             plt.close(fig)
                         else:
                             plt.show()
@@ -1050,14 +1052,14 @@ def run(args) -> None:
                         if args.output_dir:
                             fname = output_path / f"bits_detail_{ts_str}.png"
                             fig.savefig(fname, dpi=args.dpi, bbox_inches="tight")
-                            logging.debug(f"    Saved: {fname.name}")
+                            logger.debug("    Saved: %s", fname.name)
                             plt.close(fig)
                         else:
                             plt.show()
 
                     frames_plotted += 1
 
-                logging.info(f"Plotted {frames_plotted} frames")
+                logger.info("Plotted %d frames", frames_plotted)
 
                 # Plot bits across all frames
                 if args.plot_bits_across and frames_collected:
@@ -1068,7 +1070,7 @@ def run(args) -> None:
                         bin_spec = args.distance_bins.replace(":", "-")
                         fname = output_path / f"bits_across_D{bin_spec}.png"
                         fig.savefig(fname, dpi=args.dpi, bbox_inches="tight")
-                        logging.debug(f"    Saved: {fname.name}")
+                        logger.debug("    Saved: %s", fname.name)
                         plt.close(fig)
                     else:
                         plt.show()

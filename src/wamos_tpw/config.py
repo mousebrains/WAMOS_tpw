@@ -450,11 +450,11 @@ def run(args) -> None:
     try:
         config = Config(args.config)
     except (OSError, yaml.YAMLError, ConfigError):
-        logging.exception("Failed to load configuration: %s", args)
+        logger.exception("Failed to load configuration: %s", args)
         return
 
     # Normal display mode
-    logging.info("Configuration: %s", config)
+    logger.info("Configuration: %s", config)
 
 
 from wamos_tpw.cli_utils import create_standalone_main  # noqa: E402

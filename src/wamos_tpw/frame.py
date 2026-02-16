@@ -220,8 +220,8 @@ class Frame:
         # Validate metadata consistency
         if metadata.samples_in_range > 0 and metadata.samples_in_range != n_distances:
             logger.warning(
-                f"Metadata samples_in_range ({metadata.samples_in_range}) doesn't "
-                f"match data shape ({n_distances})"
+                "Metadata samples_in_range (%d) doesn't match data shape (%d)",
+                metadata.samples_in_range, n_distances,
             )
 
         # Check for all-zero data (possible corruption)
@@ -251,7 +251,7 @@ class Frame:
 
         if metadata.heading is not None:
             if not 0 <= metadata.heading < 360:
-                logger.warning(f"Heading outside [0, 360): {metadata.heading}")
+                logger.warning("Heading outside [0, 360): %s", metadata.heading)
 
         if metadata.sampling_frequency is not None:
             if metadata.sampling_frequency < 0:

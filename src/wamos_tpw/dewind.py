@@ -82,6 +82,8 @@ from scipy.optimize import curve_fit
 from wamos_tpw.config import Config
 from wamos_tpw.theta import Theta
 
+logger = logging.getLogger(__name__)
+
 __all__ = ["Dewind", "DewindDiag"]
 
 
@@ -163,7 +165,7 @@ class Dewind:
             self._phi = popt[1]
         except RuntimeError:
             # Fit failed - use zero correction
-            logging.warning("Dewind sinusoidal fit failed, using zero correction")
+            logger.warning("Dewind sinusoidal fit failed, using zero correction")
             self._amplitude = 0.0
             self._phi = 0.0
 
@@ -380,7 +382,7 @@ def run(args) -> None:
     # Load polar file
     pf = PolarFile(args.filename, config=config)
     if not pf:
-        logging.warning("No frames in %s", args.filename)
+        logger.warning("No frames in %s", args.filename)
         return
 
     frame = pf.frame()
@@ -399,16 +401,16 @@ def run(args) -> None:
     dewind = Dewind(deramp.intensity, theta)
 
     # Display results
-    logging.info("File: %s", args.filename)
-    logging.info("Frame: %s", frame.timestamp)
-    logging.info("Shape: %s", frame.shape)
-    logging.info("Fit: amplitude=%.2f, phi=%.1f°", dewind.amplitude, dewind.phi_degrees)
-    logging.info(
+    logger.info("File: %s", args.filename)
+    logger.info("Frame: %s", frame.timestamp)
+    logger.info("Shape: %s", frame.shape)
+    logger.info("Fit: amplitude=%.2f, phi=%.1f°", dewind.amplitude, dewind.phi_degrees)
+    logger.info(
         "Pre-dewind intensity: [%.1f, %.1f]",
         np.nanmin(deramped_intensity),
         np.nanmax(deramped_intensity),
     )
-    logging.info(
+    logger.info(
         "Post-dewind intensity: [%.1f, %.1f]",
         np.nanmin(dewind.intensity),
         np.nanmax(dewind.intensity),

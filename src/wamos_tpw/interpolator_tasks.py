@@ -615,7 +615,8 @@ def _do_interpolate(task) -> Result:
         t6 = time.perf_counter()
         timings["proj_bincount"] = t6 - t3  # projection loop total
 
-        # Compute averaged intensity
+        # Compute averaged intensity (keep count for downstream merge)
+        projected_count = intensity_count
         with np.errstate(invalid="ignore"):
             projected_intensity = intensity_sum / intensity_count
         projected_intensity[intensity_count == 0] = np.nan
@@ -725,6 +726,7 @@ def _do_interpolate(task) -> Result:
         else 7.5,
         # Projected data (if do_projection=True)
         "projected_intensity": projected_intensity,
+        "projected_count": projected_count,
         "grid_params": grid_params,
         # Timings
         "timings": timings,

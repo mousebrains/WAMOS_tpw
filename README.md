@@ -40,7 +40,7 @@ wamos list 2022040514 2022040515 /path/to/POLAR
 wamos view 2022040514 2022040515 /path/to/POLAR --plot-intensity
 
 # 4. Process and merge frames into earth-referenced composites
-wamos files-pipeline 2022040514 2022040515 /path/to/POLAR \
+wamos stream-pipeline 2022040514 2022040515 /path/to/POLAR \
     --config config.yaml --ship-data ./output/ -o ./results/ --mp4 movie.mp4
 ```
 
