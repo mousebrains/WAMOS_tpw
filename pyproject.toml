@@ -129,6 +129,7 @@ select = ["E", "F", "W", "I", "UP", "B"]
 ignore = [
     "E501",   # Line too long
     "UP007",  # Use X | Y for Union (already using from __future__ import annotations)
+    "UP047",  # Use PEP 695 type params (TypeVar approach is fine)
 ]
 
 [tool.bandit]
