@@ -248,12 +248,3 @@ Custom exception hierarchy for error handling.
    :undoc-members:
    :show-inheritance:
 
-Type Definitions
-----------------
-
-Type aliases for scientific computing.
-
-.. automodule:: wamos_tpw._types
-   :members:
-   :undoc-members:
-   :show-inheritance:
