@@ -67,7 +67,16 @@ class FrameInterpolator:
         self._tolerance = tolerance
         self._timing_method: str = "linear"  # or "PPS(n)"
 
-        repeat_time = current.metadata.repeat_time or 1.43  # 1.43 is an approximation for Revelle
+        repeat_time = current.metadata.repeat_time
+        if not repeat_time:
+            repeat_time = self._DEFAULT_REPEAT_TIME
+            logger.warning(
+                "Frame %s has no repeat_time in metadata; "
+                "falling back to default %.2fs (R/V Revelle). "
+                "Set RPT in polar file header or config for other ships.",
+                current.metadata.filename,
+                repeat_time,
+            )
         max_dt = repeat_time * tolerance
 
         self._repeat_time = repeat_time

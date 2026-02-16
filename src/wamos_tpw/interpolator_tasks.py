@@ -18,6 +18,7 @@ import numpy as np
 if TYPE_CHECKING:
     from wamos_tpw.priority_executor import Result
 
+from wamos_tpw.grid import GridParams
 from wamos_tpw.interpolator import FrameData, FrameInterpolator
 
 logger = logging.getLogger(__name__)
@@ -223,7 +224,7 @@ def _write_frame_netcdf(
     netcdf_dir: str,
     timestamp: np.datetime64,
     projected_intensity: np.ndarray,
-    grid_params: dict,
+    grid_params: GridParams | dict,
     latitudes: np.ndarray,
     longitudes: np.ndarray,
     headings: np.ndarray,
@@ -631,17 +632,17 @@ def _do_interpolate(task) -> Result:
         utm_zone = int((center_lon + 180) / 6) % 60 + 1
         hemisphere = "north" if center_lat >= 0 else "south"
 
-        grid_params = {
-            "x_edges": x_edges - x_center,  # Centered coordinates
-            "y_edges": y_edges - y_center,
-            "grid_spacing": grid_spacing,
-            "utm_zone": utm_zone,
-            "hemisphere": hemisphere,
-            "center_lat": float(center_lat),
-            "center_lon": float(center_lon),
-            "n_x": n_x,
-            "n_y": n_y,
-        }
+        grid_params = GridParams(
+            x_edges=x_edges - x_center,  # Centered coordinates
+            y_edges=y_edges - y_center,
+            grid_spacing=grid_spacing,
+            utm_zone=utm_zone,
+            hemisphere=hemisphere,
+            center_lat=float(center_lat),
+            center_lon=float(center_lon),
+            n_x=n_x,
+            n_y=n_y,
+        )
 
         t7 = time.perf_counter()
         timings["proj_finalize"] = t7 - t6

@@ -41,14 +41,67 @@ Example::
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 
 __all__ = [
+    "GridParams",
     "compute_common_grid",
     "compute_common_grid_from_stats",
     "project_frame_to_common_grid",
     "remap_to_common_grid",
 ]
+
+
+@dataclass
+class GridParams:
+    """Parameters defining an equirectangular grid for radar frame projection.
+
+    Attributes:
+        x_edges: Grid edges in meters (centered around grid center).
+        y_edges: Grid edges in meters (centered around grid center).
+        grid_spacing: Cell size in meters.
+        utm_zone: UTM zone number (informational).
+        hemisphere: ``"north"`` or ``"south"`` (informational).
+        center_lat: Grid center latitude in degrees.
+        center_lon: Grid center longitude in degrees.
+        n_x: Number of grid cells in x direction.
+        n_y: Number of grid cells in y direction.
+        x_edges_abs: Grid edges in absolute equirectangular meters.
+        y_edges_abs: Grid edges in absolute equirectangular meters.
+        ref_lat: Reference latitude for equirectangular projection.
+        ref_lon: Reference longitude for equirectangular projection.
+        m_per_deg_lon: Meters per degree of longitude at ref_lat.
+    """
+
+    x_edges: np.ndarray
+    y_edges: np.ndarray
+    grid_spacing: float
+    utm_zone: int
+    hemisphere: str
+    center_lat: float
+    center_lon: float
+    n_x: int
+    n_y: int
+    x_edges_abs: np.ndarray | None = None
+    y_edges_abs: np.ndarray | None = None
+    ref_lat: float | None = None
+    ref_lon: float | None = None
+    m_per_deg_lon: float | None = None
+
+    def __getitem__(self, key: str):
+        """Allow dict-style access for backwards compatibility."""
+        return getattr(self, key)
+
+    def __contains__(self, key: str) -> bool:
+        """Allow ``'key' in grid_params`` for backwards compatibility."""
+        return hasattr(self, key) and getattr(self, key) is not None
+
+    def get(self, key: str, default=None):
+        """Allow dict-style .get() for backwards compatibility."""
+        return getattr(self, key, default)
+
 
 _DEG2M = 111_319.5  # meters per degree of latitude
 
@@ -65,7 +118,7 @@ def compute_common_grid(
     range_resolutions: list[float],
     padding: float = 1.1,
     resolution_scale: float = 1.0,
-) -> dict:
+) -> GridParams:
     """
     Compute a common equirectangular grid that covers all frames.
 
@@ -78,13 +131,7 @@ def compute_common_grid(
         resolution_scale: Grid resolution multiplier (2.0 = 2x finer grid)
 
     Returns:
-        Dictionary with grid parameters:
-        - x_edges, y_edges: Grid edges in meters (centered)
-        - grid_spacing: Cell size in meters
-        - utm_zone, hemisphere: Coordinate system info (informational)
-        - center_lat, center_lon: Grid center in degrees
-        - ref_lat, ref_lon: Reference point for equirectangular projection
-        - m_per_deg_lon: Meters per degree of longitude at ref_lat
+        GridParams with grid parameters.
     """
     # Get reference position (center of all data)
     all_lats = np.concatenate(latitudes)
@@ -131,22 +178,22 @@ def compute_common_grid(
     x_edges_centered = x_edges - x_center
     y_edges_centered = y_edges - y_center
 
-    return {
-        "x_edges": x_edges_centered,
-        "y_edges": y_edges_centered,
-        "x_edges_abs": x_edges,
-        "y_edges_abs": y_edges,
-        "grid_spacing": grid_spacing,
-        "utm_zone": utm_zone,
-        "hemisphere": hemisphere,
-        "center_lat": float(center_lat),
-        "center_lon": float(center_lon),
-        "ref_lat": ref_lat,
-        "ref_lon": ref_lon,
-        "m_per_deg_lon": m_per_deg_lon,
-        "n_x": n_x,
-        "n_y": n_y,
-    }
+    return GridParams(
+        x_edges=x_edges_centered,
+        y_edges=y_edges_centered,
+        x_edges_abs=x_edges,
+        y_edges_abs=y_edges,
+        grid_spacing=grid_spacing,
+        utm_zone=utm_zone,
+        hemisphere=hemisphere,
+        center_lat=float(center_lat),
+        center_lon=float(center_lon),
+        ref_lat=ref_lat,
+        ref_lon=ref_lon,
+        m_per_deg_lon=m_per_deg_lon,
+        n_x=n_x,
+        n_y=n_y,
+    )
 
 
 def compute_common_grid_from_stats(
@@ -155,7 +202,7 @@ def compute_common_grid_from_stats(
     range_resolutions: list[float],
     padding: float = 1.1,
     resolution_scale: float = 1.0,
-) -> dict:
+) -> GridParams:
     """
     Compute a common equirectangular grid from per-frame position statistics.
 
@@ -173,7 +220,7 @@ def compute_common_grid_from_stats(
         resolution_scale: Grid resolution multiplier (2.0 = 2x finer grid)
 
     Returns:
-        Dictionary with grid parameters (same as compute_common_grid)
+        GridParams with grid parameters (same as compute_common_grid).
     """
     if not position_stats:
         raise ValueError("position_stats cannot be empty")
@@ -232,22 +279,22 @@ def compute_common_grid_from_stats(
     x_edges_centered = x_edges - x_center
     y_edges_centered = y_edges - y_center
 
-    return {
-        "x_edges": x_edges_centered,
-        "y_edges": y_edges_centered,
-        "x_edges_abs": x_edges,
-        "y_edges_abs": y_edges,
-        "grid_spacing": grid_spacing,
-        "utm_zone": utm_zone,
-        "hemisphere": hemisphere,
-        "center_lat": float(center_lat),
-        "center_lon": float(center_lon),
-        "ref_lat": ref_lat,
-        "ref_lon": ref_lon,
-        "m_per_deg_lon": m_per_deg_lon,
-        "n_x": n_x,
-        "n_y": n_y,
-    }
+    return GridParams(
+        x_edges=x_edges_centered,
+        y_edges=y_edges_centered,
+        x_edges_abs=x_edges,
+        y_edges_abs=y_edges,
+        grid_spacing=grid_spacing,
+        utm_zone=utm_zone,
+        hemisphere=hemisphere,
+        center_lat=float(center_lat),
+        center_lon=float(center_lon),
+        ref_lat=ref_lat,
+        ref_lon=ref_lon,
+        m_per_deg_lon=m_per_deg_lon,
+        n_x=n_x,
+        n_y=n_y,
+    )
 
 
 # =============================================================================
@@ -262,7 +309,7 @@ def _project_frame_numpy(
     latitudes: np.ndarray,
     longitudes: np.ndarray,
     headings: np.ndarray,
-    grid_params: dict,
+    grid_params: GridParams | dict,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Pure NumPy implementation of frame projection.
@@ -604,7 +651,7 @@ try:
         latitudes: np.ndarray,
         longitudes: np.ndarray,
         headings: np.ndarray,
-        grid_params: dict,
+        grid_params: GridParams | dict,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Numba-accelerated frame projection."""
         ref_lat = grid_params["ref_lat"]

@@ -24,21 +24,21 @@ class TestComputeCommonGrid:
 
         result = compute_common_grid(latitudes, longitudes, max_ranges, range_resolutions)
 
-        # Check all expected keys are present
-        assert "x_edges" in result
-        assert "y_edges" in result
-        assert "x_edges_abs" in result
-        assert "y_edges_abs" in result
-        assert "grid_spacing" in result
-        assert "utm_zone" in result
-        assert "hemisphere" in result
-        assert "center_lat" in result
-        assert "center_lon" in result
-        assert "ref_lat" in result
-        assert "ref_lon" in result
-        assert "m_per_deg_lon" in result
-        assert "n_x" in result
-        assert "n_y" in result
+        # Check all expected attributes are present
+        assert hasattr(result, "x_edges")
+        assert hasattr(result, "y_edges")
+        assert hasattr(result, "x_edges_abs")
+        assert hasattr(result, "y_edges_abs")
+        assert hasattr(result, "grid_spacing")
+        assert hasattr(result, "utm_zone")
+        assert hasattr(result, "hemisphere")
+        assert hasattr(result, "center_lat")
+        assert hasattr(result, "center_lon")
+        assert hasattr(result, "ref_lat")
+        assert hasattr(result, "ref_lon")
+        assert hasattr(result, "m_per_deg_lon")
+        assert hasattr(result, "n_x")
+        assert hasattr(result, "n_y")
 
     def test_grid_spacing_matches_resolution(self):
         """Test that grid spacing matches input range resolution."""

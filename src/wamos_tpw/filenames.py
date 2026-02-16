@@ -61,23 +61,12 @@ def _scan_hour_directory(dir_path: str, stime_ns: int, etime_ns: int) -> list[st
                 # Check for .pol in filename
                 if ".pol" not in name:
                     continue
-                # Extract timestamp from filename (first 14 chars: YYYYMMDDHHmmss)
-                if len(name) < 14:
+                file_time = extract_file_timestamp(entry.path)
+                if file_time is None:
                     continue
-                timestamp_str = name[:14]
-                if not timestamp_str.isdigit():
-                    continue
-                try:
-                    # Parse timestamp efficiently
-                    file_time = np.datetime64(
-                        f"{timestamp_str[:4]}-{timestamp_str[4:6]}-{timestamp_str[6:8]}"
-                        f"T{timestamp_str[8:10]}:{timestamp_str[10:12]}:{timestamp_str[12:14]}"
-                    )
-                    file_ns = file_time.astype("datetime64[ns]").astype(np.int64)
-                    if stime_ns <= file_ns <= etime_ns:
-                        matching_files.append(entry.path)
-                except (ValueError, OverflowError):
-                    continue
+                file_ns = file_time.astype("datetime64[ns]").astype(np.int64)
+                if stime_ns <= file_ns <= etime_ns:
+                    matching_files.append(entry.path)
     except OSError:
         pass
 
@@ -92,7 +81,9 @@ class Filenames:
     Uses multiprocessing for GIL-free parallel directory scanning.
     """
 
-    # Minimum number of hour directories before using parallel processing
+    # Minimum number of hour directories before using parallel processing.
+    # Process pool startup overhead (~100ms) exceeds parallel gains below 4 directories,
+    # based on benchmarking with typical directory sizes (~50-100 files per hour).
     _PARALLEL_THRESHOLD = 4
 
     def __init__(

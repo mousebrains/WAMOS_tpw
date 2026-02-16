@@ -82,6 +82,13 @@ class Range:
         """
         sfreq_mhz = self._frame.metadata.sampling_frequency
         if sfreq_mhz <= 0:
+            logging.warning(
+                "Frame %s has sampling_frequency=%s MHz (expected > 0); "
+                "range resolution will be 0 and all bins will have the same slant range. "
+                "This likely indicates corrupt or missing metadata.",
+                self._frame.metadata.filename,
+                sfreq_mhz,
+            )
             return 0.0
         # Convert MHz to Hz
         sfreq_hz = sfreq_mhz * 1e6
