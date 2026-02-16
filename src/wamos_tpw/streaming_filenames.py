@@ -603,7 +603,10 @@ def run(args) -> None:
             elapsed = time.time() - t0
             logger.info(
                 "Batch %d: %d files, total %d, elapsed %.1fs",
-                total_batches, len(batch.files), total_files, elapsed,
+                total_batches,
+                len(batch.files),
+                total_files,
+                elapsed,
             )
 
     t1 = time.time()

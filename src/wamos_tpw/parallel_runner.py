@@ -343,7 +343,12 @@ def display_timing_stats(all_timings: dict[str, list[float]]) -> None:
         pct = (sum(vals) / total_time * 100) if total_time > 0 else 0
         logger.info(
             "    %-12s %10.2f %10.2f %10.2f %10.2f %6.1f",
-            key, arr.mean(), arr.std(), arr.min(), arr.max(), pct,
+            key,
+            arr.mean(),
+            arr.std(),
+            arr.min(),
+            arr.max(),
+            pct,
         )
 
 

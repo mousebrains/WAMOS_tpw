@@ -171,7 +171,7 @@ def main():
         return 1
 
     signal_names = [f"b{bit}_d{dist:02d}" for bit, dist in signals]
-    logger.info("Plotting signals: %s", ', '.join(signal_names))
+    logger.info("Plotting signals: %s", ", ".join(signal_names))
 
     # Parse figure size
     try:

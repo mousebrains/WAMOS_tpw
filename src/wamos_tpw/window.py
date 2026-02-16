@@ -373,12 +373,8 @@ def merge_frames(
                 grid_params["n_y"],
             )
         else:
-            frame_sum = np.zeros(
-                (grid_params["n_y"], grid_params["n_x"]), dtype=np.float64
-            )
-            frame_count = np.zeros(
-                (grid_params["n_y"], grid_params["n_x"]), dtype=np.int32
-            )
+            frame_sum = np.zeros((grid_params["n_y"], grid_params["n_x"]), dtype=np.float64)
+            frame_count = np.zeros((grid_params["n_y"], grid_params["n_x"]), dtype=np.int32)
             if proj_intensity.shape == frame_sum.shape:
                 valid = ~np.isnan(proj_intensity)
                 frame_sum[valid] = proj_intensity[valid]

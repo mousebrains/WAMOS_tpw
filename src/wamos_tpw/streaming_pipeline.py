@@ -520,8 +520,10 @@ class StreamingMergePipeline:
         logger.info(
             "Streaming pipeline complete: %d files discovered, "
             "%d processed, %d windows merged in %.1fs",
-            self._n_files_discovered, self._n_files_processed,
-            self._n_merged, elapsed,
+            self._n_files_discovered,
+            self._n_files_processed,
+            self._n_merged,
+            elapsed,
         )
 
         # Yield any remaining results

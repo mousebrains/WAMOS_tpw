@@ -221,7 +221,8 @@ class Frame:
         if metadata.samples_in_range > 0 and metadata.samples_in_range != n_distances:
             logger.warning(
                 "Metadata samples_in_range (%d) doesn't match data shape (%d)",
-                metadata.samples_in_range, n_distances,
+                metadata.samples_in_range,
+                n_distances,
             )
 
         # Check for all-zero data (possible corruption)
