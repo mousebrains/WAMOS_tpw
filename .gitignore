@@ -43,6 +43,7 @@ htmlcov/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.hypothesis/
 
 # Documentation builds
 docs/_build/
@@ -55,6 +56,7 @@ Thumbs.db
 *.kml
 *.kmz
 *.mp4
+*.nc
 *.png
 *.jpg
 *.gif
