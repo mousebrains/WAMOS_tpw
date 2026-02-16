@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import queue as _queue
 import threading
 import time
@@ -104,7 +105,7 @@ class StreamingMergePipeline:
         self._polar_path = polar_path
         self._config = config
         self._window_config = window_config or TimeWindowConfig()
-        self._n_workers = n_workers
+        self._n_workers = n_workers or os.cpu_count() or 4
         self._tolerance = tolerance
         self._qTiming = qTiming
         self._qProgress = qProgress
@@ -197,14 +198,14 @@ class StreamingMergePipeline:
             self._stime,
             self._etime,
             self._polar_path,
-            workers=max(2, (self._n_workers or 4) // 2),  # Use some workers for discovery
+            workers=max(2, self._n_workers // 2),  # Use some workers for discovery
         )
         streaming.start()
 
         t0_total = time.perf_counter()
 
         # Backpressure control
-        max_pending = int((self._n_workers or 4) * self._pending_multiplier)
+        max_pending = int(self._n_workers * self._pending_multiplier)
         pending_files = 0
         pending_interp = 0
 
