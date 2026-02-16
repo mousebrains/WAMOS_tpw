@@ -9,8 +9,9 @@ from __future__ import annotations
 import logging
 
 import numpy as np
-from wamos_tpw.frame import Frame
+
 from wamos_tpw.config import Config
+from wamos_tpw.frame import Frame
 
 
 class PPS:

@@ -4,8 +4,8 @@
 import numpy as np
 
 from wamos_tpw.config import Config
-from wamos_tpw.files_pipeline import FilesMergePipeline
 from wamos_tpw.filenames import extract_file_timestamp
+from wamos_tpw.files_pipeline import FilesMergePipeline
 from wamos_tpw.grid import compute_common_grid, remap_to_common_grid
 from wamos_tpw.merged_image import MergedImage, TimeWindowConfig
 from wamos_tpw.window import WindowAccumulator, create_time_windows

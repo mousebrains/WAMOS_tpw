@@ -31,10 +31,11 @@ src_path = Path(__file__).parent.parent / "src"
 if src_path.exists():
     sys.path.insert(0, str(src_path))
 
+from wamos_tpw.timestamp import TimingSignalExtractor  # noqa: E402
+
 from wamos_tpw import Filenames, PolarFile  # noqa: E402
 from wamos_tpw.filenames import add_common_arguments  # noqa: E402
 from wamos_tpw.logging_config import add_logging_arguments, setup_logging  # noqa: E402
-from wamos_tpw.timestamp import TimingSignalExtractor  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

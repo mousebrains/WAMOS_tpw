@@ -13,7 +13,6 @@ import sys
 
 from wamos_tpw.logging_config import add_logging_arguments, setup_logging
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -132,6 +131,13 @@ def _run_all(args) -> None:
             logger.info("%s -> %s", name, result)
         except Exception:
             logger.exception("Failed to process %s", name)
+
+    # Pre-build the .npy memmap cache used by ShipData in worker processes
+    logger.info("Building ShipData cache...")
+    from wamos_tpw.instruments.ship_data import ShipData
+
+    sd = ShipData(output_dir)
+    logger.info("ShipData cache ready: %s", sd)
 
 
 if __name__ == "__main__":

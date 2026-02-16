@@ -12,11 +12,11 @@ import pytest
 
 # Skip entire module if hypothesis is not installed
 hypothesis = pytest.importorskip("hypothesis")
-from hypothesis import given, strategies as st, settings, assume  # noqa: E402
+from hypothesis import assume, given, settings  # noqa: E402
+from hypothesis import strategies as st  # noqa: E402
 
 from wamos_tpw.config import Config, NullConfig  # noqa: E402
 from wamos_tpw.merged_image import TimeWindowConfig  # noqa: E402
-
 
 # =============================================================================
 # Strategies for generating test data

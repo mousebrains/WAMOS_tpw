@@ -22,24 +22,25 @@ import logging
 import os
 import sys
 import time
-import yaml
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import yaml
 
 # Add src to path for development
 src_path = Path(__file__).parent.parent / "src"
 if src_path.exists():
     sys.path.insert(0, str(src_path))
 
-from wamos_tpw import Filenames, PolarFrame  # noqa: E402
 from wamos_tpw.args import add_time_range_arguments  # noqa: E402
+
+from wamos_tpw import Filenames, PolarFrame  # noqa: E402
 from wamos_tpw.destreak import Destreak  # noqa: E402
-from wamos_tpw.theta import Theta  # noqa: E402
-from wamos_tpw.shadow import Shadow  # noqa: E402
 from wamos_tpw.logging_config import add_logging_arguments, setup_logging  # noqa: E402
+from wamos_tpw.shadow import Shadow  # noqa: E402
+from wamos_tpw.theta import Theta  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -823,7 +824,7 @@ class Config:
 
     def __init__(self, filename: str) -> None:
         try:
-            with open(filename, "r") as f:
+            with open(filename) as f:
                 self._config = yaml.safe_load(f)
         except Exception:
             self._config = {}

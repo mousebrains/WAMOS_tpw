@@ -23,7 +23,7 @@ _DEFAULT_CONFIG = "default_wamos.yaml"
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["Config", "WamosConfig", "ConfigSchema", "NullConfig"]
+__all__ = ["Config", "ConfigSchema", "NullConfig"]
 
 
 # =============================================================================
@@ -96,6 +96,7 @@ class ConfigSchema:
     Used for validation at load time to catch configuration errors early.
     """
 
+    time_shift: float = 0.0  # Timestamp correction in seconds (added to frame timestamps)
     theta_refinement: ThetaRefinementSchema = field(default_factory=ThetaRefinementSchema)
     shadow: ShadowSchema = field(default_factory=ShadowSchema)
     bias: BiasSchema = field(default_factory=BiasSchema)
@@ -107,6 +108,7 @@ class ConfigSchema:
 # Type mapping for validation
 # Note: YAML doesn't distinguish int/float for whole numbers, so numeric types accept both
 _TYPE_MAP = {
+    "time_shift": (int, float),
     "theta_refinement.enabled": bool,
     "theta_refinement.min_frames": int,
     "shadow.range_fraction": (int, float),
@@ -335,8 +337,8 @@ class Config:
             raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
         try:
             return self[name]
-        except KeyError:
-            raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
+        except KeyError as e:
+            raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'") from e
 
     def update(self, rhs: dict | Config) -> None:
         """Update configuration with another dictionary."""
@@ -387,9 +389,9 @@ class NullConfig(Config):
     Config : Full configuration with file loading and validation.
     """
 
-    _instance: "NullConfig | None" = None
+    _instance: NullConfig | None = None
 
-    def __new__(cls) -> "NullConfig":
+    def __new__(cls) -> NullConfig:
         """Singleton pattern - only one NullConfig instance needed."""
         if cls._instance is None:
             cls._instance = super().__new__(cls)
@@ -447,7 +449,7 @@ def run(args) -> None:
     # Load configuration
     try:
         config = Config(args.config)
-    except Exception:
+    except (OSError, yaml.YAMLError, ConfigError):
         logging.exception("Failed to load configuration: %s", args)
         return
 
@@ -458,10 +460,6 @@ def run(args) -> None:
 from wamos_tpw.cli_utils import create_standalone_main  # noqa: E402
 
 main = create_standalone_main(_add_arguments, run, "Test WAMOS configuration loading")
-
-# Backward compatibility alias
-WamosConfig = Config
-
 
 if __name__ == "__main__":
     main()

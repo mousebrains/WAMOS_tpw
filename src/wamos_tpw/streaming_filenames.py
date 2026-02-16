@@ -13,12 +13,12 @@ import logging
 import os
 import threading
 from collections import defaultdict
+from collections.abc import Iterator
 from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 from queue import Empty, Queue
-from typing import Iterator
 
 import numpy as np
 
@@ -252,7 +252,7 @@ class StreamingFilenames:
             with ProcessPoolExecutor(max_workers=self.workers) as executor:
                 # Submit all directories
                 future_to_idx: dict[Future, int] = {}
-                for idx, (dir_path, hour_start_ns, hour_end_ns) in enumerate(hour_dirs):
+                for idx, (dir_path, _hour_start_ns, _hour_end_ns) in enumerate(hour_dirs):
                     if self._stop_event.is_set():
                         break
                     future = executor.submit(scan_func, dir_path)
@@ -405,7 +405,7 @@ class StreamingFilenames:
         for batch in self.iter_batches(timeout=timeout):
             yield from batch.files
 
-    def __enter__(self) -> "StreamingFilenames":
+    def __enter__(self) -> StreamingFilenames:
         """Context manager entry - starts discovery."""
         self.start()
         return self
@@ -510,7 +510,7 @@ class WindowTracker:
             List of window indices newly marked as discovery-complete
         """
         newly_complete = []
-        for start_ns, end_ns, window_idx in self._window_bounds_ns:
+        for _start_ns, end_ns, window_idx in self._window_bounds_ns:
             if window_idx not in self._window_discovery_complete:
                 if end_ns <= time_ns:
                     self._window_discovery_complete.add(window_idx)

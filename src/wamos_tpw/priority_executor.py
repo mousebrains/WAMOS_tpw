@@ -12,11 +12,12 @@ from __future__ import annotations
 import logging
 import multiprocessing as mp
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import IntEnum
 from multiprocessing import shared_memory
 from queue import Empty
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 

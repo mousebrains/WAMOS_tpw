@@ -14,13 +14,21 @@ import numpy as np
 from pyproj import CRS, Transformer
 
 if TYPE_CHECKING:
-    from wamos_tpw.interpolator import FrameInterpolator
     from wamos_tpw.frame_pipeline import FramePipeline
+    from wamos_tpw.interpolator import FrameInterpolator
 
 logger = logging.getLogger(__name__)
 
 # Earth radius in meters (WGS84 mean radius)
 EARTH_RADIUS = 6371000.0
+
+
+def _circular_mean(angles: np.ndarray) -> float:
+    """Calculate circular mean of angles in degrees."""
+    angles_rad = np.deg2rad(angles)
+    mean_sin = np.mean(np.sin(angles_rad))
+    mean_cos = np.mean(np.cos(angles_rad))
+    return float(np.rad2deg(np.arctan2(mean_sin, mean_cos)) % 360)
 
 
 def get_utm_zone(longitude: float) -> int:
@@ -406,8 +414,8 @@ def project_to_utm(
     y_coords = np.outer(cos_bearing, ground_range) + ship_y[:, np.newaxis]
 
     # Convert to grid indices
-    x_idx = ((x_coords - x_origin) * inv_spacing).astype(np.int32)
-    y_idx = ((y_coords - y_origin) * inv_spacing).astype(np.int32)
+    x_idx = ((x_coords - x_origin) * inv_spacing).astype(np.int64)
+    y_idx = ((y_coords - y_origin) * inv_spacing).astype(np.int64)
 
     # Flatten arrays
     x_flat = x_idx.ravel()
@@ -606,7 +614,7 @@ def create_earth_grid(
 
 def project_frame_to_grid(
     grid: EarthGrid,
-    frame: "FramePipeline",
+    frame: FramePipeline,
     latitudes: np.ndarray,
     longitudes: np.ndarray,
     headings: np.ndarray,
@@ -658,8 +666,8 @@ def project_frame_to_grid(
     y_coords = np.outer(cos_bearing, ground_range) + ship_y[:, np.newaxis]
 
     # Convert to grid indices
-    x_idx = ((x_coords - x_origin) * inv_spacing).astype(np.int32)
-    y_idx = ((y_coords - y_origin) * inv_spacing).astype(np.int32)
+    x_idx = ((x_coords - x_origin) * inv_spacing).astype(np.int64)
+    y_idx = ((y_coords - y_origin) * inv_spacing).astype(np.int64)
 
     # Flatten arrays
     x_flat = x_idx.ravel()
@@ -686,7 +694,7 @@ def project_frame_to_grid(
 
 def project_frames_to_grid(
     grid: EarthGrid,
-    frames: list["FramePipeline"],
+    frames: list[FramePipeline],
     latitudes: list[np.ndarray],
     longitudes: list[np.ndarray],
     headings: list[np.ndarray],
@@ -712,8 +720,8 @@ def project_frames_to_grid(
 
 def create_projection_result(
     grid: EarthGrid,
-    frames: list["FramePipeline"],
-    interpolators: list["FrameInterpolator"],
+    frames: list[FramePipeline],
+    interpolators: list[FrameInterpolator],
     headings: list[np.ndarray],
 ) -> ProjectionResult:
     """
@@ -919,7 +927,7 @@ class ProjectionDiagnostics:
 
         # Add statistics
         mean_speed = np.mean(speeds)
-        mean_heading = self._circular_mean(result.ship_headings)
+        mean_heading = _circular_mean(result.ship_headings)
         ax.text(
             0.5,
             -0.15,
@@ -957,7 +965,7 @@ class ProjectionDiagnostics:
 
         # Add statistics
         mean_speed = np.mean(speeds)
-        mean_dir = self._circular_mean(result.wind_directions)
+        mean_dir = _circular_mean(result.wind_directions)
         ax.text(
             0.5,
             -0.15,
@@ -994,13 +1002,6 @@ class ProjectionDiagnostics:
         ax.set_xlabel("Time (s)")
         ax.set_title("Time Series")
         ax.grid(True, alpha=0.3)
-
-    def _circular_mean(self, angles: np.ndarray) -> float:
-        """Calculate circular mean of angles in degrees."""
-        angles_rad = np.deg2rad(angles)
-        mean_sin = np.mean(np.sin(angles_rad))
-        mean_cos = np.mean(np.cos(angles_rad))
-        return np.rad2deg(np.arctan2(mean_sin, mean_cos)) % 360
 
     def plot_intensity_only(
         self,
@@ -1401,7 +1402,7 @@ class ProjectionViewer:
 
         # Compact title inside the plot
         mean_speed = np.mean(speeds)
-        mean_heading = self._circular_mean(result.ship_headings)
+        mean_heading = _circular_mean(result.ship_headings)
         ax.set_title(f"Ship\n{mean_speed:.1f}m/s @ {mean_heading:.0f}\u00b0", fontsize=7, pad=2)
 
         # Make tick labels smaller
@@ -1421,7 +1422,7 @@ class ProjectionViewer:
 
         # Compact title inside the plot
         mean_speed = np.mean(speeds)
-        mean_dir = self._circular_mean(result.wind_directions)
+        mean_dir = _circular_mean(result.wind_directions)
         ax.set_title(f"Wind\n{mean_speed:.1f}m/s from {mean_dir:.0f}\u00b0", fontsize=7, pad=2)
 
         # Make tick labels smaller
@@ -1451,13 +1452,6 @@ class ProjectionViewer:
         ax.set_xlabel("Time (s)")
         ax.set_title("Time Series")
         ax.grid(True, alpha=0.3)
-
-    def _circular_mean(self, angles: np.ndarray) -> float:
-        """Calculate circular mean of angles in degrees."""
-        angles_rad = np.deg2rad(angles)
-        mean_sin = np.mean(np.sin(angles_rad))
-        mean_cos = np.mean(np.cos(angles_rad))
-        return np.rad2deg(np.arctan2(mean_sin, mean_cos)) % 360
 
     def _on_back(self, event) -> None:
         """Handle back button click."""
@@ -1653,7 +1647,7 @@ class InterpolatorViewer:
 
     def show(
         self,
-        figsize: tuple[float, float] = (12, 10),
+        figsize: tuple[float, float] = (10, 10),
         cmap: str = "viridis",
         vmin: float | None = None,
         vmax: float | None = None,
@@ -1685,9 +1679,12 @@ class InterpolatorViewer:
         # Enable interactive mode for non-blocking display
         plt.ion()
 
-        # Create figure
-        self._fig, self._ax_main = plt.subplots(figsize=figsize)
-        plt.subplots_adjust(bottom=0.12)
+        # Create figure with manually-positioned square axes so the colorbar
+        # cannot steal space from the main plot.
+        self._fig = plt.figure(figsize=figsize)
+        #                       left  bot   w     h
+        self._ax_main = self._fig.add_axes([0.07, 0.12, 0.78, 0.78])
+        self._cax = self._fig.add_axes([0.87, 0.12, 0.025, 0.78])
 
         # Create navigation buttons
         btn_width = 0.08
@@ -1769,7 +1766,7 @@ class InterpolatorViewer:
 
         self._ax_main.set_xlabel("Distance East (m)")
         self._ax_main.set_ylabel("Distance North (m)")
-        self._ax_main.set_aspect("equal")
+        self._ax_main.set_aspect("equal", adjustable="datalim")
 
         # Add range rings every 1km
         max_extent = max(
@@ -1796,11 +1793,9 @@ class InterpolatorViewer:
                     va="center",
                 )
 
-        # Add colorbar (only on first update)
+        # Add colorbar in dedicated axes (doesn't steal from main plot)
         if self._colorbar is None:
-            self._colorbar = self._fig.colorbar(
-                self._im, ax=self._ax_main, label="Intensity", shrink=0.8
-            )
+            self._colorbar = self._fig.colorbar(self._im, cax=self._cax, label="Intensity")
         else:
             self._colorbar.update_normal(self._im)
 

@@ -1,7 +1,8 @@
 """Tests for Destreak class."""
 
-import pytest
 from pathlib import Path
+
+import pytest
 
 from wamos_tpw.destreak import Destreak
 from wamos_tpw.polarfile import PolarFile

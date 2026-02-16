@@ -1,8 +1,9 @@
 """Tests for Files class."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
-from pathlib import Path
 
 from wamos_tpw.files import Files
 
@@ -182,7 +183,7 @@ class TestFiles:
             stime="20220405140000", etime="20220405143000", polar_path=str(test_data_dir), workers=1
         )
 
-        for period, frames in files.itergroups():
+        for _period, frames in files.itergroups():
             assert isinstance(frames, list)
 
     def test_files_check_gil_status(self):

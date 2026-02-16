@@ -12,8 +12,8 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +155,7 @@ class MemoryMonitor:
             if self._on_sample:
                 self._on_sample(elapsed, current_mb)
 
-    def __enter__(self) -> "MemoryMonitor":
+    def __enter__(self) -> MemoryMonitor:
         """Start monitoring."""
         self._start_time = time.perf_counter()
         self._stats.start_mb = get_memory_mb()

@@ -368,11 +368,11 @@ def add_subparser(subparsers) -> None:
 
 def run(args) -> None:
     """Execute the 'dewind' command."""
-    from wamos_tpw.polarfile import PolarFile
-    from wamos_tpw.destreak import Destreak
-    from wamos_tpw.shadow import Shadow
-    from wamos_tpw.range import Range
     from wamos_tpw.deramp import Deramp
+    from wamos_tpw.destreak import Destreak
+    from wamos_tpw.polarfile import PolarFile
+    from wamos_tpw.range import Range
+    from wamos_tpw.shadow import Shadow
 
     # Load config
     config = Config(args.config) if args.config else Config()

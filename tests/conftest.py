@@ -1,7 +1,8 @@
 """Shared pytest fixtures for wamos_tpw tests."""
 
-import pytest
 from pathlib import Path
+
+import pytest
 
 
 @pytest.fixture(scope="session")

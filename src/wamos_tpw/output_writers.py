@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 def _compute_global_percentiles(
-    merged_images: list["MergedImage"],
+    merged_images: list[MergedImage],
     low: float = 2.0,
     high: float = 98.0,
     max_samples_per_image: int = 10_000,
@@ -235,7 +235,7 @@ def _draw_range_rings(ax, extent: list, ring_interval: float = 1000.0) -> None:
             )
 
 
-def _compute_latlon_bounds(merged: "MergedImage") -> dict:
+def _compute_latlon_bounds(merged: MergedImage) -> dict:
     """
     Compute lat/lon bounds for a merged image.
 
@@ -276,7 +276,7 @@ def _compute_latlon_bounds(merged: "MergedImage") -> dict:
 
 
 def _write_overlay_png(
-    merged: "MergedImage",
+    merged: MergedImage,
     output_path: Path,
     cmap: str = "viridis",
     vmin: float | None = None,
@@ -341,7 +341,7 @@ def _write_overlay_png(
 # ============================================================
 
 
-def write_merged_netcdf(merged: "MergedImage", output_dir: str) -> str:
+def write_merged_netcdf(merged: MergedImage, output_dir: str) -> str:
     """
     Write merged image to NetCDF file with CF-1.8 conventions.
 
@@ -448,7 +448,7 @@ def write_merged_netcdf(merged: "MergedImage", output_dir: str) -> str:
 
 
 def write_merged_png(
-    merged: "MergedImage",
+    merged: MergedImage,
     output_dir: str,
     cmap: str = "viridis",
     vmin: float | None = None,
@@ -572,7 +572,7 @@ def write_merged_png(
 
 
 def write_mp4_movie(
-    merged_images: list["MergedImage"],
+    merged_images: list[MergedImage],
     output_path: str,
     fps: float = 2.0,
     cmap: str = "viridis",
@@ -747,7 +747,7 @@ def write_mp4_movie(
 
 
 def write_geotiff(
-    merged: "MergedImage",
+    merged: MergedImage,
     output_dir: str,
     cmap: str = "viridis",
     vmin: float | None = None,
@@ -880,7 +880,7 @@ def write_geotiff(
 
 
 def write_kml(
-    merged_images: list["MergedImage"],
+    merged_images: list[MergedImage],
     output_path: str,
     image_dir: str | None = None,
     image_format: str = "png",
@@ -990,7 +990,7 @@ def write_kml(
 
 
 def write_kmz(
-    merged_images: list["MergedImage"],
+    merged_images: list[MergedImage],
     output_path: str,
 ) -> str:
     """

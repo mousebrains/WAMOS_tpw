@@ -7,17 +7,19 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
+    from matplotlib.colorbar import Colorbar
     from matplotlib.figure import Figure
     from matplotlib.image import AxesImage
-    from matplotlib.colorbar import Colorbar
+
+    from wamos_tpw.bearing import MultiBearing as Bearing
+    from wamos_tpw.bearing import MultiTheta as Theta
     from wamos_tpw.frame import Frame
-    from wamos_tpw.bearing import MultiTheta as Theta, MultiBearing as Bearing
 
 
 # -----------------------------------------------------------------------------
@@ -25,7 +27,7 @@ if TYPE_CHECKING:
 # -----------------------------------------------------------------------------
 
 
-def get_radar_height(radar_height: float | None, frame: "Frame") -> float | None:
+def get_radar_height(radar_height: float | None, frame: Frame) -> float | None:
     """
     Get radar height with fallback priority.
 
@@ -57,7 +59,7 @@ def get_radar_height(radar_height: float | None, frame: "Frame") -> float | None
 
 def quantile_limits(
     data: np.ndarray, low_pct: float = 1.0, high_pct: float = 99.0
-) -> Tuple[float, float]:
+) -> tuple[float, float]:
     """
     Calculate quantile-based colorbar limits.
 
@@ -94,7 +96,7 @@ def calc_bin_edges(centers: np.ndarray) -> np.ndarray:
     return edges
 
 
-def sort_polar_data(bearing: np.ndarray, data: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def sort_polar_data(bearing: np.ndarray, data: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """
     Sort bearing values and reorder data to match.
 
@@ -333,7 +335,7 @@ class BaseViewer(ABC):
     """
 
     def __init__(
-        self, n_frames: int, cmap: str = "viridis", figsize: Tuple[float, float] = (10, 8)
+        self, n_frames: int, cmap: str = "viridis", figsize: tuple[float, float] = (10, 8)
     ):
         """
         Initialize base viewer.
@@ -417,7 +419,7 @@ class BaseViewer(ABC):
             return self._radar_height
         return get_radar_height(self._radar_height, self._frames[frame_idx])
 
-    def _draw_polar(self, frame: "Frame", data: np.ndarray) -> None:
+    def _draw_polar(self, frame: Frame, data: np.ndarray) -> None:
         """
         Draw polar view (bearing vs ground distance).
 
@@ -456,7 +458,7 @@ class BaseViewer(ABC):
         self._ax.set_xlabel(x_label)
         self._ax.set_ylabel("Bearing (°)")
 
-    def _draw_ship(self, frame: "Frame", data: np.ndarray) -> None:
+    def _draw_ship(self, frame: Frame, data: np.ndarray) -> None:
         """
         Draw ship-relative x/y view (+X=starboard, +Y=bow).
 
@@ -483,7 +485,7 @@ class BaseViewer(ABC):
         max_range = np.sqrt(x**2 + y**2).max()
         add_range_rings(self._ax, max_range, interval=1000.0)
 
-    def _draw_earth(self, frame: "Frame", data: np.ndarray) -> None:
+    def _draw_earth(self, frame: Frame, data: np.ndarray) -> None:
         """
         Draw earth-relative x/y view (+X=East, +Y=North).
 
@@ -674,7 +676,7 @@ class BaseViewer(ABC):
         self._timer = None
         self._play_interval = 500  # milliseconds between frames
 
-    def _add_view_buttons(self, views: list[Tuple[str, str, list]]) -> None:
+    def _add_view_buttons(self, views: list[tuple[str, str, list]]) -> None:
         """
         Add view mode buttons.
 

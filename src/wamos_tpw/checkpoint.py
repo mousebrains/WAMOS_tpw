@@ -62,11 +62,12 @@ import json
 import logging
 import os
 import tempfile
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 __all__ = ["Checkpoint", "CheckpointState", "PipelineCheckpoint"]
 
@@ -97,7 +98,7 @@ class CheckpointState:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "CheckpointState":
+    def from_dict(cls, data: dict[str, Any]) -> CheckpointState:
         """Create from dictionary."""
         return cls(
             last_completed=data.get("last_completed", -1),

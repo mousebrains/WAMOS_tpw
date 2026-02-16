@@ -250,10 +250,10 @@ def add_subparser(subparsers) -> None:
 
 def run(args) -> None:
     """Execute the 'deramp' command."""
-    from wamos_tpw.polarfile import PolarFile
-    from wamos_tpw.theta import Theta
     from wamos_tpw.destreak import Destreak
+    from wamos_tpw.polarfile import PolarFile
     from wamos_tpw.shadow import Shadow
+    from wamos_tpw.theta import Theta
 
     # Load config
     config = Config(args.config) if args.config else Config()

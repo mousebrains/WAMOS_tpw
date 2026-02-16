@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -73,7 +73,7 @@ def write_cf_netcdf(
                 default_encoding[key] = val
 
     # CF-1.13 global attributes
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    now = datetime.now(UTC).strftime("%Y-%m-%d")
     cf_attrs = {
         "Conventions": "CF-1.13",
         "institution": "Scripps Institution of Oceanography",

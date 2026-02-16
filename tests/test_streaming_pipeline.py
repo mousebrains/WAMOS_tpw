@@ -234,8 +234,8 @@ class TestStreamingVsBlockingComparison:
         if not test_data_dir.exists():
             pytest.skip("Test data not available")
 
-        from wamos_tpw.files_pipeline import FilesMergePipeline
         from wamos_tpw.filenames import Filenames
+        from wamos_tpw.files_pipeline import FilesMergePipeline
 
         stime = "2022-03-28T03:00:00"
         etime = "2022-03-28T03:10:00"

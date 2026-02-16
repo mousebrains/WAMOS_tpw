@@ -1,18 +1,19 @@
 """Tests for Bearing class and coordinate conversion functions."""
 
-import numpy as np
 from pathlib import Path
+
+import numpy as np
 
 from wamos_tpw.bearing import (
     Bearing,
-    theta_to_heading_ship,
-    theta_to_heading_earth,
     heading_to_xy,
+    theta_to_heading_earth,
+    theta_to_heading_ship,
 )
 from wamos_tpw.config import Config
 from wamos_tpw.polarfile import PolarFile
-from wamos_tpw.theta import Theta
 from wamos_tpw.range import Range
+from wamos_tpw.theta import Theta
 
 
 class TestThetaToHeadingShip:

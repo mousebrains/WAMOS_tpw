@@ -7,7 +7,8 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Iterator
+from collections.abc import Iterator
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -22,7 +23,7 @@ def list_frames(
     stime: str,
     etime: str,
     polar_path: str,
-    config: "Config | None" = None,
+    config: Config | None = None,
 ) -> Iterator[dict]:
     """
     Yield frame information for all frames in a time interval.
@@ -60,7 +61,7 @@ def print_frames(
     stime: str,
     etime: str,
     polar_path: str,
-    config: "Config | None" = None,
+    config: Config | None = None,
 ) -> None:
     """
     Print frame timestamps and repeat times to stdout.

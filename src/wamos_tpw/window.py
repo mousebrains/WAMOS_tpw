@@ -58,7 +58,7 @@ def _interpolate_nan_gaps(intensity: np.ndarray, max_distance: int = 3) -> np.nd
 
 def create_time_windows(
     files: list[str],
-    window_config: "TimeWindowConfig",
+    window_config: TimeWindowConfig,
 ) -> list[tuple[np.datetime64, np.datetime64, list[int]]]:
     """
     Create overlapping time windows from a file list.
@@ -229,7 +229,7 @@ class WindowAccumulator:
         if wind_direction is not None:
             self.wind_directions.append(wind_direction)
 
-    def finalize(self, window_index: int = 0, interpolate_gaps: bool = False) -> "MergedImage":
+    def finalize(self, window_index: int = 0, interpolate_gaps: bool = False) -> MergedImage:
         """
         Compute averaged intensity and return MergedImage.
 

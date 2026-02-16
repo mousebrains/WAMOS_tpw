@@ -8,7 +8,7 @@ where the ISO timestamp is followed by a space and an NMEA sentence.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -59,7 +59,7 @@ def parse_log_timestamp(line: str) -> tuple[datetime, str]:
         dt = datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%S.%f")
     else:
         dt = datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%S")
-    dt = dt.replace(tzinfo=timezone.utc)
+    dt = dt.replace(tzinfo=UTC)
     return dt, sentence.strip()
 
 
@@ -143,5 +143,5 @@ def parse_time_hhmmss(time_str: str, day: date) -> datetime:
         minutes,
         seconds,
         microseconds,
-        tzinfo=timezone.utc,
+        tzinfo=UTC,
     )

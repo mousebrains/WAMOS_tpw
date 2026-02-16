@@ -3,6 +3,8 @@
 # Global settings (used when tower-specific config is not available)
 
 global:
+  time_shift: 0 # Timestamp correction in seconds (added to frame timestamps)
+
   theta_refinement:
     enabled: True # Enable theta refinement across frames
     min_frames: 3 # Minimum frames needed for refinement
@@ -26,7 +28,11 @@ global:
     order: 2 # Fit to polynomial of order
 
 "roger revelle":
-  theta_refinement: True # Tower-specific theta refinement settings
+  time_shift: -0.06 # seconds, from hard-returns analysis 20220402T0415–20220402T0600
+
+  theta_refinement:
+    enabled: True # Tower-specific theta refinement settings
+    min_frames: 3
 
   shadow: # Shadow regions
     theta_refinement: True # Use shadow edges to refine theta bias frame by frame

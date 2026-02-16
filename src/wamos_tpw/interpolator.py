@@ -111,7 +111,7 @@ class FrameInterpolator:
             n = frame.n_bearings
         else:
             pps = None
-            n = 1
+            n = 0
 
         if pps is None:
             pps = np.empty(0, dtype=int)
@@ -159,68 +159,51 @@ class FrameInterpolator:
         )
 
         if indices.size > 0:
-            # Find index closest to the middle of the frame scan
-            # The metadata timestamp may be off by up to ~+-0.25 seconds,
+            # Find index closest to the 1/2 second
+            # The metadata timestamp may be off by ~+-0.25 seconds,
             self._timing_method = f"PPS({indices.size})"
-            mid = np.concatenate(
-                (
-                    (prev_n - prev_PPS) / prev_n,
-                    (curr_n - curr_PPS) / curr_n,
-                    (next_n - next_PPS) / next_n,
-                )
-            )
+            #
+            # Find the PPS pulse with t0 closest to 1/2 second transition to avoid rounding slop
+            #
+            t1 = t0.astype(
+                "datetime64[s]"
+            )  # Floored to whole second, so tt is the offset from whole second
+            dt = np.abs(t0 - t1 - np.timedelta64(500, "ms"))  # Distance from 1/2 second
+            i_ref = np.argmin(dt)  # index of the PPS closest to middle
+            t_ref = t1[i_ref]  # Whole second at the PPS pulse closest to 1/2 second
+            t_pps = (
+                t_ref - np.timedelta64(i_ref, "s") + np.arange(indices.size, dtype="timedelta64[s]")
+            )  # Whole second for each PPS pulse
 
-            i_mid = np.argmin(np.abs(mid - 0.5))  # index of the PPS closest to middle
-            t0_mid = t0[i_mid]
-            t0_mid = t0_mid.astype("datetime64[s]")  # Floor to whole second
+            # np.interp does not extrapolate, so extend if needed
+            if indices[0] > 0:  # first PPS is after first index, so extrapolate back
+                if indices.size == 1:
+                    dIdt = np.maximum(self._MIN_DIDT, curr_n / self._repeat_time)
+                else:
+                    dIdt = np.maximum(self._MIN_DIDT, np.abs(np.mean(np.diff(indices))))
 
-            # Whole second for each PPS pulse
-            t_pps = t0_mid - np.timedelta64(i_mid, "s")  # time at first PPS
-            t_pps = t_pps + np.arange(indices.size, dtype="timedelta64[s]")  # Time at each PPS
+                cnt = int(np.ceil(indices[0] / dIdt))
+                indices = np.insert(indices, 0, indices[0] - dIdt * cnt)
+                t_pps = np.insert(t_pps, 0, t_pps[0] - np.timedelta64(cnt, "s"))
+
+            if indices[-1] < curr_n - 1:  # last PPS is before last index, so extrapolate forward
+                if indices.size == 1:
+                    dIdt = np.maximum(self._MIN_DIDT, curr_n / self._repeat_time)
+                else:
+                    dIdt = np.maximum(self._MIN_DIDT, np.abs(np.mean(np.diff(indices))))
+
+                cnt = int(np.ceil((curr_n - 1 - indices[-1]) / dIdt))
+                indices = np.insert(indices, indices.size, indices[-1] + dIdt * cnt)
+                t_pps = np.insert(t_pps, t_pps.size, t_pps[-1] + np.timedelta64(cnt, "s"))
+
         else:  # No PPS at all
             self._timing_method = "linear"
             indices = np.array([0, curr_n])  # Assume repeat is total time, curr_n instead of -1
             meta = self._current.metadata
-            t_pps = meta.timestamp + np.array([0, meta.repeat_time * 1e9]).astype(int).astype(
+            # Metadata timestamp is end-of-frame, so radial 0 starts at
+            # timestamp - repeat_time and radial curr_n ends at timestamp.
+            t_pps = meta.timestamp + np.array([-meta.repeat_time * 1e9, 0]).astype(int).astype(
                 "timedelta64[ns]"
-            )
-
-        # Now deal with extrapolation issues for np.interp
-
-        if indices[0] > 0:  # first PPS is after first index, so extrapolate back
-            if indices.size == 1:  # Only a single PPS to pin to, so use RPT
-                dIdt = np.maximum(self._MIN_DIDT, curr_n / self._repeat_time)  # indices/second
-            else:  # Use average spacing
-                dIdt = np.maximum(
-                    self._MIN_DIDT, np.abs(np.mean(np.diff(indices)))
-                )  # Should be positive already
-
-            cnt = int(np.ceil(indices[0] / dIdt))  # number of points to back up
-            indices = np.insert(
-                indices,
-                0,
-                indices[0] - dIdt * cnt,
-            )
-            t_pps = np.insert(
-                t_pps,
-                0,
-                t_pps[0] - np.datetime64(cnt, "s"),
-            )
-
-        if indices[-1] < curr_n - 1:  # last PPS is before last index, so extrapolate forward
-            if indices.size == 1:  # Only a single PPS to pin to, so use RPT
-                dIdt = np.maximum(self._MIN_DIDT, curr_n / self._repeat_time)  # indices/second
-            else:
-                dIdt = np.maximum(
-                    self._MIN_DIDT, np.abs(np.mean(np.diff(indices)))
-                )  # Should be positive already
-
-            cnt = int(np.ceil((curr_n - 1 - indices[-1]) / dIdt))  # number of points forward
-            indices = np.insert(indices, indices.size, indices[-1] + dIdt * cnt)
-            t_pps = np.insert(
-                t_pps,
-                t_pps.size,
-                t_pps[-1] + np.timedelta64(cnt, "s"),
             )
 
         # Now interpolate to get per-radial timestamps, with known PPS anchors
@@ -229,6 +212,7 @@ class FrameInterpolator:
             indices,
             (t_pps - t_pps[0]).astype("timedelta64[us]").astype(float),
         )
+
         self._times = t_pps[0] + dt.astype("timedelta64[us]")
 
     # Compute lat/lon/headings/speeds for each radial
@@ -245,6 +229,33 @@ class FrameInterpolator:
         One might think of using the ship speed and heading for the lat/lon, but
         one has to consider the ship can be crabbing due to currents and winds.
         """
+        n = curr.n_bearings
+
+        # Guard against missing navigation data
+        if (
+            curr.metadata.latitude is None
+            or curr.metadata.longitude is None
+            or curr.metadata.heading is None
+        ):
+            logger.warning("Missing lat/lon/heading in frame metadata; using constant fill values")
+            self._latitudes = np.full(n, curr.metadata.latitude or 0.0)
+            self._longitudes = np.full(n, curr.metadata.longitude or 0.0)
+            self._headings = np.full(n, curr.metadata.heading or 0.0)
+            return
+
+        # Drop neighbor if it has missing navigation data
+        if nxt is not None and (
+            nxt.metadata.latitude is None
+            or nxt.metadata.longitude is None
+            or nxt.metadata.heading is None
+        ):
+            nxt = None
+        if prev is not None and (
+            prev.metadata.latitude is None
+            or prev.metadata.longitude is None
+            or prev.metadata.heading is None
+        ):
+            prev = None
 
         # The starting point of the frame at the first radial
         indices = [0]
@@ -252,7 +263,7 @@ class FrameInterpolator:
         lon = [curr.metadata.longitude]
         hdg = [curr.metadata.heading]
 
-        indices.append(curr.n_bearings)  # Used for interpolation/extrapolation/nothing
+        indices.append(n)  # Used for interpolation/extrapolation/nothing
 
         if nxt is not None:  # Interpolation from current starting values to next starting values
             lat.append(nxt.metadata.latitude)
@@ -261,21 +272,15 @@ class FrameInterpolator:
         elif prev is not None:  # Extrapolate if prev is available
             lat.append(
                 curr.metadata.latitude
-                + (curr.metadata.latitude - prev.metadata.latitude)
-                / prev.n_bearings
-                * curr.n_bearings
+                + (curr.metadata.latitude - prev.metadata.latitude) / prev.n_bearings * n
             )
             lon.append(
                 curr.metadata.longitude
-                + (curr.metadata.longitude - prev.metadata.longitude)
-                / prev.n_bearings
-                * curr.n_bearings
+                + (curr.metadata.longitude - prev.metadata.longitude) / prev.n_bearings * n
             )
             hdg.append(
                 curr.metadata.heading
-                + (curr.metadata.heading - prev.metadata.heading)
-                / prev.n_bearings
-                * curr.n_bearings
+                + (curr.metadata.heading - prev.metadata.heading) / prev.n_bearings * n
             )
         else:  # No prev or next, so just duplicate current values
             lat.append(curr.metadata.latitude)
@@ -283,9 +288,9 @@ class FrameInterpolator:
             hdg.append(curr.metadata.heading)
 
         # Radials are equally spaced in time, so interpolate over indices
-        self._latitudes = np.interp(np.arange(curr.n_bearings), indices, lat)
-        self._longitudes = self._interp_angle(np.arange(curr.n_bearings), indices, lon, True)
-        self._headings = self._interp_angle(np.arange(curr.n_bearings), indices, hdg)
+        self._latitudes = np.interp(np.arange(n), indices, lat)
+        self._longitudes = self._interp_angle(np.arange(n), indices, lon, True)
+        self._headings = self._interp_angle(np.arange(n), indices, hdg)
 
     def _interp_angle(
         self,
@@ -414,6 +419,18 @@ def _add_arguments(parser) -> None:
         default=None,
         help="Output directory for per-frame NetCDF files (requires --project)",
     )
+    parser.add_argument(
+        "--ship-data",
+        type=str,
+        default=None,
+        help="Directory with instrument NetCDF files (from revelle CLI) for high-frequency interpolation",
+    )
+    parser.add_argument(
+        "--grid-spacing",
+        type=float,
+        default=None,
+        help="Grid cell size in meters for earth projection (default: auto from range/angular resolution)",
+    )
 
     # Progress bar options (mutually exclusive)
     progress_group = parser.add_mutually_exclusive_group()
@@ -443,7 +460,9 @@ def add_subparser(subparsers) -> None:
 def run(args) -> None:
     """Execute the 'interpolator' command with priority processing."""
     import os
+
     from tqdm import tqdm
+
     from wamos_tpw.config import Config
     from wamos_tpw.filenames import Filenames
     from wamos_tpw.interpolator_tasks import TASK_HANDLERS
@@ -465,6 +484,16 @@ def run(args) -> None:
         logging.info("NetCDF output directory: %s", netcdf_dir)
 
     config = Config(args.config) if args.config else Config()
+
+    # Pre-build ship data cache in main process so workers just memmap
+    ship_data_dir = getattr(args, "ship_data", None)
+    if ship_data_dir:
+        from pathlib import Path
+
+        from wamos_tpw.instruments.ship_data import ShipData
+
+        sd = ShipData(Path(ship_data_dir))
+        logging.info("Ship data: %s", sd)
 
     filenames = Filenames(args.stime, args.etime, args.polar_path)
     files = list(filenames)
@@ -577,7 +606,16 @@ def run(args) -> None:
             # Check for ready triplets - now safe because TripletCollector
             # only emits when true consecutive neighbors are confirmed
             for prev, current, next_frame in triplet_collector.ready_triplets():
-                task_data = (prev, current, next_frame, args.tolerance, args.project, netcdf_dir)
+                task_data = (
+                    prev,
+                    current,
+                    next_frame,
+                    args.tolerance,
+                    args.project,
+                    netcdf_dir,
+                    getattr(args, "ship_data", None),
+                    getattr(args, "grid_spacing", None),
+                )
                 executor.submit(Priority.MEDIUM, "interpolate", task_data)
                 pending_interp += 1
 
@@ -602,7 +640,16 @@ def run(args) -> None:
 
             # Check for more ready triplets (in case file results arrived while processing)
             for prev, current, next_frame in triplet_collector.ready_triplets():
-                task_data = (prev, current, next_frame, args.tolerance, args.project, netcdf_dir)
+                task_data = (
+                    prev,
+                    current,
+                    next_frame,
+                    args.tolerance,
+                    args.project,
+                    netcdf_dir,
+                    getattr(args, "ship_data", None),
+                    getattr(args, "grid_spacing", None),
+                )
                 executor.submit(Priority.MEDIUM, "interpolate", task_data)
                 pending_interp += 1
 

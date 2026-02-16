@@ -1,8 +1,9 @@
 """Extended tests for Frame class."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
-from pathlib import Path
 
 from wamos_tpw.polarfile import PolarFile
 

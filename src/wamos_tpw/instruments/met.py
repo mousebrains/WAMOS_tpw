@@ -12,7 +12,7 @@ Output: ``met_revelle.nc`` with wind, navigation, and selected variables.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -104,7 +104,7 @@ def _parse_met_date(header_line: str) -> datetime:
         raise ValueError(f"Cannot parse MET date from: {header_line!r}")
     date_time_str = parts[1].strip()
     # Parse: 02-Apr-22  00:00:00
-    return datetime.strptime(date_time_str, "%d-%b-%y  %H:%M:%S").replace(tzinfo=timezone.utc)
+    return datetime.strptime(date_time_str, "%d-%b-%y  %H:%M:%S").replace(tzinfo=UTC)
 
 
 def _hhmmss_to_datetime64(time_val: int, base_date: datetime) -> np.datetime64:
@@ -175,7 +175,7 @@ def parse_met_file(filepath: Path) -> dict[str, list]:
 
         records["time"].append(ts)
 
-        for col_name, var_name, _, convert_knots in _COLUMN_MAP:
+        for _col_name, var_name, _, convert_knots in _COLUMN_MAP:
             idx = col_indices.get(var_name)
             if idx is None or idx >= len(fields):
                 records[var_name].append(np.nan)

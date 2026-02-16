@@ -9,16 +9,18 @@ from __future__ import annotations
 
 import logging
 import sys
+from collections.abc import Callable, Iterator
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from typing import Iterator, Callable, Any
+from typing import Any
 
 import numpy as np
 
-from wamos_tpw.bearing import MultiTheta as Theta, MultiBearing as Bearing
+from wamos_tpw.bearing import MultiBearing as Bearing
+from wamos_tpw.bearing import MultiTheta as Theta
 from wamos_tpw.config import Config
 from wamos_tpw.filenames import Filenames, _parse_timestamp
 from wamos_tpw.frame import Frame
-from wamos_tpw.plotting import BaseViewer, quantile_limits, calc_bin_edges, format_nav_title
+from wamos_tpw.plotting import BaseViewer, calc_bin_edges, format_nav_title, quantile_limits
 from wamos_tpw.polarfile import load_polar_file
 
 __all__ = ["Files"]
@@ -318,7 +320,7 @@ class Files:
             lines.append(f"    ... and {len(groups) - 5} more groups")
         return "\n".join(lines)
 
-    def __enter__(self) -> "Files":
+    def __enter__(self) -> Files:
         """Enter context manager."""
         return self
 
@@ -594,7 +596,7 @@ def plot_frame_bits(
         ("Bit 15", frame.bit15),
     ]
 
-    for ax, (bit_name, data) in zip(axes, bit_data):
+    for ax, (bit_name, data) in zip(axes, bit_data, strict=True):
         # Extract the specified distance bins across all bearings
         # Shape: (n_bearings, n_selected_bins)
         selected = data[:, distance_bins]
@@ -719,7 +721,7 @@ def parse_distance_bins(spec: str, max_bins: int) -> list[int]:
                 raise ValueError(f"Bin index {idx} out of range [0, {max_bins - 1}]")
             return [idx]
         except ValueError:
-            raise ValueError(f"Invalid bin specification: {spec}")
+            raise ValueError(f"Invalid bin specification: {spec}") from None
 
     # Slice notation
     parts = spec.split(":")
@@ -798,7 +800,7 @@ def plot_bits_across_frames(
         (15, "Bit 15"),
     ]
 
-    for ax, (bit, bit_name) in zip(axes, bit_info):
+    for ax, (bit, bit_name) in zip(axes, bit_info, strict=False):
         data = bit_data_combined[bit]
 
         # Add alternating background colors for frame regions
@@ -930,8 +932,8 @@ def add_subparser(subparsers) -> None:
 
 def run(args) -> None:
     """Execute the 'view' command."""
-    from pathlib import Path
     import time
+    from pathlib import Path
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,

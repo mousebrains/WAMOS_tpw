@@ -1,8 +1,9 @@
 """Extended tests for Filenames class."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
-from pathlib import Path
 
 from wamos_tpw.filenames import Filenames, _parse_timestamp, extract_file_timestamp
 

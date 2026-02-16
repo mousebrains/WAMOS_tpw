@@ -19,14 +19,14 @@ theta calculation is a bottleneck worth optimizing with Cython.
 """
 
 import argparse
-import time
-from typing import Callable
-
-import numpy as np
 
 # Add src to path for development mode
 import sys
+import time
+from collections.abc import Callable
 from pathlib import Path
+
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 

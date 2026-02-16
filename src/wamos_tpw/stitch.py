@@ -14,8 +14,9 @@ from __future__ import annotations
 import logging
 import subprocess
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -30,7 +31,7 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 
-def load_merged_from_netcdf(filepath: str | Path) -> "MergedImage":
+def load_merged_from_netcdf(filepath: str | Path) -> MergedImage:
     """
     Load a MergedImage from a NetCDF file.
 
@@ -119,7 +120,7 @@ def load_netcdf_files(
     input_dir: str | Path,
     pattern: str = "merged_*.nc",
     max_files: int | None = None,
-) -> list["MergedImage"]:
+) -> list[MergedImage]:
     """
     Load all NetCDF files from a directory into MergedImage objects.
 

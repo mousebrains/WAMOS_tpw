@@ -248,7 +248,7 @@ def main():
 
         x = np.arange(total_samples)
 
-        for ax, name in zip(axes, signal_names):
+        for ax, name in zip(axes, signal_names, strict=False):
             data = combined[name]
 
             # Plot as filled area

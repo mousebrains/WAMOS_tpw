@@ -12,14 +12,14 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from wamos_tpw.frame import Frame, FrameMetadata
-from wamos_tpw.theta import Theta
-from wamos_tpw.range import Range
-from wamos_tpw.destreak import Destreak
-from wamos_tpw.shadow import Shadow
 from wamos_tpw.deramp import Deramp
+from wamos_tpw.destreak import Destreak
 from wamos_tpw.dewind import Dewind
+from wamos_tpw.frame import Frame, FrameMetadata
 from wamos_tpw.pps import PPS
+from wamos_tpw.range import Range
+from wamos_tpw.shadow import Shadow
+from wamos_tpw.theta import Theta
 
 if TYPE_CHECKING:
     from wamos_tpw.config import Config
@@ -252,10 +252,11 @@ class FramePipeline:
 
 
 def _process_frame(
-    filepath: str, frame_index: int, config: "Config", qTiming: bool, qSave: bool
+    filepath: str, frame_index: int, config: Config, qTiming: bool, qSave: bool
 ) -> dict:
     """Process a single frame from a file and return results with memory usage."""
     import resource
+
     from wamos_tpw.polarfile import PolarFile
 
     pf = PolarFile(filepath, config=config)
@@ -300,6 +301,25 @@ def _add_arguments(parser) -> None:
         "--polar",
         action="store_true",
         help="Display polar plots of Raw, Destreaked, Deramped, Dewinded",
+    )
+    parser.add_argument(
+        "--view",
+        type=str,
+        default=None,
+        choices=["polar", "ship", "earth"],
+        help="View final intensity in polar, ship, or earth coordinates",
+    )
+    parser.add_argument(
+        "--ship-data",
+        type=str,
+        default=None,
+        help="Directory with instrument NetCDF files for per-radial heading",
+    )
+    parser.add_argument(
+        "--radar-height",
+        type=float,
+        default=None,
+        help="Radar height above water in meters",
     )
 
     # Progress bar
@@ -385,6 +405,20 @@ def run(args) -> None:
         return
 
     logging.info("Found %d files to process", len(files))
+
+    # Handle --view mode separately (interactive, no parallel processing)
+    if args.view:
+        from wamos_tpw.frame_pipeline_viewer import run_view_mode
+
+        run_view_mode(
+            files,
+            config,
+            args.frame,
+            args.view,
+            getattr(args, "ship_data", None),
+            getattr(args, "radar_height", None),
+        )
+        return
 
     # Handle --plot mode separately (interactive, no parallel processing)
     if args.plot:

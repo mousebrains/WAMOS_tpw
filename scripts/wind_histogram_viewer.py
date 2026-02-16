@@ -43,9 +43,10 @@ src_path = Path(__file__).parent.parent / "src"
 if src_path.exists():
     sys.path.insert(0, str(src_path))
 
-from wamos_tpw import Filenames, PolarFile  # noqa: E402
-from wamos_tpw.multi_theta import MultiTheta as Theta  # noqa: E402
 from wamos_tpw.combine import Combine  # noqa: E402
+from wamos_tpw.multi_theta import MultiTheta as Theta  # noqa: E402
+
+from wamos_tpw import Filenames, PolarFile  # noqa: E402
 from wamos_tpw.config import Config  # noqa: E402
 from wamos_tpw.destreak import Destreak  # noqa: E402
 from wamos_tpw.filenames import add_common_arguments  # noqa: E402

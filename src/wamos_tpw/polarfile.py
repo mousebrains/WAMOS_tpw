@@ -49,18 +49,18 @@ import gzip
 import logging
 import lzma
 import re
-from pathlib import Path
-from typing import BinaryIO, Iterator, Any, Callable
-
 import time as _time
+from collections.abc import Callable, Iterator
+from pathlib import Path
+from typing import Any, BinaryIO
 
 import numpy as np
 import zstandard as zstd
 
-from wamos_tpw.constants import KNOTS_TO_MS
-from wamos_tpw.frame import Frame, FrameMetadata
-from wamos_tpw.filenames import extract_file_timestamp
 from wamos_tpw.config import Config
+from wamos_tpw.constants import KNOTS_TO_MS
+from wamos_tpw.filenames import extract_file_timestamp
+from wamos_tpw.frame import Frame, FrameMetadata
 
 __all__ = ["PolarFile"]
 
@@ -213,6 +213,33 @@ class PolarFile:
 
         return header_lines, frame_lines
 
+    def _reshape_frame_data(self, frame_data: np.ndarray, n_samples: int, idx: int) -> np.ndarray:
+        """Reshape flat uint16 data into (n_radials, n_samples) array.
+
+        Args:
+            frame_data: Flat uint16 array from binary data
+            n_samples: Expected samples per radial (FIFO)
+            idx: Frame index (for logging)
+
+        Returns:
+            Reshaped 2D array, or original if n_samples is 0
+        """
+        if n_samples <= 0:
+            return frame_data
+
+        n_radials = frame_data.size // n_samples
+        if n_radials * n_samples == frame_data.size:
+            return frame_data.reshape((n_radials, n_samples))
+
+        usable = n_radials * n_samples
+        logging.warning(
+            "%s: Frame %s: truncating %s values",
+            self._filepath,
+            idx,
+            frame_data.size - usable,
+        )
+        return frame_data[:usable].reshape((n_radials, n_samples))
+
     def _parse_data_from_bytes(self, data: bytes, offset: int) -> None:
         """Parse binary data blocks from bytes (optimized, no file I/O)."""
         n_samples = self._header.get("FIFO", 0)
@@ -253,21 +280,7 @@ class PolarFile:
             frame_data = np.frombuffer(data, dtype="<H", count=length // 2, offset=offset)
             offset += length
 
-            # Reshape if we know samples_in_range
-            if n_samples > 0:
-                n_radials = frame_data.size // n_samples
-                if n_radials * n_samples == frame_data.size:
-                    frame_data = frame_data.reshape((n_radials, n_samples))
-                else:
-                    usable = n_radials * n_samples
-                    logging.warning(
-                        "%s: Frame %s: truncating %s values",
-                        self._filepath,
-                        idx,
-                        frame_data.size - usable,
-                    )
-                    frame_data = frame_data[:usable].reshape((n_radials, n_samples))
-
+            frame_data = self._reshape_frame_data(frame_data, n_samples, idx)
             frame = Frame(frame_data, metadata, config=self._config)
             self._frames.append(frame)
 
@@ -284,6 +297,14 @@ class PolarFile:
             windh = self._header.get("WINDH")
             if windh is not None:
                 self._config["tower.height"] = float(windh)
+
+        # Apply time_shift from config (seconds added to frame timestamps)
+        time_shift = self._config.get("time_shift", 0)
+        if time_shift:
+            shift = np.timedelta64(int(time_shift * 1e9), "ns")
+            for md in self._frame_metadata:
+                if not np.isnat(md.timestamp):
+                    md.timestamp = md.timestamp + shift
 
     def _parse_from_fp(self, fp: BinaryIO) -> None:
         """Parse the polar file from an open file handle."""
@@ -526,24 +547,9 @@ class PolarFile:
                 )
                 break
 
-            # Parse as uint16 little-endian
+            # Parse as uint16 little-endian and reshape
             data = np.frombuffer(buffer, dtype="<H")
-
-            # Reshape if we know samples_in_range
-            if n_samples > 0:
-                n_radials = data.size // n_samples
-                if n_radials * n_samples == data.size:
-                    data = data.reshape((n_radials, n_samples))
-                else:
-                    # Truncate to fit
-                    usable = n_radials * n_samples
-                    logging.warning(
-                        "%s: Frame %s: truncating %s values",
-                        self._filepath,
-                        idx,
-                        data.size - usable,
-                    )
-                    data = data[:usable].reshape((n_radials, n_samples))
+            data = self._reshape_frame_data(data, n_samples, idx)
 
             frame = Frame(data, metadata, config=self._config)
             self._frames.append(frame)
@@ -788,7 +794,7 @@ def run(args) -> None:
                 logging.info("  Bit12 (PPS) any: %s", frame.bit12.any())
                 logging.info("  Bit13 (bearing) any: %s", frame.bit13.any())
 
-        except Exception as e:
+        except (OSError, ValueError) as e:
             logging.error("Failed to parse %s: %s", filepath, e)
 
 

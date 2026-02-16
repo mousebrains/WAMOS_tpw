@@ -22,6 +22,23 @@ from wamos_tpw.interpolator import FrameData, FrameInterpolator
 
 logger = logging.getLogger(__name__)
 
+# Worker-level cache for ShipData (loaded once per worker process)
+_ship_data_cache: dict[str, object] = {}
+
+
+def _get_ship_data(data_dir: str | None):
+    """Get or create a cached ShipData instance for the given directory."""
+    if data_dir is None:
+        return None
+    if data_dir not in _ship_data_cache:
+        from pathlib import Path
+
+        from wamos_tpw.instruments.ship_data import ShipData
+
+        _ship_data_cache[data_dir] = ShipData(Path(data_dir))
+    return _ship_data_cache[data_dir]
+
+
 # Numba JIT projection: ~4.5× faster than pure numpy.
 # To disable numba and fall back to numpy, either:
 #   - uninstall numba: pip3 uninstall numba
@@ -127,7 +144,7 @@ class FrameProxy:
 # ============================================================
 
 
-def _do_process_file(task) -> "Result":
+def _do_process_file(task) -> Result:
     """
     Process a single polar file and return FrameData for each frame.
 
@@ -135,10 +152,11 @@ def _do_process_file(task) -> "Result":
     and returns serializable FrameData with shared memory for arrays.
     """
     import resource
-    from wamos_tpw.priority_executor import Result, create_shared_array
+
     from wamos_tpw.config import Config
-    from wamos_tpw.polarfile import PolarFile
     from wamos_tpw.frame_pipeline import FramePipeline
+    from wamos_tpw.polarfile import PolarFile
+    from wamos_tpw.priority_executor import Result, create_shared_array
 
     filepath, file_index, config_dict, qTiming = task.data
 
@@ -214,6 +232,11 @@ def _write_frame_netcdf(
     wind_direction: float | None,
     file_index: int,
     frame_index: int,
+    radial_ship_speeds: np.ndarray | None = None,
+    radial_pitches: np.ndarray | None = None,
+    radial_rolls: np.ndarray | None = None,
+    radial_wind_speeds: np.ndarray | None = None,
+    radial_wind_directions: np.ndarray | None = None,
 ) -> str:
     """
     Write a single frame's projected data to a NetCDF file.
@@ -231,6 +254,11 @@ def _write_frame_netcdf(
         wind_direction: Wind direction (degrees) or None
         file_index: Source file index
         frame_index: Frame index within file
+        radial_ship_speeds: Per-radial ship speed (m/s) or None
+        radial_pitches: Per-radial pitch (degrees) or None
+        radial_rolls: Per-radial roll (degrees) or None
+        radial_wind_speeds: Per-radial wind speed (m/s) or None
+        radial_wind_directions: Per-radial wind direction (degrees) or None
 
     Returns:
         Path to the written NetCDF file
@@ -344,6 +372,26 @@ def _write_frame_netcdf(
         attrs={"long_name": "Per-radial ship heading", "units": "degrees"},
     )
 
+    # Add per-radial instrument data (from high-frequency ship data)
+    _radial_vars = {
+        "radial_ship_speed": (radial_ship_speeds, "Per-radial ship speed", "m s-1"),
+        "radial_pitch": (radial_pitches, "Per-radial pitch", "degrees"),
+        "radial_roll": (radial_rolls, "Per-radial roll", "degrees"),
+        "radial_wind_speed": (radial_wind_speeds, "Per-radial wind speed", "m s-1"),
+        "radial_wind_direction": (
+            radial_wind_directions,
+            "Per-radial wind direction (relative)",
+            "degrees",
+        ),
+    }
+    for var_name, (data, long_name, units) in _radial_vars.items():
+        if data is not None:
+            ds[var_name] = xr.DataArray(
+                data,
+                dims=["radial"],
+                attrs={"long_name": long_name, "units": units},
+            )
+
     # Write to file with compression
     encoding = {
         "intensity": {"zlib": True, "complevel": 4, "dtype": "float32"},
@@ -351,13 +399,16 @@ def _write_frame_netcdf(
         "radial_longitude": {"zlib": True, "complevel": 4},
         "radial_heading": {"zlib": True, "complevel": 4},
     }
+    for var_name in _radial_vars:
+        if var_name in ds:
+            encoding[var_name] = {"zlib": True, "complevel": 4}
 
     ds.to_netcdf(filepath, encoding=encoding)
 
     return filepath
 
 
-def _do_interpolate(task) -> "Result":
+def _do_interpolate(task) -> Result:
     """
     Perform interpolation on a triplet, then project to UTM grid.
 
@@ -365,9 +416,19 @@ def _do_interpolate(task) -> "Result":
     then projects the intensity onto a per-frame UTM grid.
     """
     import resource
+
     from wamos_tpw.priority_executor import Result, read_shared_array
 
-    prev_data, current_data, next_data, tolerance, do_projection, netcdf_dir = task.data
+    (
+        prev_data,
+        current_data,
+        next_data,
+        tolerance,
+        do_projection,
+        netcdf_dir,
+        ship_data_dir,
+        grid_spacing_override,
+    ) = task.data
 
     t0_total = time.perf_counter()
     timings = {}
@@ -406,6 +467,33 @@ def _do_interpolate(task) -> "Result":
     )
     timings["interpolate"] = time.perf_counter() - t0
 
+    # High-frequency ship data interpolation (if available)
+    t0 = time.perf_counter()
+    ship_data = _get_ship_data(ship_data_dir)
+    ship_speeds = None
+    pitches = None
+    rolls = None
+    wind_speeds = None
+    wind_directions = None
+    if ship_data is not None:
+        times = interp.times
+        sd_lat = ship_data.interpolate(times, "latitude")
+        sd_lon = ship_data.interpolate(times, "longitude")
+        sd_heading = ship_data.interpolate(times, "heading")
+        latitudes = sd_lat if sd_lat is not None else interp.latitudes
+        longitudes = sd_lon if sd_lon is not None else interp.longitudes
+        headings = sd_heading if sd_heading is not None else interp.headings
+        ship_speeds = ship_data.interpolate(times, "ship_speed")
+        pitches = ship_data.interpolate(times, "pitch")
+        rolls = ship_data.interpolate(times, "roll")
+        wind_speeds = ship_data.interpolate(times, "wind_speed")
+        wind_directions = ship_data.interpolate(times, "wind_direction")
+    else:
+        latitudes = None
+        longitudes = None
+        headings = interp.headings
+    timings["ship_data"] = time.perf_counter() - t0
+
     # Earth-referenced projection (if requested)
     projected_intensity = None
     grid_params = None
@@ -413,9 +501,11 @@ def _do_interpolate(task) -> "Result":
     if do_projection and intensity is not None and ground_range is not None:
         t0_proj = time.perf_counter()
 
-        latitudes = interp.latitudes
-        longitudes = interp.longitudes
-        headings = interp.headings
+        # Use ship data lat/lon if available, otherwise fall back to FrameInterpolator
+        if latitudes is None:
+            latitudes = interp.latitudes
+        if longitudes is None:
+            longitudes = interp.longitudes
 
         # Reference point for equirectangular projection
         ref_lat = float(np.mean(latitudes))
@@ -434,10 +524,13 @@ def _do_interpolate(task) -> "Result":
         max_range = float(ground_range[-1]) * 1.1
         # Grid spacing = max of range resolution and angular width at outermost range
         # Angular width = arc length between adjacent radials = range * (2π / n_bearings)
-        range_res = float(ground_range[1] - ground_range[0]) if len(ground_range) > 1 else 10.0
-        n_bearings = intensity.shape[0]
-        angular_width = float(ground_range[-1]) * 2 * np.pi / n_bearings
-        grid_spacing = max(range_res, angular_width)
+        if grid_spacing_override is not None:
+            grid_spacing = grid_spacing_override
+        else:
+            range_res = float(ground_range[1] - ground_range[0]) if len(ground_range) > 1 else 10.0
+            n_bearings = intensity.shape[0]
+            angular_width = float(ground_range[-1]) * 2 * np.pi / n_bearings
+            grid_spacing = max(range_res, angular_width)
 
         x_min = ship_x.min() - max_range
         x_max = ship_x.max() + max_range
@@ -570,6 +663,11 @@ def _do_interpolate(task) -> "Result":
                 wind_direction=current_data.wind_direction,
                 file_index=current_data.file_index,
                 frame_index=current_data.frame_index,
+                radial_ship_speeds=ship_speeds,
+                radial_pitches=pitches,
+                radial_rolls=rolls,
+                radial_wind_speeds=wind_speeds,
+                radial_wind_directions=wind_directions,
             )
             timings["netcdf"] = time.perf_counter() - t0
 
@@ -577,8 +675,13 @@ def _do_interpolate(task) -> "Result":
 
     # Compute position statistics for efficient grid extent computation
     # This avoids concatenating full per-radial arrays in compute_common_grid
-    lats = interp.latitudes
-    lons = interp.longitudes
+    # Use ship data lat/lon if available, otherwise fall back to FrameInterpolator
+    if latitudes is None:
+        latitudes = interp.latitudes
+    if longitudes is None:
+        longitudes = interp.longitudes
+    lats = latitudes
+    lons = longitudes
     position_stats = {
         "lat_min": float(np.min(lats)),
         "lat_max": float(np.max(lats)),
@@ -599,13 +702,19 @@ def _do_interpolate(task) -> "Result":
         "times": interp.times,
         "latitudes": lats,
         "longitudes": lons,
-        "headings": interp.headings,
+        "headings": headings,
         # Position statistics for efficient grid computation
         "position_stats": position_stats,
-        # Ship and wind metadata
+        # Ship and wind metadata (scalar, from .pol file)
         "ship_speed": current_data.ship_speed,
         "wind_speed": current_data.wind_speed,
         "wind_direction": current_data.wind_direction,
+        # Per-radial instrument data (from high-frequency ship data, or None)
+        "ship_speeds": ship_speeds,
+        "pitches": pitches,
+        "rolls": rolls,
+        "wind_speeds": wind_speeds,
+        "wind_directions": wind_directions,
         # Ground range metadata for merge pipeline
         "ground_range_max": float(ground_range[-1])
         if ground_range is not None and len(ground_range) > 0

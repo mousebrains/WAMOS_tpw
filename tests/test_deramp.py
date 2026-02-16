@@ -1,7 +1,8 @@
 """Tests for Deramp class."""
 
-import numpy as np
 from pathlib import Path
+
+import numpy as np
 
 from wamos_tpw.deramp import Deramp
 from wamos_tpw.polarfile import PolarFile

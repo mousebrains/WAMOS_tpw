@@ -54,9 +54,10 @@ import json
 import logging
 import sys
 import time
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from functools import wraps
-from typing import Any, Callable, Iterator, TypeVar
+from typing import Any, TypeVar
 
 __all__ = [
     "setup_logging",
@@ -309,7 +310,7 @@ class log_performance:
 
         return wrapper  # type: ignore
 
-    def __enter__(self) -> "log_performance":
+    def __enter__(self) -> log_performance:
         """Context manager entry."""
         self.start_time = time.perf_counter()
         return self

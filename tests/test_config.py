@@ -151,13 +151,3 @@ shadow:
         config2["custom"] = "value"
         config1.update(config2)
         assert config1["custom"] == "value"
-
-
-class TestWamosConfigAlias:
-    """Test backward compatibility alias."""
-
-    def test_wamos_config_alias(self):
-        """Test WamosConfig is an alias for Config."""
-        from wamos_tpw.config import WamosConfig
-
-        assert WamosConfig is Config

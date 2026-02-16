@@ -15,14 +15,14 @@ Usage:
 """
 
 from __future__ import annotations
-import argparse
-import re
-import time
-import statistics
-from typing import Callable
-import random
-import string
 
+import argparse
+import random
+import re
+import statistics
+import string
+import time
+from collections.abc import Callable
 
 # =============================================================================
 # Pattern 1: _parse_freq() regex - used in filenames.py line 250

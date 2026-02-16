@@ -9,7 +9,6 @@ Provides centralized logging setup with support for:
 import logging
 from argparse import ArgumentParser, Namespace
 from logging.handlers import RotatingFileHandler
-from typing import Optional
 
 
 def add_logging_arguments(parser: ArgumentParser) -> None:
@@ -34,9 +33,9 @@ def add_logging_arguments(parser: ArgumentParser) -> None:
 
 
 def setup_logging(
-    args: Optional[Namespace] = None,
+    args: Namespace | None = None,
     verbose: bool = False,
-    log_file: Optional[str] = None,
+    log_file: str | None = None,
     log_max_mb: int = 100,
 ) -> logging.Logger:
     """

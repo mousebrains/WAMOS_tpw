@@ -13,8 +13,9 @@ import logging
 import os
 import time
 from collections import defaultdict
+from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -54,7 +55,7 @@ class FilesMergePipeline:
     def __init__(
         self,
         filenames: list[str],
-        config: "Config | None" = None,
+        config: Config | None = None,
         window_config: TimeWindowConfig | None = None,
         n_workers: int | None = None,
         tolerance: float = 1.2,
@@ -63,6 +64,8 @@ class FilesMergePipeline:
         max_windows: int | None = None,
         pending_multiplier: float = 3.0,
         max_queued_merges: int = 4,
+        ship_data_dir: str | None = None,
+        grid_spacing: float | None = None,
     ):
         """
         Initialize the merge pipeline.
@@ -82,6 +85,8 @@ class FilesMergePipeline:
             max_queued_merges: Maximum windows queued for merge thread.
                 Higher values reduce merge thread stalls but use more memory.
                 Each queued window holds ~25 MB of frame data. Default: 4
+            ship_data_dir: Directory with instrument NetCDF files for high-frequency interpolation
+            grid_spacing: Grid cell size in meters for earth projection (None = auto)
         """
         self._files = filenames
         self._config = config
@@ -92,6 +97,8 @@ class FilesMergePipeline:
         self._qProgress = qProgress
         self._pending_multiplier = pending_multiplier
         self._max_queued_merges = max_queued_merges
+        self._ship_data_dir = ship_data_dir
+        self._grid_spacing = grid_spacing
 
         # Create time windows
         self._windows = create_time_windows(filenames, self._window_config)
@@ -590,6 +597,8 @@ class FilesMergePipeline:
                         self._tolerance,
                         True,
                         None,
+                        self._ship_data_dir,
+                        self._grid_spacing,
                     )
                     executor.submit(Priority.MEDIUM, "interpolate", task_data)
                     pending_interp += 1
@@ -652,6 +661,8 @@ class FilesMergePipeline:
                         self._tolerance,
                         True,
                         None,
+                        self._ship_data_dir,
+                        self._grid_spacing,
                     )
                     executor.submit(Priority.MEDIUM, "interpolate", task_data)
                     pending_interp += 1
@@ -882,6 +893,18 @@ def _add_arguments(parser) -> None:
     )
     parser.add_argument("--timing", "-t", action="store_true", help="Show timing statistics")
     parser.add_argument("--plot", action="store_true", help="Show interactive viewer")
+    parser.add_argument(
+        "--ship-data",
+        type=str,
+        default=None,
+        help="Directory with instrument NetCDF files (from revelle CLI) for high-frequency interpolation",
+    )
+    parser.add_argument(
+        "--grid-spacing",
+        type=float,
+        default=None,
+        help="Grid cell size in meters for earth projection (default: auto from range/angular resolution)",
+    )
 
     # Progress bar options (mutually exclusive)
     progress_group = parser.add_mutually_exclusive_group()
@@ -972,6 +995,14 @@ def _run_streaming(args, config) -> None:
 
     logging.info("Using streaming file discovery mode")
 
+    # Pre-build ship data cache in main process so workers just memmap
+    ship_data_dir = getattr(args, "ship_data", None)
+    if ship_data_dir:
+        from wamos_tpw.instruments.ship_data import ShipData
+
+        sd = ShipData(Path(ship_data_dir))
+        logging.info("Ship data: %s", sd)
+
     # Set up memory monitoring if requested
     memory_monitor = None
     if getattr(args, "memory_stats", False):
@@ -1016,6 +1047,8 @@ def _run_streaming(args, config) -> None:
         max_windows=getattr(args, "max_windows", None),
         pending_multiplier=getattr(args, "pending_multiplier", 3.0),
         max_queued_merges=getattr(args, "max_queued_merges", 4),
+        ship_data_dir=ship_data_dir,
+        grid_spacing=getattr(args, "grid_spacing", None),
     )
 
     logging.info("Created streaming pipeline with %d time windows", pipeline.n_windows)
@@ -1134,6 +1167,14 @@ def run(args) -> None:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
         logging.info("Output directory: %s", args.output_dir)
 
+    # Pre-build ship data cache in main process so workers just memmap
+    ship_data_dir = getattr(args, "ship_data", None)
+    if ship_data_dir:
+        from wamos_tpw.instruments.ship_data import ShipData
+
+        sd = ShipData(Path(ship_data_dir))
+        logging.info("Ship data: %s", sd)
+
     # Create pipeline
     pipeline = FilesMergePipeline(
         filenames=files,
@@ -1146,6 +1187,8 @@ def run(args) -> None:
         max_windows=getattr(args, "max_windows", None),
         pending_multiplier=getattr(args, "pending_multiplier", 3.0),
         max_queued_merges=getattr(args, "max_queued_merges", 4),
+        ship_data_dir=ship_data_dir,
+        grid_spacing=getattr(args, "grid_spacing", None),
     )
 
     logging.info("Created %d time windows", pipeline.n_windows)

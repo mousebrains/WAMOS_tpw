@@ -66,8 +66,8 @@ See Also
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -388,8 +388,36 @@ class Frame:
         return self._bit15
 
     # -------------------------------------------------------------------------
-    # Distance row selection (across all theta bins)
+    # Distance/bearing row selection
     # -------------------------------------------------------------------------
+
+    def _get_source_array(self, extract: str) -> np.ndarray:
+        """Return the source array for a given extract type.
+
+        Args:
+            extract: 'intensity', 'data', 'raw', 'bit12', 'pps', 'bit13',
+                     'bearing_pulse', 'bit14', or 'bit15'
+
+        Returns:
+            The corresponding 2D array
+
+        Raises:
+            ValueError: If extract type is unknown
+        """
+        sources = {
+            "intensity": self.intensity,
+            "data": self.intensity,
+            "raw": self._raw_data,
+            "bit12": self.bit12,
+            "pps": self.bit12,
+            "bit13": self.bit13,
+            "bearing_pulse": self.bit13,
+            "bit14": self.bit14,
+            "bit15": self.bit15,
+        }
+        if extract not in sources:
+            raise ValueError(f"Unknown extract type '{extract}'. Use: {', '.join(sources.keys())}")
+        return sources[extract]
 
     def get_distance_row(self, distance_idx: int, extract: str = "intensity") -> np.ndarray:
         """
@@ -409,24 +437,7 @@ class Frame:
         if distance_idx < 0 or distance_idx >= self.n_distances:
             raise IndexError(f"Distance index {distance_idx} out of range [0, {self.n_distances})")
 
-        extractors = {
-            "intensity": lambda: self.intensity[:, distance_idx],
-            "data": lambda: self.intensity[:, distance_idx],
-            "raw": lambda: self._raw_data[:, distance_idx],
-            "bit12": lambda: self.bit12[:, distance_idx],
-            "pps": lambda: self.bit12[:, distance_idx],
-            "bit13": lambda: self.bit13[:, distance_idx],
-            "bearing_pulse": lambda: self.bit13[:, distance_idx],
-            "bit14": lambda: self.bit14[:, distance_idx],
-            "bit15": lambda: self.bit15[:, distance_idx],
-        }
-
-        if extract not in extractors:
-            raise ValueError(
-                f"Unknown extract type '{extract}'. Use: {', '.join(extractors.keys())}"
-            )
-
-        return extractors[extract]()
+        return self._get_source_array(extract)[:, distance_idx]
 
     def get_distance_range(
         self, start_idx: int, end_idx: int, extract: str = "intensity"
@@ -447,22 +458,7 @@ class Frame:
                 f"Distance range [{start_idx}, {end_idx}) invalid for n_distances={self.n_distances}"
             )
 
-        extractors = {
-            "intensity": lambda: self.intensity[:, start_idx:end_idx],
-            "data": lambda: self.intensity[:, start_idx:end_idx],
-            "raw": lambda: self._raw_data[:, start_idx:end_idx],
-            "bit12": lambda: self.bit12[:, start_idx:end_idx],
-            "pps": lambda: self.bit12[:, start_idx:end_idx],
-            "bit13": lambda: self.bit13[:, start_idx:end_idx],
-            "bearing_pulse": lambda: self.bit13[:, start_idx:end_idx],
-            "bit14": lambda: self.bit14[:, start_idx:end_idx],
-            "bit15": lambda: self.bit15[:, start_idx:end_idx],
-        }
-
-        if extract not in extractors:
-            raise ValueError(f"Unknown extract type '{extract}'")
-
-        return extractors[extract]()
+        return self._get_source_array(extract)[:, start_idx:end_idx]
 
     def get_bearing_row(self, bearing_idx: int, extract: str = "intensity") -> np.ndarray:
         """
@@ -478,22 +474,7 @@ class Frame:
         if bearing_idx < 0 or bearing_idx >= self.n_bearings:
             raise IndexError(f"Bearing index {bearing_idx} out of range [0, {self.n_bearings})")
 
-        extractors = {
-            "intensity": lambda: self.intensity[bearing_idx, :],
-            "data": lambda: self.intensity[bearing_idx, :],
-            "raw": lambda: self._raw_data[bearing_idx, :],
-            "bit12": lambda: self.bit12[bearing_idx, :],
-            "pps": lambda: self.bit12[bearing_idx, :],
-            "bit13": lambda: self.bit13[bearing_idx, :],
-            "bearing_pulse": lambda: self.bit13[bearing_idx, :],
-            "bit14": lambda: self.bit14[bearing_idx, :],
-            "bit15": lambda: self.bit15[bearing_idx, :],
-        }
-
-        if extract not in extractors:
-            raise ValueError(f"Unknown extract type '{extract}'")
-
-        return extractors[extract]()
+        return self._get_source_array(extract)[bearing_idx, :]
 
     # -------------------------------------------------------------------------
     # Range calculations
@@ -658,83 +639,3 @@ class Frame:
             f"  File: {self._metadata.filename}\n"
             f"  Lat/Lon: {self._metadata.latitude}, {self._metadata.longitude}"
         )
-
-
-def main() -> None:
-    """Test the Frame class with synthetic data."""
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Test Frame class")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
-    parser.parse_args()
-
-    # Create synthetic test data
-    n_bearings, n_distances = 360, 752
-    raw_data = np.random.randint(0, 65535, (n_bearings, n_distances), dtype=np.uint16)
-
-    # Set some specific bits for testing
-    raw_data[0, :] |= 0x1000  # Set bit 12 on first bearing
-    raw_data[:, 0] |= 0x2000  # Set bit 13 on first distance
-
-    metadata = FrameMetadata(
-        timestamp=np.datetime64("2024-12-15T10:30:00"),
-        filename="test_file.pol",
-        latitude=18.57,
-        longitude=142.96,
-        samples_in_range=n_distances,
-        sampling_frequency=20.0,  # 20 MHz sampling (stored in MHz)
-        sample_delay_range=150.0,  # 150m starting range
-        radar_height=25.0,  # 25m above water
-    )
-
-    frame = Frame(raw_data, metadata)
-
-    print(f"Created: {frame}")
-    print(f"\nIntensity shape: {frame.intensity.shape}")
-    print(f"Intensity range: [{frame.intensity.min()}, {frame.intensity.max()}]")
-    print(f"\nBit 12 (PPS) - first bearing all True: {frame.bit12[0, :].all()}")
-    print(f"Bit 13 (bearing) - first distance all True: {frame.bit13[:, 0].all()}")
-
-    # Test distance row extraction
-    row = frame.get_distance_row(100, "intensity")
-    print(f"\nDistance row 100 shape: {row.shape}")
-
-    # Test bearing row extraction
-    row = frame.get_bearing_row(0, "bit12")
-    print(f"Bearing row 0 (bit12) all True: {row.all()}")
-
-    # Test range calculations
-    print("\n--- Range Calculations ---")
-    from wamos_tpw.constants import N_AIR_STANDARD
-
-    print(f"Speed of light in air: {C_AIR:.0f} m/s")
-    print(f"Refractive index (20°C, 50% RH): {N_AIR_STANDARD}")
-    print(f"Range resolution: {frame.range_resolution:.4f} m/bin")
-
-    # Slant ranges
-    slant_ranges = frame.slant_range()
-    print(
-        f"\nSlant range: {slant_ranges[0]:.1f}m (bin 0) to {slant_ranges[-1]:.1f}m (bin {n_distances - 1})"
-    )
-
-    # Ground ranges
-    ground_ranges = frame.ground_range()
-    print(
-        f"Ground range: {ground_ranges[0]:.1f}m (bin 0) to {ground_ranges[-1]:.1f}m (bin {n_distances - 1})"
-    )
-
-    # Single bin example
-    slant, ground = frame.range_at_bin(100)
-    print(f"\nBin 100: slant={slant:.1f}m, ground={ground:.1f}m")
-
-    # Show first few bins where ground range might be 0 (slant < height)
-    print(f"\nFirst 5 bins (radar height = {metadata.radar_height}m):")
-    for i in range(5):
-        s, g = frame.range_at_bin(i)
-        print(f"  Bin {i}: slant={s:.2f}m, ground={g:.2f}m")
-
-    print("\nAll tests passed!")
-
-
-if __name__ == "__main__":
-    main()

@@ -30,8 +30,9 @@ Example with progress callback::
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Iterator, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from wamos_tpw.config import Config
@@ -190,11 +191,11 @@ class MergePipeline(Protocol):
         ...
 
     @property
-    def window_config(self) -> "TimeWindowConfig":
+    def window_config(self) -> TimeWindowConfig:
         """Time window configuration."""
         ...
 
-    def iter_merged(self) -> Iterator["MergedImage"]:
+    def iter_merged(self) -> Iterator[MergedImage]:
         """
         Yield merged images as windows complete.
 
@@ -208,8 +209,8 @@ def create_pipeline(
     mode: Literal["batch", "streaming"],
     *,
     # Common parameters
-    config: "Config | None" = None,
-    window_config: "TimeWindowConfig | None" = None,
+    config: Config | None = None,
+    window_config: TimeWindowConfig | None = None,
     n_workers: int | None = None,
     tolerance: float = 1.2,
     qTiming: bool = False,

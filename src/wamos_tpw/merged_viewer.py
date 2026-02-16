@@ -66,7 +66,7 @@ def _draw_range_rings(ax, extent: list[float]) -> None:
             )
 
 
-def show_single_merged_image(merged: "MergedImage") -> None:
+def show_single_merged_image(merged: MergedImage) -> None:
     """
     Display a single merged image in a non-blocking window.
 
@@ -140,7 +140,7 @@ def show_single_merged_image(merged: "MergedImage") -> None:
     plt.pause(0.5)  # Give time to render
 
 
-def show_merged_viewer(merged_images: list["MergedImage"], interval_ms: int = 500) -> None:
+def show_merged_viewer(merged_images: list[MergedImage], interval_ms: int = 500) -> None:
     """
     Show an interactive viewer for merged images.
 

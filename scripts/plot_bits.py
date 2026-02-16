@@ -276,7 +276,7 @@ def plot_frames_bits(
     fig, axes = plt.subplots(2, 2, figsize=figsize, sharex=True)
     axes = axes.flatten()
 
-    for ax, bit in zip(axes, [12, 13, 14, 15]):
+    for ax, bit in zip(axes, [12, 13, 14, 15], strict=False):
         data = all_data[bit]
         for i, d_bin in enumerate(distance_bins):
             ax.plot(x, data[:, i] + i * 1.2, linewidth=0.5, label=f"d{d_bin:02d}")
@@ -358,7 +358,7 @@ def plot_frames_bits_by_distance(
 
     bits_order = [15, 14, 13, 12] if reverse_bits else [12, 13, 14, 15]
 
-    for ax, d_bin in zip(axes, distance_bins):
+    for ax, d_bin in zip(axes, distance_bins, strict=False):
         for i, bit in enumerate(bits_order):
             data = all_data[d_bin][bit]
             ax.plot(x, data + i * 1.2, linewidth=0.5, label=f"b{bit}")

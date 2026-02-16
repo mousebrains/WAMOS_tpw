@@ -170,7 +170,7 @@ def main():
         ("Dewinded", dewinded),
     ]
 
-    for ax, (title, data) in zip(axes[:4], stages):
+    for ax, (title, data) in zip(axes[:4], stages, strict=False):
         vmin, vmax = np.nanpercentile(data, [1, 99])
         t_mesh, r_mesh, d_closed = polar_mesh(data, theta_deg, ground_range)
         ax.pcolormesh(

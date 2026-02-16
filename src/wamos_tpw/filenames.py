@@ -5,14 +5,16 @@
 # Dec-2025, Pat Welch, pat@mousebrains.com
 
 from __future__ import annotations
+
 import logging
-import numpy as np
 import os
 import re
-from pathlib import Path
+from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor
-from typing import Iterator
 from functools import partial
+from pathlib import Path
+
+import numpy as np
 
 __all__ = ["Filenames"]
 
@@ -193,7 +195,7 @@ class Filenames:
     def __str__(self) -> str:
         return "\n".join(self.files)
 
-    def __enter__(self) -> "Filenames":
+    def __enter__(self) -> Filenames:
         """Enter context manager."""
         return self
 
@@ -594,7 +596,7 @@ def _parse_timestamp(ts: str) -> np.datetime64:
         try:
             return np.datetime64(ts)
         except ValueError:
-            raise ValueError(f"Invalid ISO timestamp format: {ts}")
+            raise ValueError(f"Invalid ISO timestamp format: {ts}") from None
 
     # Handle compact format with T separator (e.g., 20220405T1400)
     if "T" in ts:
@@ -643,7 +645,7 @@ def _parse_timestamp(ts: str) -> np.datetime64:
     try:
         return np.datetime64(iso)
     except ValueError as e:
-        raise ValueError(f"Invalid timestamp values in '{ts}': {e}")
+        raise ValueError(f"Invalid timestamp values in '{ts}': {e}") from e
 
 
 def _timestamp_type(ts: str) -> np.datetime64:
@@ -667,7 +669,7 @@ def _timestamp_type(ts: str) -> np.datetime64:
     try:
         return _parse_timestamp(ts)
     except ValueError as e:
-        raise ArgumentTypeError(str(e))
+        raise ArgumentTypeError(str(e)) from e
 
 
 def _directory_type(path: str) -> Path:

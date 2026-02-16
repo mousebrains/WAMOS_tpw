@@ -10,9 +10,8 @@ import logging
 import sys
 from pathlib import Path
 
-from wamos_tpw.exceptions import WamosError, ConfigError, PolarFileError, ValidationError
+from wamos_tpw.exceptions import ConfigError, PolarFileError, ValidationError, WamosError
 from wamos_tpw.logging_config import add_logging_arguments, setup_logging
-
 
 logger = logging.getLogger(__name__)
 
@@ -89,14 +88,31 @@ Examples:
     )
 
     # Register subcommands from each module
-    from wamos_tpw import files, bearing, theta
-    from wamos_tpw import filenames, polarfile, config
-    from wamos_tpw import deramp, destreak, shadow, dewind, pps
-    from wamos_tpw import frame_pipeline, files_pipeline, interpolator
+    from wamos_tpw import (
+        bearing,
+        config,
+        deramp,
+        destreak,
+        dewind,
+        filenames,
+        files,
+        files_pipeline,
+        frame_pipeline,
+        hard_returns,
+        interpolator,
+        list_frames,
+        metadata,
+        polarfile,
+        pps,
+        pps_timing,
+        shadow,
+        stitch,
+        streaming_filenames,
+        streaming_pipeline,
+        theta,
+        timeshift,
+    )
     from wamos_tpw import range as range_module  # Avoid shadowing builtin
-    from wamos_tpw import list_frames
-    from wamos_tpw import streaming_filenames, streaming_pipeline
-    from wamos_tpw import stitch
 
     files.add_subparser(subparsers)  # wamos view
     bearing.add_subparser(subparsers)  # wamos bearing
@@ -117,6 +133,10 @@ Examples:
     streaming_filenames.add_subparser(subparsers)  # wamos stream-list
     streaming_pipeline.add_subparser(subparsers)  # wamos stream-pipeline
     stitch.add_subparser(subparsers)  # wamos stitch
+    metadata.add_subparser(subparsers)  # wamos metadata
+    timeshift.add_subparser(subparsers)  # wamos timeshift
+    pps_timing.add_subparser(subparsers)  # wamos pps-timing
+    hard_returns.add_subparser(subparsers)  # wamos hard-returns
 
     # Parse arguments
     args = parser.parse_args()

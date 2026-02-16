@@ -25,7 +25,6 @@ import pytest
 
 from wamos_tpw.frame import Frame, FrameMetadata
 
-
 # Skip if pytest-benchmark not installed
 pytest.importorskip("pytest_benchmark")
 
@@ -296,7 +295,7 @@ class TestEndToEndBenchmarks:
     def test_theta_calculation(self, benchmark, single_polar_file):
         """Benchmark Theta calculation."""
         from wamos_tpw.bearing import MultiTheta as Theta
-        from wamos_tpw.config import WamosConfig
+        from wamos_tpw.config import Config as WamosConfig
         from wamos_tpw.polarfile import PolarFile
 
         pf = PolarFile(single_polar_file)
@@ -311,8 +310,9 @@ class TestEndToEndBenchmarks:
 
     def test_bearing_calculation(self, benchmark, single_polar_file):
         """Benchmark Bearing coordinate calculation."""
-        from wamos_tpw.bearing import MultiTheta as Theta, MultiBearing as Bearing
-        from wamos_tpw.config import WamosConfig
+        from wamos_tpw.bearing import MultiBearing as Bearing
+        from wamos_tpw.bearing import MultiTheta as Theta
+        from wamos_tpw.config import Config as WamosConfig
         from wamos_tpw.polarfile import PolarFile
 
         pf = PolarFile(single_polar_file)
@@ -525,7 +525,7 @@ class TestProcessingRegression:
     def test_regression_theta_calculation(self, single_polar_file):
         """Theta calculation should complete in < 1s."""
         from wamos_tpw.bearing import MultiTheta as Theta
-        from wamos_tpw.config import WamosConfig
+        from wamos_tpw.config import Config as WamosConfig
         from wamos_tpw.polarfile import PolarFile
 
         pf = PolarFile(single_polar_file)

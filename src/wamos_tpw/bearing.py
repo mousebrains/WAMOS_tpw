@@ -11,19 +11,15 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 
 import numpy as np
 
 from wamos_tpw.config import Config
-from wamos_tpw.frame import Frame
-from wamos_tpw.theta import Theta as SingleTheta
-from wamos_tpw.shadow import Shadow
 from wamos_tpw.destreak import Destreak
+from wamos_tpw.frame import Frame
 from wamos_tpw.range import Range
-
-if TYPE_CHECKING:
-    pass
+from wamos_tpw.shadow import Shadow
+from wamos_tpw.theta import Theta as SingleTheta
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +126,7 @@ class Bearing:
         theta: np.ndarray,
         ship_heading: float,
         ground_range: np.ndarray,
-        config: "Config | None" = None,
+        config: Config | None = None,
     ) -> None:
         """
         Initialize Bearing converter.
@@ -241,26 +237,8 @@ class Bearing:
         )
 
 
-# =============================================================================
-# Backward compatibility: Legacy Theta class wrapper
-# =============================================================================
-# The old Theta class has been replaced by wamos_tpw.theta.Theta
-# This import maintains backward compatibility for code that does:
-#   from wamos_tpw.bearing import Theta
-
-try:
-    from wamos_tpw.theta import Theta
-except ImportError:
-    # Theta not available - define a stub that raises helpful error
-    class Theta:  # type: ignore[no-redef]
-        """Theta has moved to wamos_tpw.theta."""
-
-        def __init__(self, *args, **kwargs):
-            raise ImportError(
-                "Theta has moved from wamos_tpw.bearing to wamos_tpw.theta. "
-                "Use: from wamos_tpw.theta import Theta"
-            )
-
+# Backward compatibility: allow `from wamos_tpw.bearing import Theta`
+from wamos_tpw.theta import Theta  # noqa: E402, F811
 
 # =============================================================================
 # CLI
@@ -289,7 +267,6 @@ def run(args) -> None:
     """Execute the 'bearing' command."""
     from wamos_tpw.config import Config
     from wamos_tpw.polarfile import PolarFile
-    from wamos_tpw.theta import Theta
     from wamos_tpw.range import Range
 
     # Load polar file
@@ -661,20 +638,12 @@ class MultiBearing:
         if frame_idx in self._xy_ship_cache:
             return self._xy_ship_cache[frame_idx]
 
-        heading = self.heading_ship(frame_idx)
-        ground_range = self._get_ground_range(frame_idx)
-
-        heading_rad = np.deg2rad(heading)
-        heading_2d = heading_rad[:, np.newaxis]
-        range_2d = ground_range[np.newaxis, :]
-
-        x = range_2d * np.sin(heading_2d)
-        y = range_2d * np.cos(heading_2d)
+        result = heading_to_xy(self.heading_ship(frame_idx), self._get_ground_range(frame_idx))
 
         if self._cache_coordinates:
-            self._xy_ship_cache[frame_idx] = (x, y)
+            self._xy_ship_cache[frame_idx] = result
 
-        return x, y
+        return result
 
     def xy_earth(self, frame_idx: int) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -691,20 +660,12 @@ class MultiBearing:
         if frame_idx in self._xy_earth_cache:
             return self._xy_earth_cache[frame_idx]
 
-        heading = self.heading_earth(frame_idx)
-        ground_range = self._get_ground_range(frame_idx)
-
-        heading_rad = np.deg2rad(heading)
-        heading_2d = heading_rad[:, np.newaxis]
-        range_2d = ground_range[np.newaxis, :]
-
-        x = range_2d * np.sin(heading_2d)  # East
-        y = range_2d * np.cos(heading_2d)  # North
+        result = heading_to_xy(self.heading_earth(frame_idx), self._get_ground_range(frame_idx))
 
         if self._cache_coordinates:
-            self._xy_earth_cache[frame_idx] = (x, y)
+            self._xy_earth_cache[frame_idx] = result
 
-        return x, y
+        return result
 
     def clear_cache(self) -> None:
         """Clear all coordinate caches."""

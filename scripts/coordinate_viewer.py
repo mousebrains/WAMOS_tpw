@@ -35,14 +35,15 @@ src_path = Path(__file__).parent.parent / "src"
 if src_path.exists():
     sys.path.insert(0, str(src_path))
 
-from wamos_tpw import Filenames, PolarFrame  # noqa: E402
 from wamos_tpw.args import add_time_range_arguments  # noqa: E402
 from wamos_tpw.coordinates import CoordinateTransformer  # noqa: E402
+from wamos_tpw.theta_calc import WamosTheta  # noqa: E402
+
+from wamos_tpw import Filenames, PolarFrame  # noqa: E402
 from wamos_tpw.destreak import DestreakFrame  # noqa: E402
 from wamos_tpw.logging_config import add_logging_arguments, setup_logging  # noqa: E402
 from wamos_tpw.pps import WamosPPS  # noqa: E402
 from wamos_tpw.shadow import ShadowConfig  # noqa: E402
-from wamos_tpw.theta_calc import WamosTheta  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

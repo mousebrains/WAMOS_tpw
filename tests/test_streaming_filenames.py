@@ -79,7 +79,7 @@ class TestCreateTimeWindowsFromBounds:
         assert start == np.datetime64(stime, "ns")
 
         # Windows should be sequential
-        for i, (start, end, idx) in enumerate(windows):
+        for i, (_start, _end, idx) in enumerate(windows):
             assert idx == i
 
     def test_no_overlap(self):
@@ -360,7 +360,7 @@ class TestStreamingFilenames:
 
         with StreamingFilenames(stime, etime, str(test_data_dir)) as streaming:
             # Consume all batches
-            for batch in streaming.iter_batches(timeout=10.0):
+            for _batch in streaming.iter_batches(timeout=10.0):
                 pass
 
         # After consuming, should be complete

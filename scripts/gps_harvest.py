@@ -22,7 +22,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -33,7 +33,7 @@ if src_path.exists():
     sys.path.insert(0, str(src_path))
 
 from wamos_tpw import Filenames, PolarFile  # noqa: E402
-from wamos_tpw.filenames import add_common_arguments, _extract_file_timestamp  # noqa: E402
+from wamos_tpw.filenames import _extract_file_timestamp, add_common_arguments  # noqa: E402
 from wamos_tpw.logging_config import add_logging_arguments, setup_logging  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ def extract_file_timestamp(filepath: str) -> datetime | None:
     # Convert np.datetime64 to datetime with UTC timezone
     dt = ts.astype("datetime64[us]").astype("M8[us]").item()
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt
 
 
@@ -224,7 +224,7 @@ def read_gps_from_file(fn: str) -> GPSPoint | None:
         # Convert np.datetime64 to datetime with UTC timezone
         frame_dt = ts.astype("datetime64[us]").astype(datetime)
         if frame_dt.tzinfo is None:
-            frame_dt = frame_dt.replace(tzinfo=timezone.utc)
+            frame_dt = frame_dt.replace(tzinfo=UTC)
 
         # Get GPS data
         lat = meta.latitude
@@ -358,7 +358,7 @@ class NetCDFWriter:
         # Reference time for CF conventions
         self.time_units = "seconds since 1970-01-01T00:00:00Z"
         self.calendar = "proleptic_gregorian"
-        self.epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        self.epoch = datetime(1970, 1, 1, tzinfo=UTC)
 
     def _create_file(self) -> None:
         """Create the NetCDF file with dimensions and variables."""
@@ -372,7 +372,7 @@ class NetCDFWriter:
         self.ds.title = self.title or f"GPS track for {self.ship_name}"
         self.ds.institution = "WAMOS radar system"
         self.ds.source = "WAMOS polar file metadata"
-        self.ds.history = f"Created {datetime.now(timezone.utc).isoformat()} by gps_harvest.py"
+        self.ds.history = f"Created {datetime.now(UTC).isoformat()} by gps_harvest.py"
         self.ds.references = "https://github.com/OceanWaveS/wamos"
         self.ds.platform = self.ship_name
         self.ds.featureType = "trajectory"

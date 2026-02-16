@@ -343,8 +343,8 @@ def add_subparser(subparsers) -> None:
 
 def run(args) -> None:
     """Execute the 'destreak' command."""
-    from wamos_tpw.polarfile import PolarFile
     from wamos_tpw.config import Config
+    from wamos_tpw.polarfile import PolarFile
 
     config = Config(args.config) if args.config else None
 

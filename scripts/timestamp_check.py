@@ -585,7 +585,7 @@ def main() -> int:
             # Middle left: Heading vs time
             ax_hdg = fig.add_subplot(gs[1, 0])
             # Plot heading for each frame
-            for i, (times, hdg) in enumerate(zip(all_radial_times, all_headings)):
+            for i, (times, hdg) in enumerate(zip(all_radial_times, all_headings, strict=False)):
                 if i % max(1, n_loaded // 20) == 0:  # Plot every Nth frame
                     ax_hdg.plot(times - all_radial_times[0][0], hdg, alpha=0.5, linewidth=0.5)
             ax_hdg.set_xlabel("Time (seconds from start)")

@@ -97,10 +97,10 @@ class TestCLIModuleImports:
     def test_import_subcommands(self):
         """Test that all subcommand modules have add_subparser."""
         from wamos_tpw import (
-            filenames,
-            polarfile,
             deramp,
             destreak,
+            filenames,
+            polarfile,
         )
 
         # Each module should have add_subparser function

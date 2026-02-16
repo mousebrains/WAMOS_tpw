@@ -367,7 +367,7 @@ def run(args) -> None:
     logging.info("Shape: %s", frame.shape)
     logging.info("Shadow regions: %d", len(shadow.indices))
     logging.info("Shadow pixels: %d (%.2f%%)", diag.n_shadow_pixels, diag.shadow_fraction * 100)
-    for i, (t, idx) in enumerate(zip(shadow.thetas, shadow.indices)):
+    for i, (t, idx) in enumerate(zip(shadow.thetas, shadow.indices, strict=False)):
         logging.info(
             "  Region %d: theta=[%.2f, %.2f], indices=[%d, %d]", i, t[0], t[1], idx[0], idx[1]
         )
