@@ -22,6 +22,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 # ── Configuration matrix ──
@@ -162,7 +163,8 @@ def main():
     print(json.dumps(output))
 
 
-main()
+if __name__ == '__main__':
+    main()
 '''
 
 
@@ -210,13 +212,24 @@ def run_scaling_config(
     # Generous timeout: up to 60s per file
     timeout = max(600, len(filepaths) * 60)
 
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=timeout,
-    )
+    # Write script to a temp file instead of using -c, so that
+    # ProcessPoolExecutor (spawn) can pickle functions from __main__.
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".py", delete=False
+    ) as tmp:
+        tmp.write(script)
+        tmp_path = tmp.name
+
+    try:
+        result = subprocess.run(
+            [sys.executable, tmp_path],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=timeout,
+        )
+    finally:
+        os.unlink(tmp_path)
 
     if result.returncode != 0:
         print(f"\n  ERROR running {cfg['name']} w={n_workers}:", file=sys.stderr)

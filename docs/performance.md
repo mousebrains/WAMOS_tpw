@@ -347,9 +347,88 @@ wamos stream-pipeline ... --no-gpu --workers 16
 5. PyTorch adds ~940 MB RSS per worker vs ~200 MB for NumPy-only
 6. For 100,000 files: `--no-gpu --workers 16` recommended (~19 min vs ~47 min with GPU)
 
-### Apple Silicon
+### Apple M4 Max
 
-*(benchmarks pending)*
+Machine: Apple M4 Max, 16 CPU cores, 40 GPU cores (Metal 4), 128 GB unified memory
+Software: PyTorch 2.10.0 (MPS), Numba 0.63.1, NumPy 2.3.5, Python 3.14.3
+
+#### Large Frame (2514 x 1552) -- 20 iterations, 5 warmup
+
+**Frame Pipeline (median ms, lower is better)**
+
+| Step | NumPy-only | Numba | PyTorch MPS | PyTorch+Numba | Best speedup |
+|---|---|---|---|---|---|
+| PPS | 0.017 | 0.019 | 0.024 | 0.024 | 1.0x |
+| Theta | 0.145 | 0.157 | 0.178 | 0.179 | 1.0x |
+| Range | 0.017 | 0.018 | 0.022 | 0.022 | 1.0x |
+| Destreak | 11.12 | 11.16 | **10.85** | 10.99 | **1.02x** |
+| Shadow | 3.69 | 3.73 | 3.79 | 3.76 | 1.0x |
+| MaskShadow | 0.25 | 0.25 | 0.26 | 0.26 | 1.0x |
+| Deramp | 5.06 | 5.11 | **3.85** | 4.01 | **1.31x** |
+| Dewind | 4.66 | 4.65 | 4.71 | 4.74 | 1.0x |
+| **Pipeline TOTAL** | 25.07 | 25.20 | **23.80** | 24.00 | **1.05x** |
+
+**Grid Projection (median ms)**
+
+| NumPy-only | Numba | PyTorch MPS | PyTorch+Numba | Best speedup |
+|---|---|---|---|---|
+| 9.74 | 9.80 | **7.87** | 8.43 | **1.24x** |
+
+**Memory Usage (MB)**
+
+| Metric | NumPy-only | Numba | PyTorch MPS | PyTorch+Numba |
+|---|---|---|---|---|
+| Baseline RSS | 100.8 | 141.9 | 273.2 | 311.5 |
+| Peak RSS | 331.7 | 373.9 | 435.8 | 471.8 |
+| Delta RSS | 230.9 | 232.0 | 162.6 | 160.3 |
+
+#### Small Frame (808 x 752) -- 30 iterations, 5 warmup
+
+**Frame Pipeline (median ms)**
+
+| Step | NumPy-only | Numba | PyTorch MPS | PyTorch+Numba | Best speedup |
+|---|---|---|---|---|---|
+| Destreak | **1.71** | 1.74 | 3.36 | 4.02 | 1.0x |
+| Shadow | **3.51** | 3.62 | 3.69 | 3.71 | 1.0x |
+| Deramp | 0.91 | **0.90** | 1.70 | 1.73 | 1.0x |
+| Dewind | **0.84** | 0.85 | 0.90 | 0.91 | 1.0x |
+| **Pipeline TOTAL** | **7.12** | 7.28 | 10.14 | 10.64 | **1.0x** |
+
+**Grid Projection (median ms)**
+
+| NumPy-only | Numba | PyTorch MPS | PyTorch+Numba | Best speedup |
+|---|---|---|---|---|
+| **1.48** | 1.55 | 3.54 | 3.84 | **1.0x** |
+
+**Memory Usage (MB)**
+
+| Metric | NumPy-only | Numba | PyTorch MPS | PyTorch+Numba |
+|---|---|---|---|---|
+| Baseline RSS | 84.3 | 125.3 | 255.4 | 294.8 |
+| Peak RSS | 139.7 | 182.0 | 349.9 | 387.7 |
+| Delta RSS | 55.4 | 56.8 | 94.5 | 92.9 |
+
+#### Multi-Worker Scaling -- 30 files, Small Frame
+
+| Config | Best Workers | Peak FPS | Peak Speedup |
+|---|---|---|---|
+| NumPy-only | 8 | 41.18 | 1.14x |
+| Numba | 4 | 32.49 | 1.04x |
+| PyTorch MPS | 1 | 16.63 | 1.00x |
+| PyTorch + Numba | 2 | 12.18 | 1.00x |
+
+NumPy-only scales modestly to 8 workers on this workload.  PyTorch MPS
+degrades with multiple workers -- MPS serializes GPU commands from
+separate processes, adding overhead without parallel execution benefit.
+
+#### Key Observations
+
+1. The M4 Max CPU is ~2x faster than DGX Spark ARM cores: NumPy-only pipeline is 25 ms vs 49 ms on identical large frames
+2. PyTorch MPS provides only modest gains on large frames (1.05x pipeline, 1.24x grid) -- Apple's fast CPU and unified memory reduce the GPU advantage compared to discrete CUDA GPUs
+3. On small frames, PyTorch MPS is slower than CPU (0.70x) -- MPS dispatch overhead exceeds the compute savings at this scale
+4. Deramp sees the largest MPS benefit (1.31x) via GPU nanmean reduction; Destreak gain is marginal (1.02x) because OpenCV `filter2D` is already highly optimized on ARM NEON
+5. Memory overhead: PyTorch MPS adds ~170-210 MB baseline RSS (Metal runtime), lower than CUDA's ~500 MB overhead on DGX
+6. For Apple Silicon, **NumPy-only is the recommended configuration** -- it has the fastest small-frame throughput, lowest memory, and best multi-worker scaling
 
 ## Troubleshooting Performance Issues
 
