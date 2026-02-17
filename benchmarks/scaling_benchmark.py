@@ -30,19 +30,27 @@ from pathlib import Path
 CONFIGS = {
     "numpy": {
         "name": "NumPy-only",
-        "env": {"WAMOS_NO_GPU": "1", "WAMOS_NO_NUMBA": "1"},
+        "env": {"WAMOS_NO_GPU": "1", "WAMOS_NO_NUMBA": "1", "WAMOS_NO_CUPY": "1"},
     },
     "numba": {
         "name": "Numba",
-        "env": {"WAMOS_NO_GPU": "1", "WAMOS_NO_NUMBA": ""},
+        "env": {"WAMOS_NO_GPU": "1", "WAMOS_NO_NUMBA": "", "WAMOS_NO_CUPY": "1"},
     },
     "pytorch": {
         "name": "PyTorch GPU",
-        "env": {"WAMOS_NO_GPU": "", "WAMOS_NO_NUMBA": "1"},
+        "env": {"WAMOS_NO_GPU": "", "WAMOS_NO_NUMBA": "1", "WAMOS_NO_CUPY": "1"},
     },
     "both": {
         "name": "PyTorch + Numba",
-        "env": {"WAMOS_NO_GPU": "", "WAMOS_NO_NUMBA": ""},
+        "env": {"WAMOS_NO_GPU": "", "WAMOS_NO_NUMBA": "", "WAMOS_NO_CUPY": "1"},
+    },
+    "cupy": {
+        "name": "CuPy",
+        "env": {"WAMOS_NO_GPU": "1", "WAMOS_NO_NUMBA": "1", "WAMOS_NO_CUPY": ""},
+    },
+    "cupy+numba": {
+        "name": "CuPy + Numba",
+        "env": {"WAMOS_NO_GPU": "1", "WAMOS_NO_NUMBA": "", "WAMOS_NO_CUPY": ""},
     },
 }
 
@@ -195,6 +203,7 @@ def run_scaling_config(
     env = dict(os.environ)
     env.pop("WAMOS_NO_GPU", None)
     env.pop("WAMOS_NO_NUMBA", None)
+    env.pop("WAMOS_NO_CUPY", None)
     for k, v in cfg["env"].items():
         if v:
             env[k] = v
@@ -214,9 +223,7 @@ def run_scaling_config(
 
     # Write script to a temp file instead of using -c, so that
     # ProcessPoolExecutor (spawn) can pickle functions from __main__.
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".py", delete=False
-    ) as tmp:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as tmp:
         tmp.write(script)
         tmp_path = tmp.name
 
@@ -375,7 +382,7 @@ def main():
         "--configs",
         nargs="+",
         default=["numpy", "both"],
-        choices=["numpy", "numba", "pytorch", "both"],
+        choices=["numpy", "numba", "pytorch", "both", "cupy", "cupy+numba"],
         help="Configs to test (default: numpy both)",
     )
     parser.add_argument("--json", type=str, default=None, help="Save results to JSON file")

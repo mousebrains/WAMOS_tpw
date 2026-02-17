@@ -2,11 +2,13 @@
 """
 Backend comparison benchmark for WAMOS pipeline.
 
-Tests 4 configurations of the actual pipeline code:
-  1. NumPy-only   (no GPU, no Numba)
-  2. Numba         (no GPU, Numba enabled)
-  3. PyTorch GPU   (GPU enabled, no Numba)
-  4. PyTorch + Numba (both enabled)
+Tests 6 configurations of the actual pipeline code:
+  1. NumPy-only       (no GPU, no CuPy, no Numba)
+  2. Numba            (no GPU, no CuPy, Numba enabled)
+  3. PyTorch GPU      (GPU enabled, no CuPy, no Numba)
+  4. PyTorch + Numba  (GPU enabled, no CuPy, both enabled)
+  5. CuPy             (no PyTorch GPU, CuPy enabled, no Numba)
+  6. CuPy + Numba     (no PyTorch GPU, CuPy enabled, Numba enabled)
 
 Each configuration runs in a subprocess with the appropriate env vars
 so that module-level detection picks up the correct settings.
@@ -31,19 +33,27 @@ from pathlib import Path
 CONFIGS = [
     {
         "name": "NumPy-only",
-        "env": {"WAMOS_NO_GPU": "1", "WAMOS_NO_NUMBA": "1"},
+        "env": {"WAMOS_NO_GPU": "1", "WAMOS_NO_NUMBA": "1", "WAMOS_NO_CUPY": "1"},
     },
     {
         "name": "Numba",
-        "env": {"WAMOS_NO_GPU": "1", "WAMOS_NO_NUMBA": ""},
+        "env": {"WAMOS_NO_GPU": "1", "WAMOS_NO_NUMBA": "", "WAMOS_NO_CUPY": "1"},
     },
     {
         "name": "PyTorch GPU",
-        "env": {"WAMOS_NO_GPU": "", "WAMOS_NO_NUMBA": "1"},
+        "env": {"WAMOS_NO_GPU": "", "WAMOS_NO_NUMBA": "1", "WAMOS_NO_CUPY": "1"},
     },
     {
         "name": "PyTorch + Numba",
-        "env": {"WAMOS_NO_GPU": "", "WAMOS_NO_NUMBA": ""},
+        "env": {"WAMOS_NO_GPU": "", "WAMOS_NO_NUMBA": "", "WAMOS_NO_CUPY": "1"},
+    },
+    {
+        "name": "CuPy",
+        "env": {"WAMOS_NO_GPU": "1", "WAMOS_NO_NUMBA": "1", "WAMOS_NO_CUPY": ""},
+    },
+    {
+        "name": "CuPy + Numba",
+        "env": {"WAMOS_NO_GPU": "1", "WAMOS_NO_NUMBA": "", "WAMOS_NO_CUPY": ""},
     },
 ]
 
@@ -62,7 +72,7 @@ import numpy as np
 
 sys.path.insert(0, "{src_dir}")
 
-from wamos_tpw.backend import HAS_NUMBA, HAS_TORCH_GPU
+from wamos_tpw.backend import HAS_CUPY_GPU, HAS_NUMBA, HAS_TORCH_GPU
 from wamos_tpw.config import Config
 from wamos_tpw.polarfile import PolarFile
 
@@ -160,6 +170,7 @@ def main():
     baseline_rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 
     output = {{
+        "HAS_CUPY_GPU": HAS_CUPY_GPU,
         "HAS_TORCH_GPU": HAS_TORCH_GPU,
         "HAS_NUMBA": HAS_NUMBA,
         "frame_shape": list(frame.shape),
@@ -206,6 +217,7 @@ def run_config(cfg, filepath, config_path, n_warmup, n_iter, src_dir):
     # Clear first, then set
     env.pop("WAMOS_NO_GPU", None)
     env.pop("WAMOS_NO_NUMBA", None)
+    env.pop("WAMOS_NO_CUPY", None)
     for k, v in cfg["env"].items():
         if v:
             env[k] = v
@@ -380,6 +392,8 @@ def print_comparison_table(all_results):
         grid_speedup = numpy_grid / grid_med if numpy_grid and grid_med > 0 else 1.0
 
         backends = []
+        if r.get("HAS_CUPY_GPU"):
+            backends.append("CuPy/CUDA")
         if r.get("HAS_TORCH_GPU"):
             backends.append("PyTorch/CUDA")
         if r.get("HAS_NUMBA"):
@@ -446,7 +460,7 @@ def main():
         "--configs",
         nargs="+",
         default=None,
-        choices=["numpy", "numba", "pytorch", "both"],
+        choices=["numpy", "numba", "pytorch", "both", "cupy", "cupy+numba"],
         help="Configs to test (default: all)",
     )
     args = parser.parse_args()
@@ -465,7 +479,7 @@ def main():
     src_dir = str(Path(__file__).resolve().parents[1] / "src")
 
     # Filter configs
-    config_map = {"numpy": 0, "numba": 1, "pytorch": 2, "both": 3}
+    config_map = {"numpy": 0, "numba": 1, "pytorch": 2, "both": 3, "cupy": 4, "cupy+numba": 5}
     if args.configs:
         selected = [CONFIGS[config_map[c]] for c in args.configs]
     else:

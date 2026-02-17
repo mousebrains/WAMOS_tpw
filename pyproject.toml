@@ -65,11 +65,11 @@ export = [
     "netCDF4>=1.6",
     "zarr>=2.16",
 ]
-gpu = [
-    "torch>=2.0",
+cupy = [
+    "cupy-cuda13x>=14.0",
 ]
 all = [
-    "wamos_tpw[dev,docs,export,gpu]",
+    "wamos_tpw[dev,docs,export,cupy]",
 ]
 
 [project.scripts]
@@ -91,7 +91,7 @@ include = [
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 markers = [
-    "gpu: marks tests that require a PyTorch GPU backend",
+    "gpu: marks tests that require a CuPy GPU backend",
 ]
 
 [tool.mypy]

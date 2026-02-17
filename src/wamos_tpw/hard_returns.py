@@ -32,7 +32,7 @@ import logging
 
 import numpy as np
 
-from wamos_tpw.backend import HAS_TORCH_GPU
+from wamos_tpw.backend import HAS_CUPY_GPU
 
 logger = logging.getLogger(__name__)
 
@@ -144,11 +144,11 @@ def _build_frame_data(record: dict):
 
 
 # ---------------------------------------------------------------
-# GPU-accelerated sweep
+# CuPy GPU-accelerated sweep
 # ---------------------------------------------------------------
 
 
-def _sweep_gpu(
+def _sweep_cupy(
     x_base: np.ndarray,
     y_base: np.ndarray,
     dx_ddt: np.ndarray,
@@ -162,28 +162,24 @@ def _sweep_gpu(
     grid_size: int,
     progress: bool,
 ) -> np.ndarray:
-    """GPU-accelerated offset sweep using scatter_add_."""
-    import torch
+    """CuPy GPU-accelerated offset sweep using cp.bincount."""
+    import cupy as cp
 
-    from wamos_tpw.backend import get_device
-
-    dev = get_device()
     n_offsets = len(offsets)
 
     # Pre-transfer base arrays to GPU once
-    t_x_base = torch.from_numpy(np.ascontiguousarray(x_base, dtype=np.float64)).to(dev)
-    t_y_base = torch.from_numpy(np.ascontiguousarray(y_base, dtype=np.float64)).to(dev)
-    t_dx = torch.from_numpy(np.ascontiguousarray(dx_ddt, dtype=np.float64)).to(dev)
-    t_dy = torch.from_numpy(np.ascontiguousarray(dy_ddt, dtype=np.float64)).to(dev)
+    t_x_base = cp.asarray(x_base, dtype=cp.float64)
+    t_y_base = cp.asarray(y_base, dtype=cp.float64)
+    t_dx = cp.asarray(dx_ddt, dtype=cp.float64)
+    t_dy = cp.asarray(dy_ddt, dtype=cp.float64)
 
     metrics = np.empty(n_offsets, dtype=np.float64)
-    ones = torch.ones(len(x_base), dtype=torch.float64, device=dev)
 
     try:
         from tqdm import tqdm
 
         sweep_iter = tqdm(
-            range(n_offsets), desc="Sweeping (GPU)", unit="offset", disable=not progress
+            range(n_offsets), desc="Sweeping (CuPy)", unit="offset", disable=not progress
         )
     except ImportError:
         sweep_iter = range(n_offsets)
@@ -193,15 +189,14 @@ def _sweep_gpu(
         x = t_x_base + t_dx * dt
         y = t_y_base + t_dy * dt
 
-        xi = ((x - x_min) * inv_spacing).to(torch.int64)
-        yi = ((y - y_min) * inv_spacing).to(torch.int64)
+        xi = ((x - x_min) * inv_spacing).astype(cp.int64)
+        yi = ((y - y_min) * inv_spacing).astype(cp.int64)
 
         valid = (xi >= 0) & (xi < n_gx) & (yi >= 0) & (yi < n_gy)
         linear_idx = yi[valid] * n_gx + xi[valid]
 
-        counts = torch.zeros(grid_size, dtype=torch.float64, device=dev)
-        counts.scatter_add_(0, linear_idx, ones[valid])
-        metrics[k] = float((counts**2).sum())
+        counts = cp.bincount(linear_idx, minlength=grid_size)
+        metrics[k] = float((counts.astype(cp.float64) ** 2).sum())
 
     return metrics
 
@@ -532,8 +527,8 @@ def find_hard_return_offset(
     inv_spacing = 1.0 / grid_spacing
     metrics = np.empty(n_offsets, dtype=np.float64)
 
-    if HAS_TORCH_GPU and n_points > 0:
-        metrics = _sweep_gpu(
+    if HAS_CUPY_GPU and n_points > 0:
+        metrics = _sweep_cupy(
             x_base,
             y_base,
             dx_ddt,

@@ -12,97 +12,71 @@ import pytest
 class TestBackendImport:
     """Test backend module imports and attribute availability."""
 
-    def test_has_torch_gpu_is_bool(self):
-        from wamos_tpw.backend import HAS_TORCH_GPU
+    def test_has_cupy_gpu_is_bool(self):
+        from wamos_tpw.backend import HAS_CUPY_GPU
 
-        assert isinstance(HAS_TORCH_GPU, bool)
+        assert isinstance(HAS_CUPY_GPU, bool)
 
-    def test_get_device_callable(self):
-        from wamos_tpw.backend import get_device
+    def test_has_numba_is_bool(self):
+        from wamos_tpw.backend import HAS_NUMBA
 
-        dev = get_device()
-        # Returns None when no GPU, or a torch.device otherwise
-        if dev is not None:
-            assert hasattr(dev, "type")
+        assert isinstance(HAS_NUMBA, bool)
 
-    def test_to_tensor_returns_array_or_tensor(self):
-        from wamos_tpw.backend import HAS_TORCH_GPU, to_tensor
+    def test_to_cupy_returns_array(self):
+        from wamos_tpw.backend import HAS_CUPY_GPU, to_cupy
 
         arr = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-        result = to_tensor(arr)
-        if HAS_TORCH_GPU:
-            import torch
+        result = to_cupy(arr)
+        if HAS_CUPY_GPU:
+            import cupy
 
-            assert isinstance(result, torch.Tensor)
+            assert isinstance(result, cupy.ndarray)
         else:
             assert isinstance(result, np.ndarray)
 
-    def test_to_numpy_identity_for_ndarray(self):
-        from wamos_tpw.backend import to_numpy
+    def test_from_cupy_identity_for_ndarray(self):
+        from wamos_tpw.backend import from_cupy
 
         arr = np.array([1.0, 2.0, 3.0])
-        result = to_numpy(arr)
+        result = from_cupy(arr)
         assert result is arr
 
-    def test_synchronize_no_error(self):
-        from wamos_tpw.backend import synchronize
+    def test_cupy_synchronize_no_error(self):
+        from wamos_tpw.backend import cupy_synchronize
 
-        synchronize()  # Should not raise
+        cupy_synchronize()  # Should not raise
 
 
 @pytest.mark.gpu
-class TestBackendGPU:
-    """Tests that require a PyTorch GPU."""
+class TestBackendCuPy:
+    """Tests that require a CuPy GPU."""
 
     @pytest.fixture(autouse=True)
-    def _require_gpu(self):
-        from wamos_tpw.backend import HAS_TORCH_GPU
+    def _require_cupy(self):
+        from wamos_tpw.backend import HAS_CUPY_GPU
 
-        if not HAS_TORCH_GPU:
-            pytest.skip("No PyTorch GPU available")
+        if not HAS_CUPY_GPU:
+            pytest.skip("No CuPy GPU available")
 
-    def test_device_type(self):
-        from wamos_tpw.backend import get_device
-
-        dev = get_device()
-        assert dev is not None
-        assert dev.type in ("cuda", "mps")
-
-    def test_tensor_roundtrip(self):
-        from wamos_tpw.backend import to_numpy, to_tensor
+    def test_cupy_roundtrip(self):
+        from wamos_tpw.backend import from_cupy, to_cupy
 
         arr = np.random.rand(100, 200).astype(np.float32)
-        tensor = to_tensor(arr)
-        result = to_numpy(tensor)
+        gpu_arr = to_cupy(arr)
+        result = from_cupy(gpu_arr)
         np.testing.assert_array_almost_equal(result, arr, decimal=6)
 
-    def test_tensor_dtype(self):
-        import torch
+    def test_cupy_synchronize(self):
+        from wamos_tpw.backend import cupy_synchronize
 
-        from wamos_tpw.backend import get_device, to_tensor
-
-        arr = np.array([1, 2, 3], dtype=np.int32)
-        tensor = to_tensor(arr, dtype=torch.float64)
-        assert tensor.dtype == torch.float64
-        assert tensor.device.type == get_device().type
-
-    def test_tensor_2d(self):
-        from wamos_tpw.backend import to_numpy, to_tensor
-
-        arr = np.random.rand(50, 100).astype(np.float32)
-        tensor = to_tensor(arr)
-        result = to_numpy(tensor)
-        assert result.shape == (50, 100)
-        np.testing.assert_array_almost_equal(result, arr, decimal=6)
+        cupy_synchronize()  # Should not raise
 
 
-class TestBackendNoGPU:
-    """Test behavior when GPU is disabled via environment variable."""
+class TestBackendNoCuPy:
+    """Test behavior when CuPy is disabled via environment variable."""
 
-    def test_wamos_no_gpu_env(self, monkeypatch):
-        """Verify WAMOS_NO_GPU=1 forces CPU mode."""
-        monkeypatch.setenv("WAMOS_NO_GPU", "1")
-        # Import in subprocess to test fresh module state
+    def test_wamos_no_cupy_env(self):
+        """Verify WAMOS_NO_CUPY=1 sets HAS_CUPY_GPU=False."""
         import subprocess
         import sys
 
@@ -110,10 +84,10 @@ class TestBackendNoGPU:
             [
                 sys.executable,
                 "-c",
-                "from wamos_tpw.backend import HAS_TORCH_GPU; print(HAS_TORCH_GPU)",
+                "from wamos_tpw.backend import HAS_CUPY_GPU; print(HAS_CUPY_GPU)",
             ],
             capture_output=True,
             text=True,
-            env={**os.environ, "WAMOS_NO_GPU": "1"},
+            env={**os.environ, "WAMOS_NO_CUPY": "1"},
         )
         assert result.stdout.strip() == "False"

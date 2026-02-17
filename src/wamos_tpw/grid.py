@@ -384,17 +384,14 @@ def _project_frame_numpy(
 
 
 # ---------------------------------------------------------------------------
-# PyTorch GPU-accelerated projection (CUDA / MPS / CPU fallback)
+# CuPy GPU-accelerated projection
 # ---------------------------------------------------------------------------
-from wamos_tpw.backend import HAS_TORCH_GPU as _HAS_TORCH_GPU  # noqa: E402
+from wamos_tpw.backend import HAS_CUPY_GPU as _HAS_CUPY_GPU  # noqa: E402
 
-if _HAS_TORCH_GPU:
-    import torch as _torch
+if _HAS_CUPY_GPU:
+    import cupy as _cp
 
-    from wamos_tpw.backend import get_device as _get_device
-    from wamos_tpw.backend import to_numpy as _to_numpy
-
-    def _project_frame_torch(
+    def _project_frame_cupy(
         intensity: np.ndarray,
         theta: np.ndarray,
         ground_range: np.ndarray,
@@ -403,7 +400,7 @@ if _HAS_TORCH_GPU:
         headings: np.ndarray,
         grid_params: GridParams | dict,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """PyTorch GPU-accelerated frame projection."""
+        """CuPy GPU-accelerated frame projection."""
         ref_lat = grid_params["ref_lat"]
         ref_lon = grid_params["ref_lon"]
         m_per_deg_lon = grid_params["m_per_deg_lon"]
@@ -413,77 +410,67 @@ if _HAS_TORCH_GPU:
         n_x = grid_params["n_x"]
         n_y = grid_params["n_y"]
 
-        dev = _get_device()
-
         # Convert ship positions to equirectangular meters
         ship_x = (longitudes - ref_lon) * m_per_deg_lon
         ship_y = (latitudes - ref_lat) * _DEG2M
 
         # Move to GPU
-        t_intensity = _torch.from_numpy(np.ascontiguousarray(intensity, dtype=np.float32)).to(dev)
-        t_ground_range = _torch.from_numpy(np.ascontiguousarray(ground_range, dtype=np.float32)).to(
-            dev
-        )
-        t_ship_x = _torch.from_numpy(np.ascontiguousarray(ship_x, dtype=np.float32)).to(dev)
-        t_ship_y = _torch.from_numpy(np.ascontiguousarray(ship_y, dtype=np.float32)).to(dev)
+        t_intensity = _cp.asarray(intensity, dtype=_cp.float32)
+        t_ground_range = _cp.asarray(ground_range, dtype=_cp.float32)
+        t_ship_x = _cp.asarray(ship_x, dtype=_cp.float32)
+        t_ship_y = _cp.asarray(ship_y, dtype=_cp.float32)
 
         # Earth bearing trig on GPU
-        earth_bearing = _torch.from_numpy(
-            np.ascontiguousarray(((theta + headings) % 360), dtype=np.float32)
-        ).to(dev)
-        earth_bearing_rad = _torch.deg2rad(earth_bearing)
-        sin_b = _torch.sin(earth_bearing_rad)
-        cos_b = _torch.cos(earth_bearing_rad)
+        earth_bearing = _cp.asarray(((theta + headings) % 360).astype(np.float32))
+        earth_bearing_rad = _cp.deg2rad(earth_bearing)
+        sin_b = _cp.sin(earth_bearing_rad)
+        cos_b = _cp.cos(earth_bearing_rad)
 
         # Coordinate computation via outer product + broadcast
-        x_coords = _torch.outer(sin_b, t_ground_range) + t_ship_x[:, None]
-        y_coords = _torch.outer(cos_b, t_ground_range) + t_ship_y[:, None]
+        x_coords = _cp.outer(sin_b, t_ground_range) + t_ship_x[:, None]
+        y_coords = _cp.outer(cos_b, t_ground_range) + t_ship_y[:, None]
 
         # Grid indices
         x_origin = float(x_edges_abs[0])
         y_origin = float(y_edges_abs[0])
         inv_spacing = 1.0 / grid_spacing
 
-        x_idx = ((x_coords - x_origin) * inv_spacing).to(_torch.int64)
-        y_idx = ((y_coords - y_origin) * inv_spacing).to(_torch.int64)
+        x_idx = ((x_coords - x_origin) * inv_spacing).astype(_cp.int32)
+        y_idx = ((y_coords - y_origin) * inv_spacing).astype(_cp.int32)
 
         # Flatten
-        x_flat = x_idx.reshape(-1)
-        y_flat = y_idx.reshape(-1)
-        vals_flat = t_intensity.reshape(-1)
+        x_flat = x_idx.ravel()
+        y_flat = y_idx.ravel()
+        vals_flat = t_intensity.ravel()
 
-        # Valid mask: in-bounds and not NaN
+        # Valid mask
         valid = (
-            (x_flat >= 0)
-            & (x_flat < n_x)
-            & (y_flat >= 0)
-            & (y_flat < n_y)
-            & ~_torch.isnan(vals_flat)
+            (x_flat >= 0) & (x_flat < n_x) & (y_flat >= 0) & (y_flat < n_y) & ~_cp.isnan(vals_flat)
         )
 
         grid_size = n_x * n_y
 
-        if valid.any():
+        if int(_cp.sum(valid)) > 0:
             linear_idx = y_flat[valid] * n_x + x_flat[valid]
-            valid_vals = vals_flat[valid].to(_torch.float64)
+            valid_vals = vals_flat[valid].astype(_cp.float64)
 
-            # scatter_add_ for sum and count (MPS-safe, no bincount needed)
-            frame_sum = _torch.zeros(grid_size, dtype=_torch.float64, device=dev)
-            frame_sum.scatter_add_(0, linear_idx, valid_vals)
+            frame_sum = _cp.zeros(grid_size, dtype=_cp.float64)
+            frame_count = _cp.zeros(grid_size, dtype=_cp.int32)
+            _cp.add.at(frame_sum, linear_idx, valid_vals)
+            _cp.add.at(frame_count, linear_idx, 1)
 
-            ones = _torch.ones_like(valid_vals)
-            frame_count = _torch.zeros(grid_size, dtype=_torch.float64, device=dev)
-            frame_count.scatter_add_(0, linear_idx, ones)
-
-            result_sum = _to_numpy(frame_sum.reshape(n_y, n_x))
-            result_count = _to_numpy(frame_count.reshape(n_y, n_x)).astype(np.int32)
+            result_sum = _cp.asnumpy(frame_sum.reshape(n_y, n_x))
+            result_count = _cp.asnumpy(frame_count.reshape(n_y, n_x))
         else:
             result_sum = np.zeros((n_y, n_x), dtype=np.float64)
             result_count = np.zeros((n_y, n_x), dtype=np.int32)
 
         return result_sum, result_count
 
-    project_frame_to_common_grid = _project_frame_torch
+
+# Select default projection function by priority: CuPy > NumPy
+if _HAS_CUPY_GPU:
+    project_frame_to_common_grid = _project_frame_cupy
 else:
     # Default to numpy implementation
     # Numba version available below but benchmarks show numpy is faster for typical frame sizes

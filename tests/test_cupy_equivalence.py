@@ -1,8 +1,11 @@
 #! /usr/bin/env python3
-"""CPU/GPU numerical equivalence tests for GPU-accelerated grid projection.
+"""CPU/CuPy numerical equivalence tests for CuPy-accelerated modules.
 
-These tests verify that CuPy GPU paths produce the same results as CPU paths.
-All tests are skipped when no CuPy GPU is available.
+These tests verify that CuPy paths produce the same results as CPU paths.
+All tests are skipped when CuPy GPU is not available.
+
+Note: CuPy is only used for grid projection and hard return sweeps (hybrid
+approach). Pipeline steps (destreak, deramp, bearing) run on CPU only.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ requires_cupy = pytest.mark.skipif(not HAS_CUPY_GPU, reason="No CuPy GPU availab
 
 
 @requires_cupy
-class TestGridProjectionEquivalence:
+class TestGridProjectionCuPyEquivalence:
     """Verify CuPy grid projection matches CPU."""
 
     def _make_grid_params(self):
@@ -65,12 +68,14 @@ class TestGridProjectionEquivalence:
         sum_cpu, count_cpu = _project_frame_numpy(
             intensity, theta, ground_range, latitudes, longitudes, headings, gp
         )
-        sum_gpu, count_gpu = _project_frame_cupy(
+        sum_cupy, count_cupy = _project_frame_cupy(
             intensity, theta, ground_range, latitudes, longitudes, headings, gp
         )
 
-        np.testing.assert_array_equal(count_cpu, count_gpu)
+        # Counts should be identical
+        np.testing.assert_array_equal(count_cpu, count_cupy)
 
+        # Sums should be very close (float32 vs float64 accumulation differences)
         mask = count_cpu > 0
         if mask.any():
-            np.testing.assert_allclose(sum_gpu[mask], sum_cpu[mask], rtol=1e-3, atol=1e-1)
+            np.testing.assert_allclose(sum_cupy[mask], sum_cpu[mask], rtol=1e-3, atol=1e-1)

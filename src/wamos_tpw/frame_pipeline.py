@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from wamos_tpw.backend import HAS_CUPY_GPU, cupy_synchronize
 from wamos_tpw.deramp import Deramp
 from wamos_tpw.destreak import Destreak
 from wamos_tpw.dewind import Dewind
@@ -99,6 +100,8 @@ class FramePipeline:
 
             destreak = Destreak(frame)
             self._destreak = destreak if qSave else None
+            if HAS_CUPY_GPU:
+                cupy_synchronize()  # ensure GPU work completes before timing
             if t0 is not None:
                 self._timings["Destreak"] = time.perf_counter() - t0
                 t0 = time.perf_counter()
@@ -128,6 +131,8 @@ class FramePipeline:
 
             deramp = Deramp(intensity, rng, copy=qSave)
             self._deramp = deramp if qSave else None
+            if HAS_CUPY_GPU:
+                cupy_synchronize()
             if t0 is not None:
                 self._timings["Deramp"] = time.perf_counter() - t0
                 t0 = time.perf_counter()
@@ -137,6 +142,8 @@ class FramePipeline:
 
             dewind = Dewind(deramp.intensity, theta, copy=qSave)
             self._dewind = dewind if qSave else None
+            if HAS_CUPY_GPU:
+                cupy_synchronize()
             if t0 is not None:
                 self._timings["Dewind"] = time.perf_counter() - t0
                 t0 = time.perf_counter()
@@ -324,16 +331,16 @@ def _add_arguments(parser) -> None:
 
     # Acceleration options
     parser.add_argument(
-        "--no-gpu",
-        action="store_true",
-        default=False,
-        help="Disable GPU acceleration (force CPU-only mode)",
-    )
-    parser.add_argument(
         "--no-numba",
         action="store_true",
         default=False,
         help="Disable Numba JIT acceleration (force pure NumPy fallback)",
+    )
+    parser.add_argument(
+        "--no-cupy",
+        action="store_true",
+        default=False,
+        help="Disable CuPy GPU acceleration",
     )
 
     # Progress bar
@@ -398,8 +405,8 @@ def run(args) -> None:
     import os
     from functools import partial
 
-    if getattr(args, "no_gpu", False):
-        os.environ["WAMOS_NO_GPU"] = "1"
+    if getattr(args, "no_cupy", False):
+        os.environ["WAMOS_NO_CUPY"] = "1"
     if getattr(args, "no_numba", False):
         os.environ["WAMOS_NO_NUMBA"] = "1"
 

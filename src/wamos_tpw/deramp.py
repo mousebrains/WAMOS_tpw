@@ -11,7 +11,6 @@ import logging
 import numpy as np
 from numpy.polynomial import Polynomial
 
-from wamos_tpw.backend import HAS_TORCH_GPU
 from wamos_tpw.config import Config
 from wamos_tpw.range import Range
 
@@ -35,39 +34,6 @@ def _deramp_cpu(
         intensity = intensity.copy()
     intensity -= py[np.newaxis, :]
     return intensity, p
-
-
-def _deramp_gpu(
-    intensity: np.ndarray,
-    x: np.ndarray,
-    order: int,
-    copy: bool,
-) -> tuple[np.ndarray, Polynomial]:
-    """GPU deramp path: nanmean on GPU, polyfit on CPU, subtract on GPU."""
-    import torch
-
-    from wamos_tpw.backend import get_device, to_numpy
-
-    dev = get_device()
-
-    # nanmean on GPU
-    t_intensity = torch.from_numpy(np.ascontiguousarray(intensity, dtype=np.float32)).to(dev)
-    mu = to_numpy(torch.nanmean(t_intensity, dim=0))
-
-    # Polynomial fit on CPU (small 1D array)
-    q = np.isnan(mu)
-    p = Polynomial.fit(x[~q], mu[~q], deg=order)
-    py = p(x).astype(np.float32)
-
-    # Broadcast subtract on GPU
-    t_py = torch.from_numpy(py).to(dev)
-    if copy:
-        t_result = t_intensity - t_py.unsqueeze(0)
-    else:
-        t_intensity -= t_py.unsqueeze(0)
-        t_result = t_intensity
-    result = to_numpy(t_result)
-    return result, p
 
 
 class Deramp:
@@ -121,10 +87,7 @@ class Deramp:
         slant = rng.slant_range
         x = 1 / slant  # 1/range fall-off
 
-        if HAS_TORCH_GPU:
-            self._intensity, self._polynomial = _deramp_gpu(intensity, x, order, copy)
-        else:
-            self._intensity, self._polynomial = _deramp_cpu(intensity, x, order, copy)
+        self._intensity, self._polynomial = _deramp_cpu(intensity, x, order, copy)
         self._order = order
 
     @property

@@ -656,16 +656,16 @@ def _add_arguments(parser) -> None:
 
     # Acceleration options
     parser.add_argument(
-        "--no-gpu",
-        action="store_true",
-        default=False,
-        help="Disable GPU acceleration (force CPU-only mode)",
-    )
-    parser.add_argument(
         "--no-numba",
         action="store_true",
         default=False,
         help="Disable Numba JIT acceleration (force pure NumPy fallback)",
+    )
+    parser.add_argument(
+        "--no-cupy",
+        action="store_true",
+        default=False,
+        help="Disable CuPy GPU acceleration",
     )
 
     # Progress bar options (mutually exclusive)
@@ -684,8 +684,8 @@ def _add_arguments(parser) -> None:
 
 def run(args) -> None:
     """Run streaming pipeline with full output support."""
-    if getattr(args, "no_gpu", False):
-        os.environ["WAMOS_NO_GPU"] = "1"
+    if getattr(args, "no_cupy", False):
+        os.environ["WAMOS_NO_CUPY"] = "1"
     if getattr(args, "no_numba", False):
         os.environ["WAMOS_NO_NUMBA"] = "1"
 

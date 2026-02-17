@@ -88,17 +88,14 @@ try:
 except ImportError:
     _HAS_NUMBA = False
 
-# PyTorch GPU projection tier (above Numba)
-from wamos_tpw.backend import HAS_TORCH_GPU as _HAS_TORCH  # noqa: E402
+# CuPy GPU projection tier (highest priority)
+from wamos_tpw.backend import HAS_CUPY_GPU as _HAS_CUPY  # noqa: E402
 
-if _HAS_TORCH:
-    import torch as _torch
-
-    from wamos_tpw.backend import get_device as _get_device
-    from wamos_tpw.backend import to_numpy as _to_numpy
+if _HAS_CUPY:
+    import cupy as _cp
 
 
-def _project_torch(
+def _project_cupy(
     sin_bearing: np.ndarray,
     cos_bearing: np.ndarray,
     ground_range: np.ndarray,
@@ -111,38 +108,35 @@ def _project_torch(
     n_x: int,
     n_y: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """PyTorch GPU-accelerated projection for interpolator workers."""
-    dev = _get_device()
+    """CuPy GPU-accelerated projection for interpolator workers."""
     grid_size = n_x * n_y
 
-    t_sin = _torch.from_numpy(np.ascontiguousarray(sin_bearing, dtype=np.float32)).to(dev)
-    t_cos = _torch.from_numpy(np.ascontiguousarray(cos_bearing, dtype=np.float32)).to(dev)
-    t_gr = _torch.from_numpy(np.ascontiguousarray(ground_range, dtype=np.float32)).to(dev)
-    t_sx = _torch.from_numpy(np.ascontiguousarray(ship_x, dtype=np.float32)).to(dev)
-    t_sy = _torch.from_numpy(np.ascontiguousarray(ship_y, dtype=np.float32)).to(dev)
-    t_int = _torch.from_numpy(np.ascontiguousarray(intensity, dtype=np.float32)).to(dev)
+    t_sin = _cp.asarray(sin_bearing, dtype=_cp.float32)
+    t_cos = _cp.asarray(cos_bearing, dtype=_cp.float32)
+    t_gr = _cp.asarray(ground_range, dtype=_cp.float32)
+    t_sx = _cp.asarray(ship_x, dtype=_cp.float32)
+    t_sy = _cp.asarray(ship_y, dtype=_cp.float32)
+    t_int = _cp.asarray(intensity, dtype=_cp.float32)
 
-    x_coords = (_torch.outer(t_sin, t_gr) + (t_sx[:, None] - x_min)) * inv_spacing
-    y_coords = (_torch.outer(t_cos, t_gr) + (t_sy[:, None] - y_min)) * inv_spacing
+    x_coords = (_cp.outer(t_sin, t_gr) + (t_sx[:, None] - x_min)) * inv_spacing
+    y_coords = (_cp.outer(t_cos, t_gr) + (t_sy[:, None] - y_min)) * inv_spacing
 
-    x_idx = x_coords.to(_torch.int64).reshape(-1)
-    y_idx = y_coords.to(_torch.int64).reshape(-1)
-    vals = t_int.reshape(-1)
+    x_idx = x_coords.astype(_cp.int32).ravel()
+    y_idx = y_coords.astype(_cp.int32).ravel()
+    vals = t_int.ravel()
 
-    valid = (x_idx >= 0) & (x_idx < n_x) & (y_idx >= 0) & (y_idx < n_y) & ~_torch.isnan(vals)
+    valid = (x_idx >= 0) & (x_idx < n_x) & (y_idx >= 0) & (y_idx < n_y) & ~_cp.isnan(vals)
 
-    if valid.any():
+    if int(_cp.sum(valid)) > 0:
         linear_idx = y_idx[valid] * n_x + x_idx[valid]
-        valid_vals = vals[valid].to(_torch.float64)
+        valid_vals = vals[valid].astype(_cp.float64)
 
-        out_sum = _torch.zeros(grid_size, dtype=_torch.float64, device=dev)
-        out_sum.scatter_add_(0, linear_idx, valid_vals)
+        out_sum = _cp.zeros(grid_size, dtype=_cp.float64)
+        out_cnt = _cp.zeros(grid_size, dtype=_cp.int32)
+        _cp.add.at(out_sum, linear_idx, valid_vals)
+        _cp.add.at(out_cnt, linear_idx, 1)
 
-        ones = _torch.ones_like(valid_vals)
-        out_cnt = _torch.zeros(grid_size, dtype=_torch.float64, device=dev)
-        out_cnt.scatter_add_(0, linear_idx, ones)
-
-        return _to_numpy(out_sum), _to_numpy(out_cnt).astype(np.int32)
+        return _cp.asnumpy(out_sum), _cp.asnumpy(out_cnt)
 
     return np.zeros(grid_size, dtype=np.float64), np.zeros(grid_size, dtype=np.int32)
 
@@ -622,8 +616,8 @@ def _do_interpolate(task) -> Result:
         # Project all pixels onto the grid
         inv_spacing = 1.0 / grid_spacing
 
-        if _HAS_TORCH:
-            out_sum, out_cnt = _project_torch(
+        if _HAS_CUPY:
+            out_sum, out_cnt = _project_cupy(
                 sin_bearing,
                 cos_bearing,
                 ground_range,

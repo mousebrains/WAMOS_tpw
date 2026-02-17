@@ -203,21 +203,28 @@ partitioned = np.partition(data_t, [k_low, k_high], axis=1)
 
 ## GPU Acceleration
 
-The pipeline supports optional PyTorch GPU acceleration for compute-heavy steps.
-Install with `pip install wamos_tpw[gpu]` or `pip install torch>=2.0` separately.
+The pipeline uses a **hybrid approach**: CPU (NumPy/Numba) for the per-frame
+pipeline (destreak, deramp, dewind) which scales well across workers, and
+**CuPy GPU** for grid projection and hard-return sweeps where GPU provides
+12-16x speedup.
 
-GPU-accelerated modules: `destreak.py`, `deramp.py`, `bearing.py`, `grid.py`,
-`hard_returns.py`, `interpolator_tasks.py`. Control via environment variables
-or CLI flags:
+```bash
+pip install wamos_tpw[cupy]      # CuPy (cupy-cuda13x>=14.0)
+```
+
+CuPy-accelerated modules: `grid.py`, `hard_returns.py`, `interpolator_tasks.py`.
+
+**Backend priority**: CuPy > Numba > NumPy (pure CPU fallback).
+
+Control via environment variables or CLI flags:
 
 ```bash
 # Environment variables
-export WAMOS_NO_GPU=1    # Force CPU-only
+export WAMOS_NO_CUPY=1   # Disable CuPy GPU
 export WAMOS_NO_NUMBA=1  # Disable Numba JIT
 
 # CLI flags
-wamos frame-pipeline ... --no-gpu --no-numba
-wamos stream-pipeline ... --no-gpu
+wamos stream-pipeline ... --no-cupy --no-numba
 ```
 
 ## Benchmark Results
@@ -225,11 +232,17 @@ wamos stream-pipeline ... --no-gpu
 ### Running Benchmarks
 
 ```bash
-# Single-frame timing + memory across 4 backend configs
-python benchmarks/backend_benchmark.py /path/to/POLAR -n 30 --warmup 5
+# Single-frame timing + memory across backend configs
+python benchmarks/backend_benchmark.py /path/to/POLAR -n 20 --warmup 3
+
+# Select specific configs (numpy, numba, cupy, cupy+numba)
+python benchmarks/backend_benchmark.py /path/to/POLAR --configs numpy cupy cupy+numba
 
 # Multi-worker scaling
-python benchmarks/scaling_benchmark.py /path/to/POLAR -n 30 --workers 1,2,4,8,16
+python benchmarks/scaling_benchmark.py /path/to/POLAR -n 200 --workers 1,2,4,8,16,20
+
+# Multi-worker with specific configs
+python benchmarks/scaling_benchmark.py /path/to/POLAR --configs numpy numba cupy cupy+numba
 
 # Detailed per-step GPU vs CPU comparison
 python benchmarks/gpu_comparison.py /path/to/POLAR
@@ -238,197 +251,160 @@ python benchmarks/gpu_comparison.py /path/to/POLAR
 ### NVIDIA DGX Spark (GB10)
 
 Machine: NVIDIA Grace Blackwell GB10, 20 ARM cores, 119 GB unified memory, 128 GB GPU VRAM
-Software: PyTorch 2.10.0+cu128, Numba 0.63.1, NumPy 2.3.5
+Software: CuPy 14.0.0 (CUDA 13.0), PyTorch 2.10.0+cu128, Numba 0.63.1, NumPy 2.3.5
 
-#### Large Frame (2514 x 1552) -- 20 iterations, 5 warmup
+#### Large Frame (2514 x 1552) -- 20 iterations, 3 warmup
 
 **Frame Pipeline (median ms, lower is better)**
 
-| Step | NumPy-only | Numba | PyTorch GPU | PyTorch+Numba | Best speedup |
-|---|---|---|---|---|---|
-| PPS | 0.034 | 0.045 | 0.046 | 0.046 | 1.0x |
-| Theta | 0.251 | 0.281 | 0.281 | 0.286 | 1.0x |
-| Range | 0.029 | 0.034 | 0.034 | 0.034 | 1.0x |
-| Destreak | 31.13 | 30.68 | 17.97 | **10.40** | **2.99x** |
-| Shadow | 4.15 | 4.27 | 4.18 | 4.13 | 1.0x |
-| MaskShadow | 0.62 | 0.69 | **0.47** | 0.63 | 1.31x |
-| Deramp | 6.98 | 7.15 | 5.57 | **2.88** | **2.43x** |
-| Dewind | 5.88 | 6.33 | 6.89 | 6.83 | 1.0x |
-| **Pipeline TOTAL** | 49.16 | 49.51 | 37.72 | **25.54** | **1.92x** |
+Pipeline steps run on CPU only (hybrid approach). CuPy is used for grid projection.
 
-**Grid Projection (median ms)**
+| Step | NumPy-only | Numba | Best speedup |
+|---|---|---|---|
+| Destreak | 37.71 | **37.42** | 1.01x |
+| Shadow | 4.28 | **4.27** | 1.0x |
+| Deramp | **7.61** | 7.78 | 1.0x |
+| Dewind | **6.37** | 6.47 | 1.0x |
+| **Pipeline TOTAL** | 57.32 | **56.88** | **1.01x** |
 
-| NumPy-only | Numba | PyTorch GPU | PyTorch+Numba | Best speedup |
+**Grid Projection (median ms)** -- CuPy GPU
+
+| NumPy-only | Numba | CuPy | CuPy+Numba | Best speedup |
 |---|---|---|---|---|
-| 55.09 | 55.33 | 5.02 | **3.81** | **14.48x** |
+| 61.62 | 61.96 | **4.73** | 4.76 | **13.02x** |
 
 **Memory Usage (MB)**
 
-| Metric | NumPy-only | Numba | PyTorch GPU | PyTorch+Numba |
-|---|---|---|---|---|
-| Baseline RSS | 89.3 | 146.5 | 582.9 | 640.1 |
-| Peak RSS | 253.0 | 316.1 | 1216.5 | 1279.3 |
-| Delta RSS | 163.6 | 169.6 | 633.6 | 639.2 |
-| GPU Peak Alloc | N/A | N/A | 119.4 | 119.4 |
+| Metric | NumPy-only | Numba | CuPy+Numba |
+|---|---|---|---|
+| Baseline RSS | 89.4 | 146.7 | 444.4 |
+| Peak RSS | 254.7 | 316.2 | 602.4 |
+| Delta RSS | 165.3 | 169.5 | 158.0 |
 
-#### Small Frame (808 x 752) -- 30 iterations, 5 warmup
+#### Small Frame (838 x 752) -- 20 iterations, 3 warmup
 
 **Frame Pipeline (median ms)**
 
-| Step | NumPy-only | Numba | PyTorch GPU | PyTorch+Numba | Best speedup |
-|---|---|---|---|---|---|
-| Destreak | 5.22 | 5.47 | **2.98** | 3.15 | **1.75x** |
-| Shadow | 4.17 | 4.11 | 4.16 | 4.17 | 1.0x |
-| Deramp | 1.17 | 1.09 | 1.26 | 1.54 | 1.1x |
-| Dewind | 1.09 | 1.04 | 1.26 | 1.32 | 1.1x |
-| **Pipeline TOTAL** | 12.09 | 12.00 | **10.78** | 11.00 | **1.12x** |
+| Step | NumPy-only | Numba | Best speedup |
+|---|---|---|---|
+| Destreak | **6.05** | 6.28 | 1.0x |
+| Shadow | 4.18 | **4.16** | 1.0x |
+| Deramp | 1.06 | **1.05** | 1.0x |
+| Dewind | 1.17 | **1.16** | 1.0x |
+| **Pipeline TOTAL** | **12.89** | 13.06 | **1.0x** |
 
-**Grid Projection (median ms)**
+**Grid Projection (median ms)** -- CuPy GPU
 
-| NumPy-only | Numba | PyTorch GPU | PyTorch+Numba | Best speedup |
+| NumPy-only | Numba | CuPy | CuPy+Numba | Best speedup |
 |---|---|---|---|---|
-| 8.63 | 7.86 | 1.68 | **1.56** | **5.52x** |
+| 8.70 | 8.66 | **1.12** | 1.25 | **7.78x** |
 
 **Memory Usage (MB)**
 
-| Metric | NumPy-only | Numba | PyTorch GPU | PyTorch+Numba |
-|---|---|---|---|---|
-| Baseline RSS | 76.7 | 134.3 | 569.7 | 627.3 |
-| Peak RSS | 124.1 | 187.5 | 1124.7 | 1187.5 |
-| Delta RSS | 47.4 | 53.2 | 554.9 | 560.2 |
-| GPU Peak Alloc | N/A | N/A | 18.6 | 18.6 |
+| Metric | NumPy-only | Numba | CuPy+Numba |
+|---|---|---|---|
+| Baseline RSS | 76.8 | 133.8 | 432.0 |
+| Peak RSS | 125.0 | 187.9 | 513.2 |
+| Delta RSS | 48.2 | 54.1 | 81.1 |
 
 #### Multi-Worker Scaling -- 200 large frames (2514 x 1552)
 
+These benchmarks measure per-frame pipeline throughput only (no grid projection / merging).
+
 **NumPy-only**
 
-| Workers | Wall(s) | FPS | Speedup | Efficiency |
+| Workers | Wall(s) | FPS | Speedup | Efficiency | Mean RSS |
+|---|---|---|---|---|---|
+| 1 | 14.91 | 13.42 | 1.00x | 100.0% | 200 MB |
+| 2 | 7.96 | 25.14 | 1.87x | 93.7% | 200 MB |
+| 4 | 4.44 | 45.05 | 3.36x | 83.9% | 198 MB |
+| 8 | 2.79 | 71.79 | 5.35x | 66.9% | 198 MB |
+| 16 | 2.33 | 85.97 | 6.41x | 40.1% | 197 MB |
+| 20 | 2.30 | 87.12 | 6.49x | 32.5% | 196 MB |
+
+**Numba**
+
+| Workers | Wall(s) | FPS | Speedup | Efficiency | Mean RSS |
+|---|---|---|---|---|---|
+| 1 | 16.50 | 12.12 | 1.00x | 100.0% | 259 MB |
+| 2 | 8.06 | 24.80 | 2.05x | 102.3% | 258 MB |
+| 4 | 4.47 | 44.70 | 3.69x | 92.2% | 258 MB |
+| 8 | 2.90 | 69.08 | 5.70x | 71.3% | 256 MB |
+| 16 | 2.41 | 83.03 | 6.85x | 42.8% | 255 MB |
+| 20 | 2.48 | 80.80 | 6.67x | 33.3% | 254 MB |
+
+**Cross-Config Summary (Large Frames)**
+
+| Config | Best Workers | Peak FPS | Peak Speedup | Wall(s) @best |
 |---|---|---|---|---|
-| 1 | 15.05 | 13.29 | 1.00x | 100.0% |
-| 2 | 7.86 | 25.46 | 1.92x | 95.8% |
-| 4 | 4.19 | 47.76 | 3.59x | 89.8% |
-| 8 | 2.71 | 73.72 | 5.55x | 69.3% |
-| 12 | 2.40 | 83.39 | 6.27x | 52.3% |
-| 16 | 2.26 | 88.61 | 6.67x | 41.7% |
-| 20 | 2.28 | 87.62 | 6.59x | 33.0% |
+| **NumPy-only** | **20** | **87.12** | **6.49x** | **2.30** |
+| Numba | 16 | 83.03 | 6.85x | 2.41 |
 
-**PyTorch GPU**
+#### Streaming Pipeline -- 1 hour, 5-min windows, 50% overlap
 
-| Workers | Wall(s) | FPS | Speedup | Efficiency |
-|---|---|---|---|---|
-| 1 | 13.03 | 15.35 | 1.00x | 100.0% |
-| 2 | 7.61 | 26.29 | 1.71x | 85.7% |
-| 4 | 5.69 | 35.18 | 2.29x | 57.3% |
-| 8 | 5.74 | 34.82 | 2.27x | 28.4% |
-| 12 | 6.84 | 29.24 | 1.91x | 15.9% |
-| 16 | 8.46 | 23.64 | 1.54x | 9.6% |
+Full end-to-end benchmark: 2529 large frames (2514 x 1552), 22 merged images,
+5-minute windows with 50% overlap. Includes frame processing, grid projection,
+and NetCDF output. Auto worker count (20 cores).
 
-**Summary**
-
-| Config | Best Workers | Peak FPS | Est. time for 100k files |
+| Config | Total Time | Merged Images | Speedup |
 |---|---|---|---|
-| **NumPy-only** | **16** | **88.61** | **~19 min** |
-| Numba | 12 | 81.78 | ~20 min |
-| PyTorch GPU | 4 | 35.18 | ~47 min |
-| PyTorch + Numba | 4 | 35.29 | ~47 min |
+| **CuPy+Numba** (hybrid) | **80.7s** | 22 | **1.73x** |
+| Numba | 128.3s | 22 | 1.09x |
+| NumPy-only | 139.5s | 22 | 1.00x |
 
-For bulk processing of large datasets, use `--no-gpu --workers 16`:
-
-```bash
-wamos stream-pipeline ... --no-gpu --workers 16
-```
+The hybrid approach (CPU pipeline + CuPy grid projection) is **1.73x faster**
+than pure NumPy for the complete streaming pipeline because CuPy's 13x grid
+projection speedup (4.7ms vs 62ms) compounds across 2529 frames being projected
+into 22 overlapping windows.
 
 #### Key Observations
 
-1. NumPy-only with 16 workers is the fastest config for bulk throughput (88.6 FPS), 2.5x faster than the best GPU config
-2. GPU scaling saturates at 4 workers then degrades -- all workers contend on the single GPU
-3. CPU scaling is near-linear to 4 workers (90% efficiency), useful to 12-16 workers
-4. GPU wins per-frame latency (1.92x pipeline, 14.5x grid projection) but can't parallelize
-5. PyTorch adds ~940 MB RSS per worker vs ~200 MB for NumPy-only
-6. For 100,000 files: `--no-gpu --workers 16` recommended (~19 min vs ~47 min with GPU)
+1. **CuPy+Numba hybrid wins end-to-end streaming** (80.7s vs 139.5s NumPy-only for 1 hour of data)
+2. **CuPy grid projection provides 13x speedup** (4.7ms vs 62ms) which is the key GPU benefit
+3. Pipeline steps (destreak, deramp, dewind) run on CPU with good multi-worker scaling
+4. CPU scaling is near-linear to 4 workers (84-93% efficiency), useful to 16-20 workers
+5. **Memory per worker**: NumPy ~200 MB, Numba ~260 MB, CuPy+Numba ~600 MB
+6. CuPy is fork-safe: CUDA context creation is deferred to first GPU operation in each worker process
 
 ### Apple M4 Max
 
 Machine: Apple M4 Max, 16 CPU cores, 40 GPU cores (Metal 4), 128 GB unified memory
-Software: PyTorch 2.10.0 (MPS), Numba 0.63.1, NumPy 2.3.5, Python 3.14.3
+Software: Numba 0.63.1, NumPy 2.3.5, Python 3.14.3
+
+Note: CuPy does not support Apple Silicon (no Metal/MPS backend). NumPy-only is
+the recommended configuration for Apple Silicon.
 
 #### Large Frame (2514 x 1552) -- 20 iterations, 5 warmup
 
-**Frame Pipeline (median ms, lower is better)**
-
-| Step | NumPy-only | Numba | PyTorch MPS | PyTorch+Numba | Best speedup |
-|---|---|---|---|---|---|
-| PPS | 0.017 | 0.019 | 0.024 | 0.024 | 1.0x |
-| Theta | 0.145 | 0.157 | 0.178 | 0.179 | 1.0x |
-| Range | 0.017 | 0.018 | 0.022 | 0.022 | 1.0x |
-| Destreak | 11.12 | 11.16 | **10.85** | 10.99 | **1.02x** |
-| Shadow | 3.69 | 3.73 | 3.79 | 3.76 | 1.0x |
-| MaskShadow | 0.25 | 0.25 | 0.26 | 0.26 | 1.0x |
-| Deramp | 5.06 | 5.11 | **3.85** | 4.01 | **1.31x** |
-| Dewind | 4.66 | 4.65 | 4.71 | 4.74 | 1.0x |
-| **Pipeline TOTAL** | 25.07 | 25.20 | **23.80** | 24.00 | **1.05x** |
-
-**Grid Projection (median ms)**
-
-| NumPy-only | Numba | PyTorch MPS | PyTorch+Numba | Best speedup |
-|---|---|---|---|---|
-| 9.74 | 9.80 | **7.87** | 8.43 | **1.24x** |
-
-**Memory Usage (MB)**
-
-| Metric | NumPy-only | Numba | PyTorch MPS | PyTorch+Numba |
-|---|---|---|---|---|
-| Baseline RSS | 100.8 | 141.9 | 273.2 | 311.5 |
-| Peak RSS | 331.7 | 373.9 | 435.8 | 471.8 |
-| Delta RSS | 230.9 | 232.0 | 162.6 | 160.3 |
-
-#### Small Frame (808 x 752) -- 30 iterations, 5 warmup
-
 **Frame Pipeline (median ms)**
 
-| Step | NumPy-only | Numba | PyTorch MPS | PyTorch+Numba | Best speedup |
-|---|---|---|---|---|---|
-| Destreak | **1.71** | 1.74 | 3.36 | 4.02 | 1.0x |
-| Shadow | **3.51** | 3.62 | 3.69 | 3.71 | 1.0x |
-| Deramp | 0.91 | **0.90** | 1.70 | 1.73 | 1.0x |
-| Dewind | **0.84** | 0.85 | 0.90 | 0.91 | 1.0x |
-| **Pipeline TOTAL** | **7.12** | 7.28 | 10.14 | 10.64 | **1.0x** |
+| Step | NumPy-only | Numba |
+|---|---|---|
+| Destreak | **11.12** | 11.16 |
+| Shadow | **3.69** | 3.73 |
+| Deramp | **5.06** | 5.11 |
+| Dewind | 4.66 | **4.65** |
+| **Pipeline TOTAL** | **25.07** | 25.20 |
 
 **Grid Projection (median ms)**
 
-| NumPy-only | Numba | PyTorch MPS | PyTorch+Numba | Best speedup |
-|---|---|---|---|---|
-| **1.48** | 1.55 | 3.54 | 3.84 | **1.0x** |
+| NumPy-only | Numba |
+|---|---|
+| **9.74** | 9.80 |
 
 **Memory Usage (MB)**
 
-| Metric | NumPy-only | Numba | PyTorch MPS | PyTorch+Numba |
-|---|---|---|---|---|
-| Baseline RSS | 84.3 | 125.3 | 255.4 | 294.8 |
-| Peak RSS | 139.7 | 182.0 | 349.9 | 387.7 |
-| Delta RSS | 55.4 | 56.8 | 94.5 | 92.9 |
-
-#### Multi-Worker Scaling -- 30 files, Small Frame
-
-| Config | Best Workers | Peak FPS | Peak Speedup |
-|---|---|---|---|
-| NumPy-only | 8 | 41.18 | 1.14x |
-| Numba | 4 | 32.49 | 1.04x |
-| PyTorch MPS | 1 | 16.63 | 1.00x |
-| PyTorch + Numba | 2 | 12.18 | 1.00x |
-
-NumPy-only scales modestly to 8 workers on this workload.  PyTorch MPS
-degrades with multiple workers -- MPS serializes GPU commands from
-separate processes, adding overhead without parallel execution benefit.
+| Metric | NumPy-only | Numba |
+|---|---|---|
+| Baseline RSS | 100.8 | 141.9 |
+| Peak RSS | 331.7 | 373.9 |
+| Delta RSS | 230.9 | 232.0 |
 
 #### Key Observations
 
-1. The M4 Max CPU is ~2x faster than DGX Spark ARM cores: NumPy-only pipeline is 25 ms vs 49 ms on identical large frames
-2. PyTorch MPS provides only modest gains on large frames (1.05x pipeline, 1.24x grid) -- Apple's fast CPU and unified memory reduce the GPU advantage compared to discrete CUDA GPUs
-3. On small frames, PyTorch MPS is slower than CPU (0.70x) -- MPS dispatch overhead exceeds the compute savings at this scale
-4. Deramp sees the largest MPS benefit (1.31x) via GPU nanmean reduction; Destreak gain is marginal (1.02x) because OpenCV `filter2D` is already highly optimized on ARM NEON
-5. Memory overhead: PyTorch MPS adds ~170-210 MB baseline RSS (Metal runtime), lower than CUDA's ~500 MB overhead on DGX
-6. For Apple Silicon, **NumPy-only is the recommended configuration** -- it has the fastest small-frame throughput, lowest memory, and best multi-worker scaling
+1. The M4 Max CPU is ~2x faster than DGX Spark ARM cores: NumPy-only pipeline is 25 ms vs 57 ms on identical large frames
+2. Numba provides no measurable benefit on Apple Silicon for this workload
+3. For Apple Silicon, **NumPy-only is the recommended configuration**
 
 ## Troubleshooting Performance Issues
 
