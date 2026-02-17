@@ -154,7 +154,7 @@ POLAR files are expected in the structure `YYYY/MM/DD/HH/YYYYMMDDHHmmss*.pol*`.
 - [Architecture](docs/architecture.md) -- Data flow, class relationships, and processing pipelines
 - [Configuration](docs/configuration.md) -- YAML config format and options
 - [Examples](docs/examples.md) -- Usage examples and workflows
-- [Performance](docs/performance.md) -- Optimization and parallelization
+- [Performance & Benchmarks](docs/performance.md) -- GPU acceleration, memory usage, and scaling benchmarks
 - [Deployment](docs/deployment.md) -- Installation and deployment
 
 ### Command Reference
