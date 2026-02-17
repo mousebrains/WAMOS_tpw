@@ -298,27 +298,54 @@ Software: PyTorch 2.10.0+cu128, Numba 0.63.1, NumPy 2.3.5
 | Delta RSS | 47.4 | 53.2 | 554.9 | 560.2 |
 | GPU Peak Alloc | N/A | N/A | 18.6 | 18.6 |
 
-#### Multi-Worker Scaling -- 8 files, Small Frame
+#### Multi-Worker Scaling -- 200 large frames (2514 x 1552)
 
-| Config | Best Workers | Peak FPS | Peak Speedup |
+**NumPy-only**
+
+| Workers | Wall(s) | FPS | Speedup | Efficiency |
+|---|---|---|---|---|
+| 1 | 15.05 | 13.29 | 1.00x | 100.0% |
+| 2 | 7.86 | 25.46 | 1.92x | 95.8% |
+| 4 | 4.19 | 47.76 | 3.59x | 89.8% |
+| 8 | 2.71 | 73.72 | 5.55x | 69.3% |
+| 12 | 2.40 | 83.39 | 6.27x | 52.3% |
+| 16 | 2.26 | 88.61 | 6.67x | 41.7% |
+| 20 | 2.28 | 87.62 | 6.59x | 33.0% |
+
+**PyTorch GPU**
+
+| Workers | Wall(s) | FPS | Speedup | Efficiency |
+|---|---|---|---|---|
+| 1 | 13.03 | 15.35 | 1.00x | 100.0% |
+| 2 | 7.61 | 26.29 | 1.71x | 85.7% |
+| 4 | 5.69 | 35.18 | 2.29x | 57.3% |
+| 8 | 5.74 | 34.82 | 2.27x | 28.4% |
+| 12 | 6.84 | 29.24 | 1.91x | 15.9% |
+| 16 | 8.46 | 23.64 | 1.54x | 9.6% |
+
+**Summary**
+
+| Config | Best Workers | Peak FPS | Est. time for 100k files |
 |---|---|---|---|
-| NumPy-only | 2 | 17.05 | 1.11x |
-| Numba | 2 | 14.60 | 1.09x |
-| PyTorch GPU | 1 | 4.50 | 1.00x |
-| PyTorch + Numba | 1 | 3.97 | 1.00x |
+| **NumPy-only** | **16** | **88.61** | **~19 min** |
+| Numba | 12 | 81.78 | ~20 min |
+| PyTorch GPU | 4 | 35.18 | ~47 min |
+| PyTorch + Numba | 4 | 35.29 | ~47 min |
 
-CPU configs scale modestly to 2 workers on this small workload (8 files).
-GPU configs are fastest single-threaded -- multiple workers contend on the
-single GPU via forked CUDA contexts.
+For bulk processing of large datasets, use `--no-gpu --workers 16`:
+
+```bash
+wamos stream-pipeline ... --no-gpu --workers 16
+```
 
 #### Key Observations
 
-1. GPU wins scale with frame size: 1.92x pipeline speedup on 2514x1552 vs 1.12x on 808x752
-2. Destreak is the biggest GPU win (3.0x on large frames) via `F.conv2d` + GPU thresholding
-3. Deramp gets 2.4x on large frames but overhead makes it slower on small frames
-4. Grid projection sees the largest GPU speedup: 14.5x large / 5.5x small
-5. PyTorch adds ~500-640 MB RSS overhead (CUDA runtime). GPU allocations scale with frame size (19 MB small, 119 MB large) but are trivial against 128 GB VRAM
-6. Shadow and Dewind stay on CPU -- lightweight config-driven logic not worth GPU transfer cost
+1. NumPy-only with 16 workers is the fastest config for bulk throughput (88.6 FPS), 2.5x faster than the best GPU config
+2. GPU scaling saturates at 4 workers then degrades -- all workers contend on the single GPU
+3. CPU scaling is near-linear to 4 workers (90% efficiency), useful to 12-16 workers
+4. GPU wins per-frame latency (1.92x pipeline, 14.5x grid projection) but can't parallelize
+5. PyTorch adds ~940 MB RSS per worker vs ~200 MB for NumPy-only
+6. For 100,000 files: `--no-gpu --workers 16` recommended (~19 min vs ~47 min with GPU)
 
 ### Apple Silicon
 
