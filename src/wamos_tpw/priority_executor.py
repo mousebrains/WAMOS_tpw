@@ -15,13 +15,44 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import IntEnum
-from multiprocessing import shared_memory
+from multiprocessing import resource_tracker, shared_memory
 from queue import Empty
 from typing import Any
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Disable the resource tracker for shared_memory objects.
+#
+# SharedMemoryManager handles the full lifecycle (close + unlink) with
+# reference counting.  Python's resource_tracker independently tracks
+# shared_memory blocks and tries to clean them up at process shutdown,
+# which causes spurious KeyError / FileNotFoundError tracebacks because
+# the blocks have already been unlinked by SharedMemoryManager.
+#
+# We filter out "shared_memory" from both register and unregister while
+# leaving other resource types (e.g. semaphores) untouched.
+# ---------------------------------------------------------------------------
+_orig_register = resource_tracker.register
+_orig_unregister = resource_tracker.unregister
+
+
+def _register_filter(name, rtype):
+    if rtype == "shared_memory":
+        return
+    _orig_register(name, rtype)
+
+
+def _unregister_filter(name, rtype):
+    if rtype == "shared_memory":
+        return
+    _orig_unregister(name, rtype)
+
+
+resource_tracker.register = _register_filter
+resource_tracker.unregister = _unregister_filter
 
 
 class Priority(IntEnum):

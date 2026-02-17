@@ -159,7 +159,7 @@ class ShipData:
             time_s = np.load(time_path, mmap_mode="r")
             values = np.load(values_path, mmap_mode="r")
             self._data[var] = (time_s, values, is_angular)
-            logger.info("Mapped %s: %d records", var, len(values))
+            logger.debug("Mapped %s: %d records", var, len(values))
 
     # ------------------------------------------------------------------
     # Interpolation
