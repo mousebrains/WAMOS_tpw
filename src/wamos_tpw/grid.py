@@ -383,9 +383,111 @@ def _project_frame_numpy(
     return frame_sum, frame_count
 
 
-# Default to numpy implementation
-# Numba version available below but benchmarks show numpy is faster for typical frame sizes
-project_frame_to_common_grid = _project_frame_numpy
+# ---------------------------------------------------------------------------
+# PyTorch GPU-accelerated projection (CUDA / MPS / CPU fallback)
+# ---------------------------------------------------------------------------
+from wamos_tpw.backend import HAS_TORCH_GPU as _HAS_TORCH_GPU  # noqa: E402
+
+if _HAS_TORCH_GPU:
+    import torch as _torch
+
+    from wamos_tpw.backend import get_device as _get_device
+    from wamos_tpw.backend import to_numpy as _to_numpy
+
+    def _project_frame_torch(
+        intensity: np.ndarray,
+        theta: np.ndarray,
+        ground_range: np.ndarray,
+        latitudes: np.ndarray,
+        longitudes: np.ndarray,
+        headings: np.ndarray,
+        grid_params: GridParams | dict,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """PyTorch GPU-accelerated frame projection."""
+        ref_lat = grid_params["ref_lat"]
+        ref_lon = grid_params["ref_lon"]
+        m_per_deg_lon = grid_params["m_per_deg_lon"]
+        x_edges_abs = grid_params["x_edges_abs"]
+        y_edges_abs = grid_params["y_edges_abs"]
+        grid_spacing = grid_params["grid_spacing"]
+        n_x = grid_params["n_x"]
+        n_y = grid_params["n_y"]
+
+        dev = _get_device()
+
+        # Convert ship positions to equirectangular meters
+        ship_x = (longitudes - ref_lon) * m_per_deg_lon
+        ship_y = (latitudes - ref_lat) * _DEG2M
+
+        # Move to GPU
+        t_intensity = _torch.from_numpy(np.ascontiguousarray(intensity, dtype=np.float32)).to(dev)
+        t_ground_range = _torch.from_numpy(np.ascontiguousarray(ground_range, dtype=np.float32)).to(
+            dev
+        )
+        t_ship_x = _torch.from_numpy(np.ascontiguousarray(ship_x, dtype=np.float32)).to(dev)
+        t_ship_y = _torch.from_numpy(np.ascontiguousarray(ship_y, dtype=np.float32)).to(dev)
+
+        # Earth bearing trig on GPU
+        earth_bearing = _torch.from_numpy(
+            np.ascontiguousarray(((theta + headings) % 360), dtype=np.float32)
+        ).to(dev)
+        earth_bearing_rad = _torch.deg2rad(earth_bearing)
+        sin_b = _torch.sin(earth_bearing_rad)
+        cos_b = _torch.cos(earth_bearing_rad)
+
+        # Coordinate computation via outer product + broadcast
+        x_coords = _torch.outer(sin_b, t_ground_range) + t_ship_x[:, None]
+        y_coords = _torch.outer(cos_b, t_ground_range) + t_ship_y[:, None]
+
+        # Grid indices
+        x_origin = float(x_edges_abs[0])
+        y_origin = float(y_edges_abs[0])
+        inv_spacing = 1.0 / grid_spacing
+
+        x_idx = ((x_coords - x_origin) * inv_spacing).to(_torch.int64)
+        y_idx = ((y_coords - y_origin) * inv_spacing).to(_torch.int64)
+
+        # Flatten
+        x_flat = x_idx.reshape(-1)
+        y_flat = y_idx.reshape(-1)
+        vals_flat = t_intensity.reshape(-1)
+
+        # Valid mask: in-bounds and not NaN
+        valid = (
+            (x_flat >= 0)
+            & (x_flat < n_x)
+            & (y_flat >= 0)
+            & (y_flat < n_y)
+            & ~_torch.isnan(vals_flat)
+        )
+
+        grid_size = n_x * n_y
+
+        if valid.any():
+            linear_idx = y_flat[valid] * n_x + x_flat[valid]
+            valid_vals = vals_flat[valid].to(_torch.float64)
+
+            # scatter_add_ for sum and count (MPS-safe, no bincount needed)
+            frame_sum = _torch.zeros(grid_size, dtype=_torch.float64, device=dev)
+            frame_sum.scatter_add_(0, linear_idx, valid_vals)
+
+            ones = _torch.ones_like(valid_vals)
+            frame_count = _torch.zeros(grid_size, dtype=_torch.float64, device=dev)
+            frame_count.scatter_add_(0, linear_idx, ones)
+
+            result_sum = _to_numpy(frame_sum.reshape(n_y, n_x))
+            result_count = _to_numpy(frame_count.reshape(n_y, n_x)).astype(np.int32)
+        else:
+            result_sum = np.zeros((n_y, n_x), dtype=np.float64)
+            result_count = np.zeros((n_y, n_x), dtype=np.int32)
+
+        return result_sum, result_count
+
+    project_frame_to_common_grid = _project_frame_torch
+else:
+    # Default to numpy implementation
+    # Numba version available below but benchmarks show numpy is faster for typical frame sizes
+    project_frame_to_common_grid = _project_frame_numpy
 
 
 # =============================================================================
@@ -521,7 +623,12 @@ def remap_to_common_grid(
 
 # Optional Numba acceleration for grid operations
 # When numba is available, provides significant speedup over pure-numpy
+# Controlled by WAMOS_NO_NUMBA env var via backend.HAS_NUMBA
+from wamos_tpw.backend import HAS_NUMBA as _HAS_NUMBA_AVAILABLE  # noqa: E402
+
 try:
+    if not _HAS_NUMBA_AVAILABLE:
+        raise ImportError("Numba disabled via WAMOS_NO_NUMBA")
     import numba
 
     # =========================================================================

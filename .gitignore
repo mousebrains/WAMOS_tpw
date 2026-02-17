@@ -69,4 +69,10 @@ Thumbs.db
 # Debug artifacts
 debug_*.png
 
+# CUDA compatibility shims
+.cuda_compat/
+
+# Benchmark generated data
+benchmarks/results.json
+
 # Data directories

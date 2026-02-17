@@ -41,10 +41,12 @@ def _get_ship_data(data_dir: str | None):
 
 
 # Numba JIT projection: ~4.5× faster than pure numpy.
-# To disable numba and fall back to numpy, either:
-#   - uninstall numba: pip3 uninstall numba
-#   - or set _HAS_NUMBA = False after this block
+# To disable numba: set WAMOS_NO_NUMBA=1 env var, or uninstall numba
+from wamos_tpw.backend import HAS_NUMBA as _HAS_NUMBA_AVAILABLE  # noqa: E402
+
 try:
+    if not _HAS_NUMBA_AVAILABLE:
+        raise ImportError("Numba disabled via WAMOS_NO_NUMBA")
     import numba
 
     @numba.njit(cache=True)
@@ -85,6 +87,64 @@ try:
     _HAS_NUMBA = True
 except ImportError:
     _HAS_NUMBA = False
+
+# PyTorch GPU projection tier (above Numba)
+from wamos_tpw.backend import HAS_TORCH_GPU as _HAS_TORCH  # noqa: E402
+
+if _HAS_TORCH:
+    import torch as _torch
+
+    from wamos_tpw.backend import get_device as _get_device
+    from wamos_tpw.backend import to_numpy as _to_numpy
+
+
+def _project_torch(
+    sin_bearing: np.ndarray,
+    cos_bearing: np.ndarray,
+    ground_range: np.ndarray,
+    ship_x: np.ndarray,
+    ship_y: np.ndarray,
+    intensity: np.ndarray,
+    x_min: float,
+    y_min: float,
+    inv_spacing: float,
+    n_x: int,
+    n_y: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """PyTorch GPU-accelerated projection for interpolator workers."""
+    dev = _get_device()
+    grid_size = n_x * n_y
+
+    t_sin = _torch.from_numpy(np.ascontiguousarray(sin_bearing, dtype=np.float32)).to(dev)
+    t_cos = _torch.from_numpy(np.ascontiguousarray(cos_bearing, dtype=np.float32)).to(dev)
+    t_gr = _torch.from_numpy(np.ascontiguousarray(ground_range, dtype=np.float32)).to(dev)
+    t_sx = _torch.from_numpy(np.ascontiguousarray(ship_x, dtype=np.float32)).to(dev)
+    t_sy = _torch.from_numpy(np.ascontiguousarray(ship_y, dtype=np.float32)).to(dev)
+    t_int = _torch.from_numpy(np.ascontiguousarray(intensity, dtype=np.float32)).to(dev)
+
+    x_coords = (_torch.outer(t_sin, t_gr) + (t_sx[:, None] - x_min)) * inv_spacing
+    y_coords = (_torch.outer(t_cos, t_gr) + (t_sy[:, None] - y_min)) * inv_spacing
+
+    x_idx = x_coords.to(_torch.int64).reshape(-1)
+    y_idx = y_coords.to(_torch.int64).reshape(-1)
+    vals = t_int.reshape(-1)
+
+    valid = (x_idx >= 0) & (x_idx < n_x) & (y_idx >= 0) & (y_idx < n_y) & ~_torch.isnan(vals)
+
+    if valid.any():
+        linear_idx = y_idx[valid] * n_x + x_idx[valid]
+        valid_vals = vals[valid].to(_torch.float64)
+
+        out_sum = _torch.zeros(grid_size, dtype=_torch.float64, device=dev)
+        out_sum.scatter_add_(0, linear_idx, valid_vals)
+
+        ones = _torch.ones_like(valid_vals)
+        out_cnt = _torch.zeros(grid_size, dtype=_torch.float64, device=dev)
+        out_cnt.scatter_add_(0, linear_idx, ones)
+
+        return _to_numpy(out_sum), _to_numpy(out_cnt).astype(np.int32)
+
+    return np.zeros(grid_size, dtype=np.float64), np.zeros(grid_size, dtype=np.int32)
 
 
 # ============================================================
@@ -562,7 +622,23 @@ def _do_interpolate(task) -> Result:
         # Project all pixels onto the grid
         inv_spacing = 1.0 / grid_spacing
 
-        if _HAS_NUMBA:
+        if _HAS_TORCH:
+            out_sum, out_cnt = _project_torch(
+                sin_bearing,
+                cos_bearing,
+                ground_range,
+                ship_x,
+                ship_y,
+                intensity,
+                x_min,
+                y_min,
+                inv_spacing,
+                n_x,
+                n_y,
+            )
+            intensity_sum.ravel()[:] = out_sum
+            intensity_count.ravel()[:] = out_cnt
+        elif _HAS_NUMBA:
             # Single compiled loop — no intermediate arrays
             out_sum, out_cnt = _project_numba(
                 sin_bearing,

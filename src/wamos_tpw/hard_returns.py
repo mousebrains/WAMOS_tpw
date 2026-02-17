@@ -32,6 +32,8 @@ import logging
 
 import numpy as np
 
+from wamos_tpw.backend import HAS_TORCH_GPU
+
 logger = logging.getLogger(__name__)
 
 _MASK_BIT12 = np.uint16(0x1000)
@@ -139,6 +141,69 @@ def _build_frame_data(record: dict):
         n_distances=0,
         pps_indices=record["pps_indices"],
     )
+
+
+# ---------------------------------------------------------------
+# GPU-accelerated sweep
+# ---------------------------------------------------------------
+
+
+def _sweep_gpu(
+    x_base: np.ndarray,
+    y_base: np.ndarray,
+    dx_ddt: np.ndarray,
+    dy_ddt: np.ndarray,
+    offsets: np.ndarray,
+    x_min: float,
+    y_min: float,
+    inv_spacing: float,
+    n_gx: int,
+    n_gy: int,
+    grid_size: int,
+    progress: bool,
+) -> np.ndarray:
+    """GPU-accelerated offset sweep using scatter_add_."""
+    import torch
+
+    from wamos_tpw.backend import get_device
+
+    dev = get_device()
+    n_offsets = len(offsets)
+
+    # Pre-transfer base arrays to GPU once
+    t_x_base = torch.from_numpy(np.ascontiguousarray(x_base, dtype=np.float64)).to(dev)
+    t_y_base = torch.from_numpy(np.ascontiguousarray(y_base, dtype=np.float64)).to(dev)
+    t_dx = torch.from_numpy(np.ascontiguousarray(dx_ddt, dtype=np.float64)).to(dev)
+    t_dy = torch.from_numpy(np.ascontiguousarray(dy_ddt, dtype=np.float64)).to(dev)
+
+    metrics = np.empty(n_offsets, dtype=np.float64)
+    ones = torch.ones(len(x_base), dtype=torch.float64, device=dev)
+
+    try:
+        from tqdm import tqdm
+
+        sweep_iter = tqdm(
+            range(n_offsets), desc="Sweeping (GPU)", unit="offset", disable=not progress
+        )
+    except ImportError:
+        sweep_iter = range(n_offsets)
+
+    for k in sweep_iter:
+        dt = offsets[k]
+        x = t_x_base + t_dx * dt
+        y = t_y_base + t_dy * dt
+
+        xi = ((x - x_min) * inv_spacing).to(torch.int64)
+        yi = ((y - y_min) * inv_spacing).to(torch.int64)
+
+        valid = (xi >= 0) & (xi < n_gx) & (yi >= 0) & (yi < n_gy)
+        linear_idx = yi[valid] * n_gx + xi[valid]
+
+        counts = torch.zeros(grid_size, dtype=torch.float64, device=dev)
+        counts.scatter_add_(0, linear_idx, ones[valid])
+        metrics[k] = float((counts**2).sum())
+
+    return metrics
 
 
 # ---------------------------------------------------------------
@@ -467,26 +532,44 @@ def find_hard_return_offset(
     inv_spacing = 1.0 / grid_spacing
     metrics = np.empty(n_offsets, dtype=np.float64)
 
-    try:
-        from tqdm import tqdm
+    if HAS_TORCH_GPU and n_points > 0:
+        metrics = _sweep_gpu(
+            x_base,
+            y_base,
+            dx_ddt,
+            dy_ddt,
+            offsets,
+            x_min,
+            y_min,
+            inv_spacing,
+            n_gx,
+            n_gy,
+            grid_size,
+            progress,
+        )
+    else:
+        try:
+            from tqdm import tqdm
 
-        sweep_iter = tqdm(range(n_offsets), desc="Sweeping", unit="offset", disable=not progress)
-    except ImportError:
-        sweep_iter = range(n_offsets)
+            sweep_iter = tqdm(
+                range(n_offsets), desc="Sweeping", unit="offset", disable=not progress
+            )
+        except ImportError:
+            sweep_iter = range(n_offsets)
 
-    for k in sweep_iter:
-        dt = offsets[k]
-        x = x_base + dx_ddt * dt
-        y = y_base + dy_ddt * dt
+        for k in sweep_iter:
+            dt = offsets[k]
+            x = x_base + dx_ddt * dt
+            y = y_base + dy_ddt * dt
 
-        xi = ((x - x_min) * inv_spacing).astype(np.int32)
-        yi = ((y - y_min) * inv_spacing).astype(np.int32)
+            xi = ((x - x_min) * inv_spacing).astype(np.int32)
+            yi = ((y - y_min) * inv_spacing).astype(np.int32)
 
-        valid = (xi >= 0) & (xi < n_gx) & (yi >= 0) & (yi < n_gy)
-        linear_idx = yi[valid] * n_gx + xi[valid]
+            valid = (xi >= 0) & (xi < n_gx) & (yi >= 0) & (yi < n_gy)
+            linear_idx = yi[valid] * n_gx + xi[valid]
 
-        counts = np.bincount(linear_idx, minlength=grid_size)
-        metrics[k] = np.sum(counts.astype(np.float64) ** 2)  # L2 concentration
+            counts = np.bincount(linear_idx, minlength=grid_size)
+            metrics[k] = np.sum(counts.astype(np.float64) ** 2)  # L2 concentration
 
     elapsed_sweep = time.perf_counter() - t3
     logger.info("Sweep completed in %.1fs", elapsed_sweep)

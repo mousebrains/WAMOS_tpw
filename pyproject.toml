@@ -65,8 +65,11 @@ export = [
     "netCDF4>=1.6",
     "zarr>=2.16",
 ]
+gpu = [
+    "torch>=2.0",
+]
 all = [
-    "wamos_tpw[dev,docs,export]",
+    "wamos_tpw[dev,docs,export,gpu]",
 ]
 
 [project.scripts]
@@ -87,6 +90,9 @@ include = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+markers = [
+    "gpu: marks tests that require a PyTorch GPU backend",
+]
 
 [tool.mypy]
 ignore_missing_imports = true

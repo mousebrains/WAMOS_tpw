@@ -654,6 +654,20 @@ def _add_arguments(parser) -> None:
         help="Grid cell size in meters for earth projection (default: auto from range/angular resolution)",
     )
 
+    # Acceleration options
+    parser.add_argument(
+        "--no-gpu",
+        action="store_true",
+        default=False,
+        help="Disable GPU acceleration (force CPU-only mode)",
+    )
+    parser.add_argument(
+        "--no-numba",
+        action="store_true",
+        default=False,
+        help="Disable Numba JIT acceleration (force pure NumPy fallback)",
+    )
+
     # Progress bar options (mutually exclusive)
     progress_group = parser.add_mutually_exclusive_group()
     progress_group.add_argument(
@@ -670,6 +684,11 @@ def _add_arguments(parser) -> None:
 
 def run(args) -> None:
     """Run streaming pipeline with full output support."""
+    if getattr(args, "no_gpu", False):
+        os.environ["WAMOS_NO_GPU"] = "1"
+    if getattr(args, "no_numba", False):
+        os.environ["WAMOS_NO_NUMBA"] = "1"
+
     from pathlib import Path
 
     from wamos_tpw.config import Config

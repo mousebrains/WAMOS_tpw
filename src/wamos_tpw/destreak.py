@@ -13,12 +13,93 @@ import cv2
 import numpy as np
 from scipy import ndimage
 
+from wamos_tpw.backend import HAS_TORCH_GPU
 from wamos_tpw.config import Config
 from wamos_tpw.frame import Frame
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["Destreak"]
+
+
+def _convolve_and_threshold_cpu(
+    intensity: np.ndarray,
+    kernel: np.ndarray,
+    kAdjacent: np.ndarray,
+    threshold_sigma: float,
+    timing: dict[str, float],
+) -> tuple[np.ndarray, np.ndarray]:
+    """CPU path: cv2 convolution + numpy threshold."""
+    t0 = _time.perf_counter()
+    pad = 1
+    padded = np.vstack([intensity[-pad:], intensity, intensity[:pad]])
+    a_padded = cv2.filter2D(padded, -1, kernel, borderType=cv2.BORDER_REFLECT)
+    b_padded = cv2.filter2D(padded, -1, kAdjacent, borderType=cv2.BORDER_REFLECT)
+    a = a_padded[pad:-pad]
+    b = b_padded[pad:-pad]
+    timing["convolve"] = _time.perf_counter() - t0
+
+    t0 = _time.perf_counter()
+    sigma = np.std(a)
+    thres_center = threshold_sigma * sigma
+    thres_adjacent = thres_center / 2
+    qAdjacent = a <= -thres_adjacent
+    qCenter = a >= thres_center
+    q = qCenter & np.roll(qAdjacent, +1, axis=0) & np.roll(qAdjacent, -1, axis=0)
+    timing["threshold"] = _time.perf_counter() - t0
+
+    return q, b
+
+
+def _convolve_and_threshold_gpu(
+    intensity: np.ndarray,
+    kernel: np.ndarray,
+    kAdjacent: np.ndarray,
+    threshold_sigma: float,
+    timing: dict[str, float],
+) -> tuple[np.ndarray, np.ndarray]:
+    """GPU path: PyTorch F.conv2d + threshold on GPU, transfer only boolean mask to CPU."""
+    import torch
+    import torch.nn.functional as F
+
+    from wamos_tpw.backend import get_device, to_numpy
+
+    dev = get_device()
+
+    t0 = _time.perf_counter()
+    # Prepare tensors: (1, 1, H, W) for conv2d
+    t_intensity = (
+        torch.from_numpy(np.ascontiguousarray(intensity)).unsqueeze(0).unsqueeze(0).to(dev)
+    )
+    # Kernels: (out_channels=1, in_channels=1, kH, kW)
+    t_kernel = torch.from_numpy(np.ascontiguousarray(kernel)).unsqueeze(0).unsqueeze(0).to(dev)
+    t_kAdj = torch.from_numpy(np.ascontiguousarray(kAdjacent)).unsqueeze(0).unsqueeze(0).to(dev)
+
+    # Circular padding for bearing (dim=2), reflect for range (dim=3)
+    # F.pad order: (left, right, top, bottom)
+    # Reflect pad on range (left/right), then circular pad on bearing (top/bottom)
+    padded = F.pad(t_intensity, (1, 1, 0, 0), mode="reflect")  # range dimension
+    padded = torch.cat([padded[:, :, -1:, :], padded, padded[:, :, :1, :]], dim=2)  # bearing wrap
+
+    t_a = F.conv2d(padded, t_kernel).squeeze(0).squeeze(0)
+    t_b = F.conv2d(padded, t_kAdj).squeeze(0).squeeze(0)
+    timing["convolve"] = _time.perf_counter() - t0
+
+    # Threshold on GPU (key optimization: avoid GPU→CPU transfer of full a, b arrays)
+    t0 = _time.perf_counter()
+    sigma = torch.std(t_a)
+    thres_center = threshold_sigma * sigma
+    thres_adjacent = thres_center / 2
+    qAdjacent = t_a <= -thres_adjacent
+    qCenter = t_a >= thres_center
+    q = qCenter & torch.roll(qAdjacent, 1, dims=0) & torch.roll(qAdjacent, -1, dims=0)
+    timing["threshold"] = _time.perf_counter() - t0
+
+    # Transfer boolean mask and replacement values to CPU
+    q_np = to_numpy(q).astype(bool)
+    b_np = to_numpy(t_b)
+
+    return q_np, b_np
 
 
 class Destreak:
@@ -84,32 +165,16 @@ class Destreak:
         kAdjacent = np.array([[1, 1, 1], [0, 0, 0], [1, 1, 1]], dtype=np.float32)
         kAdjacent = kAdjacent / kAdjacent.sum()  # Normalize
 
-        t0 = _time.perf_counter()
         intensity = frame.intensity.astype(np.float32)
-        # cv2.filter2D doesn't support BORDER_WRAP, so manually wrap bearing dimension
-        # Pad top/bottom with wrapped rows for circular bearing handling
-        pad = 1  # Kernel radius
-        padded = np.vstack([intensity[-pad:], intensity, intensity[:pad]])
-        # Apply filter with BORDER_REFLECT for range dimension (columns)
-        a_padded = cv2.filter2D(padded, -1, kernel, borderType=cv2.BORDER_REFLECT)
-        b_padded = cv2.filter2D(padded, -1, kAdjacent, borderType=cv2.BORDER_REFLECT)
-        # Remove padding
-        a = a_padded[pad:-pad]
-        b = b_padded[pad:-pad]
-        self._timing["convolve"] = _time.perf_counter() - t0
 
-        t0 = _time.perf_counter()
-        sigma = np.std(a)
-        thres_center = threshold_sigma * sigma
-        thres_adjacent = thres_center / 2
-
-        # We expect a large positive for a single radial streak
-        # We expect large negative on either side for adjacent streaks
-
-        qAdjacent = a <= -thres_adjacent
-        qCenter = a >= thres_center
-        q = qCenter & np.roll(qAdjacent, +1, axis=0) & np.roll(qAdjacent, -1, axis=0)
-        self._timing["threshold"] = _time.perf_counter() - t0
+        if HAS_TORCH_GPU:
+            q, b = _convolve_and_threshold_gpu(
+                intensity, kernel, kAdjacent, threshold_sigma, self._timing
+            )
+        else:
+            q, b = _convolve_and_threshold_cpu(
+                intensity, kernel, kAdjacent, threshold_sigma, self._timing
+            )
 
         qAny = np.any(q, axis=1)
 

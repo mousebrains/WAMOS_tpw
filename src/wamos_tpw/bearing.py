@@ -14,6 +14,7 @@ import logging
 
 import numpy as np
 
+from wamos_tpw.backend import HAS_TORCH_GPU
 from wamos_tpw.config import Config
 from wamos_tpw.destreak import Destreak
 from wamos_tpw.frame import Frame
@@ -86,6 +87,8 @@ def heading_to_xy(
 
     Convention: +X = East (heading 90°), +Y = North (heading 0°)
 
+    Uses PyTorch GPU acceleration when available.
+
     Args:
         heading: Heading angles in degrees, shape (n_radials,)
         ground_range: Ground range values in meters, shape (n_distances,)
@@ -95,6 +98,9 @@ def heading_to_xy(
         x: East component in meters
         y: North component in meters
     """
+    if HAS_TORCH_GPU:
+        return _heading_to_xy_gpu(heading, ground_range)
+
     heading_rad = np.deg2rad(heading)
 
     # Broadcast: heading (n_radials, 1) * range (1, n_distances)
@@ -105,6 +111,29 @@ def heading_to_xy(
     y = range_2d * np.cos(heading_2d)  # North
 
     return x, y
+
+
+def _heading_to_xy_gpu(
+    heading: np.ndarray,
+    ground_range: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """GPU-accelerated heading to x/y conversion."""
+    import torch
+
+    from wamos_tpw.backend import get_device, to_numpy
+
+    dev = get_device()
+    t_heading = torch.from_numpy(np.ascontiguousarray(heading, dtype=np.float32)).to(dev)
+    t_range = torch.from_numpy(np.ascontiguousarray(ground_range, dtype=np.float32)).to(dev)
+
+    t_rad = torch.deg2rad(t_heading)
+    sin_h = torch.sin(t_rad)
+    cos_h = torch.cos(t_rad)
+
+    x = torch.outer(sin_h, t_range)
+    y = torch.outer(cos_h, t_range)
+
+    return to_numpy(x), to_numpy(y)
 
 
 class Bearing:

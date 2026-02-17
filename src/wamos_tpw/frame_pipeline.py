@@ -322,6 +322,20 @@ def _add_arguments(parser) -> None:
         help="Radar height above water in meters",
     )
 
+    # Acceleration options
+    parser.add_argument(
+        "--no-gpu",
+        action="store_true",
+        default=False,
+        help="Disable GPU acceleration (force CPU-only mode)",
+    )
+    parser.add_argument(
+        "--no-numba",
+        action="store_true",
+        default=False,
+        help="Disable Numba JIT acceleration (force pure NumPy fallback)",
+    )
+
     # Progress bar
     progress_group = parser.add_mutually_exclusive_group()
     progress_group.add_argument(
@@ -381,7 +395,13 @@ def _get_executors(args) -> list[str]:
 
 def run(args) -> None:
     """Execute the 'frame-pipeline' command with parallel processing."""
+    import os
     from functools import partial
+
+    if getattr(args, "no_gpu", False):
+        os.environ["WAMOS_NO_GPU"] = "1"
+    if getattr(args, "no_numba", False):
+        os.environ["WAMOS_NO_NUMBA"] = "1"
 
     from wamos_tpw.config import Config
     from wamos_tpw.filenames import Filenames
