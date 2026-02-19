@@ -85,7 +85,7 @@ jobs:
     - name: Run pip-audit
       run: |
         pip install -e .
-        pip-audit
+        pip-audit --skip-editable
 
   test:
     strategy:
