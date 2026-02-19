@@ -1096,9 +1096,15 @@ def run_cube_diag(args) -> None:
 
     n_workers = args.workers or os.cpu_count() or 1
     n_cube_workers = min(len(cubes), n_workers)
+    n_inner_workers = max(1, n_workers // n_cube_workers)
     diags: list[CubeCurrentDiag | None] = [None] * len(cubes)
 
-    logger.info("Extracting cube currents with %d threads", n_workers)
+    logger.info(
+        "Extracting cube currents: %d cubes x %d inner threads (%d total)",
+        n_cube_workers,
+        n_inner_workers,
+        n_cube_workers * n_inner_workers,
+    )
 
     pbar = tqdm(
         total=len(cubes),
@@ -1109,7 +1115,7 @@ def run_cube_diag(args) -> None:
 
     with ThreadPoolExecutor(max_workers=n_cube_workers) as pool:
         futures = {
-            pool.submit(CubeCurrentDiag, cube, config=config, n_workers=n_workers): i
+            pool.submit(CubeCurrentDiag, cube, config=config, n_workers=n_inner_workers): i
             for i, cube in enumerate(cubes)
         }
         for future in as_completed(futures):
