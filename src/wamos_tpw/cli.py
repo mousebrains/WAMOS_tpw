@@ -91,6 +91,7 @@ Examples:
     from wamos_tpw import (
         bearing,
         config,
+        current_pipeline,
         deramp,
         destreak,
         dewind,
@@ -114,6 +115,7 @@ Examples:
     )
     from wamos_tpw import range as range_module  # Avoid shadowing builtin
 
+    current_pipeline.add_subparser(subparsers)  # wamos current
     files.add_subparser(subparsers)  # wamos view
     bearing.add_subparser(subparsers)  # wamos bearing
     theta.add_subparser(subparsers)  # wamos theta
