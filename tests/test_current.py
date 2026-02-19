@@ -89,9 +89,7 @@ def make_synthetic_cube(
         phase = rng.uniform(0, 2 * np.pi)
 
         for it in range(n_t):
-            intensity[it] += amplitudes[i] * np.cos(
-                kx * X + ky * Y - omega * t[it] + phase
-            )
+            intensity[it] += amplitudes[i] * np.cos(kx * X + ky * Y - omega * t[it] + phase)
 
     # Add noise
     if noise_level > 0:
