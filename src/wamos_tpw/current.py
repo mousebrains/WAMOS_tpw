@@ -685,7 +685,7 @@ class CurrentExtractor:
 
         return power, kx, ky, omega
 
-    def _shell_energy(self, ux: float, uy: float) -> float:
+    def _shell_energy(self, ux: float, uy: float) -> tuple[float, int]:
         """Compute total energy on the Doppler-shifted dispersion shell.
 
         For each (kx, ky) bin, the expected observed frequency is:
@@ -702,7 +702,7 @@ class CurrentExtractor:
             uy: Northward current candidate (m/s).
 
         Returns:
-            Total spectral energy on the dispersion shell.
+            Tuple of (total shell energy, number of shell bins sampled).
         """
         P = self.power_spectrum  # (n_t, n_y, n_x)
         kx = self.kx
@@ -749,6 +749,7 @@ class CurrentExtractor:
         omega_nyquist = np.pi / self._cube.dt
 
         energy = 0.0
+        n_shell_bins = 0
 
         for omega_pred in [omega_pred_pos, omega_pred_neg]:
             # Linearly interpolate between the two nearest FFT bins
@@ -772,8 +773,9 @@ class CurrentExtractor:
             energy += float(
                 np.sum(w_lo * P[lo_idx, iy_arr, ix_arr] + w_hi * P[hi_idx, iy_arr, ix_arr])
             )
+            n_shell_bins += int(ok.sum())
 
-        return energy
+        return energy, n_shell_bins
 
     def _grid_search(self) -> tuple[float, float, np.ndarray]:
         """Brute-force grid search over (Ux, Uy) candidates.
@@ -802,7 +804,7 @@ class CurrentExtractor:
                 # Skip candidates outside the circular search region
                 if ux_cand**2 + uy_cand**2 > radius**2:
                     continue
-                energy = self._shell_energy(ux_cand, uy_cand)
+                energy, _ = self._shell_energy(ux_cand, uy_cand)
                 search_surface[iy, ix] = energy
                 if energy > best_energy:
                     best_energy = energy
@@ -830,7 +832,8 @@ class CurrentExtractor:
         """
 
         def neg_energy(uxy: np.ndarray) -> float:
-            return -self._shell_energy(float(uxy[0]), float(uxy[1]))
+            energy, _ = self._shell_energy(float(uxy[0]), float(uxy[1]))
+            return -energy
 
         result = optimize.minimize(
             neg_energy,
@@ -843,23 +846,46 @@ class CurrentExtractor:
             },
         )
 
-        if result.success:
-            logger.debug(
-                "Refinement: (%.3f, %.3f) -> (%.3f, %.3f)",
-                coarse_ux,
-                coarse_uy,
-                result.x[0],
-                result.x[1],
-            )
-            return float(result.x[0]), float(result.x[1])
+        refined_ux, refined_uy = float(result.x[0]), float(result.x[1])
 
-        logger.debug("Refinement did not converge, using coarse estimate")
-        return coarse_ux, coarse_uy
+        # Reject refinement if it moved more than one coarse step from the
+        # grid search best — large jumps indicate chasing noise, not signal.
+        max_shift = self._search_step * 1.5
+        shift = np.sqrt((refined_ux - coarse_ux) ** 2 + (refined_uy - coarse_uy) ** 2)
+
+        if not result.success or shift > max_shift:
+            if not result.success:
+                logger.debug("Refinement did not converge, using coarse estimate")
+            else:
+                logger.debug(
+                    "Refinement jumped too far (%.2f > %.2f), using coarse estimate",
+                    shift,
+                    max_shift,
+                )
+            return coarse_ux, coarse_uy
+
+        logger.debug(
+            "Refinement: (%.3f, %.3f) -> (%.3f, %.3f)",
+            coarse_ux,
+            coarse_uy,
+            refined_ux,
+            refined_uy,
+        )
+        return refined_ux, refined_uy
 
     def _compute_snr(self, ux: float, uy: float) -> float:
         """Compute signal-to-noise ratio for the estimated current.
 
-        SNR = energy_on_shell / (total_energy - energy_on_shell).
+        Uses a per-bin normalized ratio so the SNR is independent of
+        the number of spectral bins::
+
+            SNR = (shell_energy / N_shell) / (noise_energy / N_noise)
+
+        where ``N_shell`` is the number of bins sampled on the
+        dispersion shell and ``N_noise = N_total - N_shell``.
+
+        This gives SNR ~ 1 for pure noise and SNR >> 1 when energy
+        is concentrated on the dispersion shell.
 
         Args:
             ux: Eastward current (m/s).
@@ -868,14 +894,17 @@ class CurrentExtractor:
         Returns:
             Signal-to-noise ratio (>= 0). Returns 0 if total energy is zero.
         """
-        shell_energy = self._shell_energy(ux, uy)
+        shell_energy, n_shell = self._shell_energy(ux, uy)
         total_energy = float(np.sum(self.power_spectrum))
+        n_total = self.power_spectrum.size
 
-        if total_energy <= 0:
+        if total_energy <= 0 or n_shell <= 0:
             return 0.0
 
         noise_energy = total_energy - shell_energy
-        if noise_energy <= 0:
+        n_noise = n_total - n_shell
+
+        if noise_energy <= 0 or n_noise <= 0:
             return float("inf")
 
-        return shell_energy / noise_energy
+        return (shell_energy / n_shell) / (noise_energy / n_noise)
