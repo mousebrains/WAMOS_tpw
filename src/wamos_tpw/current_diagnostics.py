@@ -10,6 +10,9 @@ Provides:
 
 - **CurrentDiag**: Spectral diagnostics for a single sub-region extraction
   (kx-omega and ky-omega slices, dispersion curve overlay, SNR search surface).
+- **CubeCurrentDiag**: Combined intensity + spectral diagnostics for a whole
+  FrameCube (no tiling): time-avg intensity with current vector, kx-omega,
+  ky-omega, and (Ux, Uy) search surface.
 - **CurrentMapDiag**: Spatial diagnostics for a tiled current map
   (quiver plot, speed colormap, SNR quality map).
 """
@@ -17,16 +20,17 @@ Provides:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 if TYPE_CHECKING:
-    from wamos_tpw.current import CurrentExtractor, CurrentMap
+    from wamos_tpw.current import CurrentExtractor, CurrentMap, FrameCube
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "CubeCurrentDiag",
     "CurrentDiag",
     "CurrentMapDiag",
 ]
@@ -289,3 +293,102 @@ class CurrentMapDiag:
         import matplotlib.pyplot as plt
 
         plt.colorbar(im, ax=ax, label="SNR")
+
+
+class CubeCurrentDiag:
+    """Diagnostic 2x2 figure for a single FrameCube: intensity + current vector + spectra.
+
+    Produces:
+    1. Time-averaged intensity I(x, y) with a quiver arrow for the extracted current.
+    2. kx-omega spectrum slice with dispersion curve overlay.
+    3. ky-omega spectrum slice with dispersion curve overlay.
+    4. (Ux, Uy) search surface with the estimated current marked.
+
+    The cube is treated as a single region (no tiling).
+
+    Args:
+        cube: A :class:`FrameCube` with radar intensity data.
+        config: Optional configuration object for :class:`CurrentExtractor`.
+    """
+
+    def __init__(self, cube: FrameCube, config: Any = None) -> None:
+        from wamos_tpw.current import CurrentExtractor
+
+        self._cube = cube
+        self._extractor = CurrentExtractor(cube, config=config)
+        self._diag = CurrentDiag(self._extractor)
+
+    @property
+    def estimate(self) -> Any:
+        """The extracted :class:`CurrentEstimate`."""
+        return self._extractor.estimate
+
+    def plot(self, fig: Any = None) -> None:
+        """Draw the 2x2 diagnostic figure.
+
+        Args:
+            fig: Optional matplotlib Figure. Creates one if not provided.
+        """
+        import matplotlib.pyplot as plt
+
+        if fig is None:
+            fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+        else:
+            axes = fig.subplots(2, 2)
+
+        self._plot_intensity_with_current(axes[0, 0])
+        self._diag._plot_kx_omega(axes[0, 1])
+        self._diag._plot_ky_omega(axes[1, 0])
+        self._diag._plot_search_surface(axes[1, 1])
+
+        fig.tight_layout()
+
+    def _plot_intensity_with_current(self, ax: Any) -> None:
+        """Plot time-averaged intensity with a current vector quiver arrow."""
+        import matplotlib.pyplot as plt
+
+        cube = self._cube
+        est = self._extractor.estimate
+
+        # Time-averaged intensity
+        mean_intensity = np.nanmean(cube.intensity, axis=0)
+
+        im = ax.pcolormesh(
+            cube.x_centers,
+            cube.y_centers,
+            mean_intensity,
+            shading="auto",
+            cmap="gray",
+        )
+        plt.colorbar(im, ax=ax, label="Intensity")
+
+        # Quiver arrow at cube center
+        cx = float(np.mean(cube.x_centers))
+        cy = float(np.mean(cube.y_centers))
+        ax.quiver(
+            cx,
+            cy,
+            est.ux,
+            est.uy,
+            color="red",
+            scale_units="xy",
+            angles="xy",
+            width=0.005,
+            zorder=5,
+        )
+
+        # Annotate with speed, direction, SNR
+        ax.annotate(
+            f"speed={est.speed:.2f} m/s\ndir={est.direction:.1f}\u00b0\nSNR={est.snr:.2f}",
+            xy=(0.02, 0.98),
+            xycoords="axes fraction",
+            verticalalignment="top",
+            fontsize=8,
+            color="white",
+            bbox={"boxstyle": "round,pad=0.3", "facecolor": "black", "alpha": 0.6},
+        )
+
+        ax.set_xlabel("x (m)")
+        ax.set_ylabel("y (m)")
+        ax.set_title("Time-avg intensity + current")
+        ax.set_aspect("equal")
