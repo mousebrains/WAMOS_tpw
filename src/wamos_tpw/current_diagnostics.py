@@ -296,32 +296,101 @@ class CurrentMapDiag:
 
 
 class CubeCurrentDiag:
-    """Diagnostic 2x2 figure for a single FrameCube: intensity + current vector + spectra.
+    """Diagnostic 2x2 figure for a single FrameCube: intensity + current vectors + spectra.
 
     Produces:
-    1. Time-averaged intensity I(x, y) with a quiver arrow for the extracted current.
-    2. kx-omega spectrum slice with dispersion curve overlay.
-    3. ky-omega spectrum slice with dispersion curve overlay.
-    4. (Ux, Uy) search surface with the estimated current marked.
+    1. Time-averaged intensity I(x, y) with quiver arrows for sub-cube
+       current estimates (color-coded by speed).
+    2. kx-omega spectrum slice with dispersion curve overlay (whole cube).
+    3. ky-omega spectrum slice with dispersion curve overlay (whole cube).
+    4. (Ux, Uy) search surface with the estimated current marked (whole cube).
 
-    The cube is treated as a single region (no tiling).
+    The spectral panels use the whole cube.  The intensity panel overlays
+    current vectors extracted from spatial sub-cubes via
+    :func:`compute_tile_specs`.
 
     Args:
         cube: A :class:`FrameCube` with radar intensity data.
         config: Optional configuration object for :class:`CurrentExtractor`.
+        n_workers: Number of threads for parallel sub-cube extraction.
     """
 
-    def __init__(self, cube: FrameCube, config: Any = None) -> None:
-        from wamos_tpw.current import CurrentExtractor
+    def __init__(
+        self,
+        cube: FrameCube,
+        config: Any = None,
+        n_workers: int | None = None,
+    ) -> None:
+        import os
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        from wamos_tpw.current import CurrentExtractor, compute_tile_specs
 
         self._cube = cube
-        self._extractor = CurrentExtractor(cube, config=config)
-        self._diag = CurrentDiag(self._extractor)
+
+        # Tile geometry
+        specs = compute_tile_specs(cube, config)
+        self._min_snr = specs["min_snr"]
+
+        # Run whole-cube + all sub-cube extractions in parallel
+        n_workers = n_workers or os.cpu_count() or 1
+        n_tasks = 1 + len(specs["tiles"])  # whole-cube + tiles
+
+        with ThreadPoolExecutor(max_workers=min(n_tasks, n_workers)) as pool:
+            # Submit whole-cube extraction
+            whole_future = pool.submit(CurrentExtractor, cube, config=config)
+
+            # Submit sub-cube extractions
+            tile_futures: dict[Any, dict] = {}
+            for tile in specs["tiles"]:
+                sub = cube.sub_cube(
+                    tile["x_start"],
+                    tile["x_end"],
+                    tile["y_start"],
+                    tile["y_end"],
+                )
+                future = pool.submit(CurrentExtractor, sub, config=config)
+                tile_futures[future] = tile
+
+            # Collect whole-cube result
+            self._extractor = whole_future.result()
+            self._diag = CurrentDiag(self._extractor)
+
+            # Collect sub-cube results
+            self._tile_estimates: list[dict] = []
+            for future in as_completed(tile_futures):
+                tile = tile_futures[future]
+                try:
+                    ext = future.result()
+                    est = ext.estimate
+                    self._tile_estimates.append(
+                        {
+                            "center_x": tile["center_x"],
+                            "center_y": tile["center_y"],
+                            "ux": est.ux,
+                            "uy": est.uy,
+                            "speed": est.speed,
+                            "direction": est.direction,
+                            "snr": est.snr,
+                        }
+                    )
+                except Exception:
+                    logger.debug(
+                        "Tile (%d, %d) extraction failed",
+                        tile["ix"],
+                        tile["iy"],
+                        exc_info=True,
+                    )
 
     @property
     def estimate(self) -> Any:
-        """The extracted :class:`CurrentEstimate`."""
+        """The whole-cube :class:`CurrentEstimate`."""
         return self._extractor.estimate
+
+    @property
+    def tile_estimates(self) -> list[dict]:
+        """Per-tile extraction results (center_x/y, ux, uy, speed, snr)."""
+        return self._tile_estimates
 
     def plot(self, fig: Any = None) -> None:
         """Draw the 2x2 diagnostic figure.
@@ -344,7 +413,7 @@ class CubeCurrentDiag:
         fig.tight_layout()
 
     def _plot_intensity_with_current(self, ax: Any) -> None:
-        """Plot time-averaged intensity with a current vector quiver arrow."""
+        """Plot time-averaged intensity with sub-cube current vectors."""
         import matplotlib.pyplot as plt
 
         cube = self._cube
@@ -362,24 +431,36 @@ class CubeCurrentDiag:
         )
         plt.colorbar(im, ax=ax, label="Intensity")
 
-        # Quiver arrow at cube center
-        cx = float(np.mean(cube.x_centers))
-        cy = float(np.mean(cube.y_centers))
-        ax.quiver(
-            cx,
-            cy,
-            est.ux,
-            est.uy,
-            color="red",
-            scale_units="xy",
-            angles="xy",
-            width=0.005,
-            zorder=5,
-        )
+        # Sub-cube current vectors (filtered by min_snr)
+        valid = [t for t in self._tile_estimates if t["snr"] >= self._min_snr]
+        if valid:
+            cx = np.array([t["center_x"] for t in valid])
+            cy = np.array([t["center_y"] for t in valid])
+            ux = np.array([t["ux"] for t in valid])
+            uy = np.array([t["uy"] for t in valid])
+            speed = np.array([t["speed"] for t in valid])
 
-        # Annotate with speed, direction, SNR
+            q = ax.quiver(
+                cx,
+                cy,
+                ux,
+                uy,
+                speed,
+                cmap="coolwarm",
+                scale_units="xy",
+                angles="xy",
+                width=0.004,
+                zorder=5,
+            )
+            plt.colorbar(q, ax=ax, label="Speed (m/s)")
+
+        n_valid = len(valid)
+        n_total = len(self._tile_estimates)
+
+        # Annotate with whole-cube summary
         ax.annotate(
-            f"speed={est.speed:.2f} m/s\ndir={est.direction:.1f}\u00b0\nSNR={est.snr:.2f}",
+            f"whole: {est.speed:.2f} m/s, {est.direction:.1f}\u00b0, SNR={est.snr:.2f}\n"
+            f"tiles: {n_valid}/{n_total} (SNR\u2265{self._min_snr:.1f})",
             xy=(0.02, 0.98),
             xycoords="axes fraction",
             verticalalignment="top",

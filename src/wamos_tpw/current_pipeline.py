@@ -928,6 +928,24 @@ def _add_cube_diag_arguments(parser) -> None:
         default=None,
         help="Max current speed to search in m/s (default: 3.0)",
     )
+    parser.add_argument(
+        "--sub-region-size",
+        type=float,
+        default=None,
+        help="Sub-region side length in meters for tiled extraction (default: 2000)",
+    )
+    parser.add_argument(
+        "--sub-region-overlap",
+        type=float,
+        default=None,
+        help="Overlap fraction between sub-regions (default: 0.0)",
+    )
+    parser.add_argument(
+        "--min-snr",
+        type=float,
+        default=None,
+        help="Minimum SNR to accept estimate (default: 1.5)",
+    )
 
     # Output options
     parser.add_argument(
@@ -990,9 +1008,9 @@ def add_cube_diag_subparser(subparsers) -> None:
     p = subparsers.add_parser(
         "cube-diag",
         help="Diagnostic 2x2 plot for whole-cube current extraction",
-        description="Run whole-cube (no tiling) current extraction on each analysis "
-        "block and produce a 2x2 diagnostic figure: time-averaged intensity with "
-        "current vector, kx-omega spectrum, ky-omega spectrum, and (Ux, Uy) search surface.",
+        description="Run current extraction on each analysis block and produce a 2x2 "
+        "diagnostic figure: time-averaged intensity with sub-cube current vectors, "
+        "kx-omega spectrum, ky-omega spectrum, and (Ux, Uy) search surface.",
     )
     _add_cube_diag_arguments(p)
     p.set_defaults(func=run_cube_diag)
@@ -1010,6 +1028,12 @@ def run_cube_diag(args) -> None:
         config["current.depth"] = args.depth
     if args.search_radius is not None:
         config["current.search_radius"] = args.search_radius
+    if args.sub_region_size is not None:
+        config["current.sub_region_size"] = args.sub_region_size
+    if args.sub_region_overlap is not None:
+        config["current.sub_region_overlap"] = args.sub_region_overlap
+    if args.min_snr is not None:
+        config["current.min_snr"] = args.min_snr
 
     filenames = Filenames(args.stime, args.etime, args.polar_path)
     files = list(filenames)
@@ -1070,10 +1094,11 @@ def run_cube_diag(args) -> None:
 
     from wamos_tpw.current_diagnostics import CubeCurrentDiag
 
-    n_diag_workers = min(len(cubes), args.workers or os.cpu_count() or 1)
+    n_workers = args.workers or os.cpu_count() or 1
+    n_cube_workers = min(len(cubes), n_workers)
     diags: list[CubeCurrentDiag | None] = [None] * len(cubes)
 
-    logger.info("Extracting whole-cube currents with %d threads", n_diag_workers)
+    logger.info("Extracting cube currents with %d threads", n_workers)
 
     pbar = tqdm(
         total=len(cubes),
@@ -1082,9 +1107,10 @@ def run_cube_diag(args) -> None:
         disable=not args.progress,
     )
 
-    with ThreadPoolExecutor(max_workers=n_diag_workers) as pool:
+    with ThreadPoolExecutor(max_workers=n_cube_workers) as pool:
         futures = {
-            pool.submit(CubeCurrentDiag, cube, config=config): i for i, cube in enumerate(cubes)
+            pool.submit(CubeCurrentDiag, cube, config=config, n_workers=n_workers): i
+            for i, cube in enumerate(cubes)
         }
         for future in as_completed(futures):
             i = futures[future]
