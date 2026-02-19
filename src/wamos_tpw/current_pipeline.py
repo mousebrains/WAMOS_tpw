@@ -35,7 +35,7 @@ import logging
 import os
 import time
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -166,7 +166,10 @@ class CurrentPipeline:
 
         return FrameCube.from_frame_dicts(frames, grid_params)
 
-    def iter_current_maps(self) -> Iterator[CurrentMap]:
+    def iter_current_maps(
+        self,
+        on_cube: Callable[[FrameCube], None] | None = None,
+    ) -> Iterator[CurrentMap]:
         """Yield CurrentMap objects as analysis blocks complete.
 
         Uses the same streaming architecture as :class:`FilesMergePipeline`
@@ -176,6 +179,12 @@ class CurrentPipeline:
         Backpressure: at most ``max_cubes_in_flight`` cube intensity arrays
         are held in shared memory simultaneously. Additional completed cubes
         queue in process memory until room opens.
+
+        Args:
+            on_cube: Optional callback receiving each :class:`FrameCube`.
+                When set, cubes are passed to the callback instead of being
+                submitted for tile extraction, and no :class:`CurrentMap`
+                objects are yielded.
         """
         from tqdm import tqdm
 
@@ -457,7 +466,9 @@ class CurrentPipeline:
 
                             cube = self._build_cube(frames)
                             if cube is not None:
-                                if cubes_in_flight < max_cubes_in_flight:
+                                if on_cube is not None:
+                                    on_cube(cube)
+                                elif cubes_in_flight < max_cubes_in_flight:
                                     _submit_cube_tiles(cube, window_idx)
                                 else:
                                     cubes_ready_to_submit.append((cube, window_idx))
@@ -879,6 +890,218 @@ def _show_current_viewer(current_maps: list[CurrentMap]) -> None:
         diag.plot(fig=fig)
 
     plt.show()
+
+
+# ============================================================
+# Cube-diag CLI Interface
+# ============================================================
+
+
+def _add_cube_diag_arguments(parser) -> None:
+    """Add command arguments for cube-diag subcommand."""
+    from wamos_tpw.filenames import add_common_arguments
+
+    add_common_arguments(parser)
+    parser.add_argument("--config", "-c", type=str, help="Config YAML filename")
+
+    parser.add_argument(
+        "--depth",
+        type=float,
+        default=None,
+        help="Water depth in meters (default: inf = deep water)",
+    )
+    parser.add_argument(
+        "--block-frames",
+        type=int,
+        default=_BLOCK_FRAMES_DEFAULT,
+        help=f"Frames per analysis block (default: {_BLOCK_FRAMES_DEFAULT})",
+    )
+    parser.add_argument(
+        "--block-overlap",
+        type=float,
+        default=_BLOCK_OVERLAP_DEFAULT,
+        help=f"Overlap between blocks (default: {_BLOCK_OVERLAP_DEFAULT})",
+    )
+    parser.add_argument(
+        "--search-radius",
+        type=float,
+        default=None,
+        help="Max current speed to search in m/s (default: 3.0)",
+    )
+
+    # Output options
+    parser.add_argument(
+        "--output-dir",
+        "-o",
+        type=str,
+        default=None,
+        help="Output directory for diagnostic PNGs",
+    )
+
+    # Processing options
+    parser.add_argument(
+        "--workers",
+        "-w",
+        type=int,
+        default=None,
+        help="Number of parallel workers (default: auto)",
+    )
+    parser.add_argument(
+        "--tolerance",
+        type=float,
+        default=1.2,
+        help="Time tolerance multiplier (default: 1.2)",
+    )
+    parser.add_argument("--timing", "-t", action="store_true", help="Show timing statistics")
+    parser.add_argument(
+        "--ship-data",
+        type=str,
+        default=None,
+        help="Directory with instrument NetCDF files for high-frequency interpolation",
+    )
+    parser.add_argument(
+        "--grid-spacing",
+        type=float,
+        default=None,
+        help="Grid cell size in meters for earth projection (default: auto)",
+    )
+
+    # Plot options (default to True for cube-diag)
+    plot_group = parser.add_mutually_exclusive_group()
+    plot_group.add_argument(
+        "--plot", dest="plot", action="store_true", default=True, help="Show diagnostic plots"
+    )
+    plot_group.add_argument(
+        "--no-plot", dest="plot", action="store_false", help="Suppress interactive plots"
+    )
+
+    # Progress bar options
+    progress_group = parser.add_mutually_exclusive_group()
+    progress_group.add_argument(
+        "--progress", dest="progress", action="store_true", default=True, help="Show progress bars"
+    )
+    progress_group.add_argument(
+        "--no-progress", dest="progress", action="store_false", help="Hide progress bars"
+    )
+
+
+def add_cube_diag_subparser(subparsers) -> None:
+    """Register the 'cube-diag' subcommand."""
+    p = subparsers.add_parser(
+        "cube-diag",
+        help="Diagnostic 2x2 plot for whole-cube current extraction",
+        description="Run whole-cube (no tiling) current extraction on each analysis "
+        "block and produce a 2x2 diagnostic figure: time-averaged intensity with "
+        "current vector, kx-omega spectrum, ky-omega spectrum, and (Ux, Uy) search surface.",
+    )
+    _add_cube_diag_arguments(p)
+    p.set_defaults(func=run_cube_diag)
+
+
+def run_cube_diag(args) -> None:
+    """Execute the 'cube-diag' command."""
+    from wamos_tpw.config import Config
+    from wamos_tpw.filenames import Filenames
+
+    config = Config(args.config) if args.config else Config()
+
+    # Apply CLI overrides to config
+    if args.depth is not None:
+        config["current.depth"] = args.depth
+    if args.search_radius is not None:
+        config["current.search_radius"] = args.search_radius
+
+    filenames = Filenames(args.stime, args.etime, args.polar_path)
+    files = list(filenames)
+
+    if not files:
+        logger.warning(
+            "No files found in %s for time range %s to %s",
+            args.polar_path,
+            args.stime,
+            args.etime,
+        )
+        return
+
+    logger.info("Found %d files", len(files))
+
+    if args.output_dir:
+        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+        logger.info("Output directory: %s", args.output_dir)
+
+    # Pre-build ship data cache
+    ship_data_dir = getattr(args, "ship_data", None)
+    if ship_data_dir:
+        from wamos_tpw.instruments.ship_data import ShipData
+
+        sd = ShipData(Path(ship_data_dir))
+        logger.info("Ship data: %s", sd)
+
+    pipeline = CurrentPipeline(
+        filenames=files,
+        config=config,
+        block_frames=args.block_frames,
+        block_overlap=args.block_overlap,
+        n_workers=args.workers,
+        tolerance=args.tolerance,
+        qTiming=args.timing,
+        qProgress=args.progress,
+        ship_data_dir=ship_data_dir,
+        grid_spacing=getattr(args, "grid_spacing", None),
+    )
+
+    logger.info("Created %d analysis blocks", pipeline.n_windows)
+
+    # Collect cubes via callback
+    cubes: list[FrameCube] = []
+    for _ in pipeline.iter_current_maps(on_cube=cubes.append):
+        pass  # generator runs to completion; cubes collected via callback
+
+    logger.info("Built %d cubes", len(cubes))
+
+    if not cubes:
+        logger.warning("No cubes were built — check time range and data availability")
+        return
+
+    # Run CubeCurrentDiag on each cube
+    from wamos_tpw.current_diagnostics import CubeCurrentDiag
+
+    for i, cube in enumerate(cubes):
+        diag = CubeCurrentDiag(cube, config=config)
+        est = diag.estimate
+        logger.info(
+            "Cube %d/%d: speed=%.2f m/s, dir=%.1f°, SNR=%.2f",
+            i + 1,
+            len(cubes),
+            est.speed,
+            est.direction,
+            est.snr,
+        )
+
+        if args.output_dir:
+            import matplotlib.pyplot as plt
+
+            fig = plt.figure(figsize=(14, 12))
+            fig.suptitle(f"Cube {i + 1}/{len(cubes)}")
+            diag.plot(fig=fig)
+            t_str = np.datetime_as_string(cube.timestamps[0], unit="s")
+            t_str = t_str.replace(":", "-").replace("T", "_")
+            filepath = Path(args.output_dir) / f"cube_diag_{t_str}.png"
+            fig.savefig(filepath, dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            logger.debug("Wrote cube diagnostic to %s", filepath)
+
+        if args.plot:
+            import matplotlib.pyplot as plt
+
+            fig = plt.figure(figsize=(14, 12))
+            fig.suptitle(f"Cube {i + 1}/{len(cubes)}")
+            diag.plot(fig=fig)
+
+    if args.plot:
+        import matplotlib.pyplot as plt
+
+        plt.show()
 
 
 from wamos_tpw.cli_utils import create_standalone_main  # noqa: E402
