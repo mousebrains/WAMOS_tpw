@@ -60,6 +60,7 @@ __all__ = [
     "CurrentExtractor",
     "CurrentMap",
     "FrameCube",
+    "compute_tile_specs",
     "dispersion_relation",
 ]
 
@@ -400,99 +401,55 @@ class CurrentMap:
         from wamos_tpw.config import NullConfig
 
         cfg = config or NullConfig()
-
-        sub_region_size = cfg.get("current.sub_region_size", _SUB_REGION_SIZE_DEFAULT)
-        sub_region_overlap = cfg.get("current.sub_region_overlap", _SUB_REGION_OVERLAP_DEFAULT)
-        min_snr = cfg.get("current.min_snr", _MIN_SNR_DEFAULT)
-        depth = cfg.get("current.depth", _DEPTH_DEFAULT)
-
-        # Compute tile positions
-        stride = sub_region_size * (1.0 - sub_region_overlap)
-        tile_size_pixels = int(round(sub_region_size / cube.grid_spacing))
-
-        # X tiles
-        x_range = cube.x_centers[-1] - cube.x_centers[0]
-        n_tiles_x = max(1, int((x_range - sub_region_size) / stride) + 1)
-        if x_range < sub_region_size:
-            n_tiles_x = 1
-
-        # Y tiles
-        y_range = cube.y_centers[-1] - cube.y_centers[0]
-        n_tiles_y = max(1, int((y_range - sub_region_size) / stride) + 1)
-        if y_range < sub_region_size:
-            n_tiles_y = 1
-
-        # Compute tile center positions
-        if n_tiles_x == 1:
-            tile_x_starts = [0]
-        else:
-            tile_x_starts = [int(round(i * stride / cube.grid_spacing)) for i in range(n_tiles_x)]
-        if n_tiles_y == 1:
-            tile_y_starts = [0]
-        else:
-            tile_y_starts = [int(round(i * stride / cube.grid_spacing)) for i in range(n_tiles_y)]
+        specs = compute_tile_specs(cube, cfg)
+        min_snr = specs["min_snr"]
 
         # Allocate output arrays
+        n_tiles_y = specs["n_tiles_y"]
+        n_tiles_x = specs["n_tiles_x"]
         ux_map = np.full((n_tiles_y, n_tiles_x), np.nan)
         uy_map = np.full((n_tiles_y, n_tiles_x), np.nan)
         speed_map = np.full((n_tiles_y, n_tiles_x), np.nan)
         dir_map = np.full((n_tiles_y, n_tiles_x), np.nan)
         snr_map = np.full((n_tiles_y, n_tiles_x), np.nan)
-        tile_x_centers = np.empty(n_tiles_x)
-        tile_y_centers = np.empty(n_tiles_y)
 
         estimates: list[CurrentEstimate] = []
 
-        for iy, y_start in enumerate(tile_y_starts):
-            y_end = min(y_start + tile_size_pixels, cube.n_y)
-            if y_end - y_start < tile_size_pixels // 2:
-                y_start = max(0, cube.n_y - tile_size_pixels)
-                y_end = cube.n_y
+        for tile in specs["tiles"]:
+            iy = tile["iy"]
+            ix = tile["ix"]
+            sub = cube.sub_cube(tile["x_start"], tile["x_end"], tile["y_start"], tile["y_end"])
 
-            cy = float(np.mean(cube.y_centers[y_start:y_end]))
-            tile_y_centers[iy] = cy
-
-            for ix, x_start in enumerate(tile_x_starts):
-                x_end = min(x_start + tile_size_pixels, cube.n_x)
-                if x_end - x_start < tile_size_pixels // 2:
-                    x_start = max(0, cube.n_x - tile_size_pixels)
-                    x_end = cube.n_x
-
-                cx = float(np.mean(cube.x_centers[x_start:x_end]))
-                tile_x_centers[ix] = cx
-
-                sub = cube.sub_cube(x_start, x_end, y_start, y_end)
-
-                try:
-                    extractor = CurrentExtractor(sub, config=cfg)
-                    est = extractor.estimate
-                except Exception:
-                    logger.debug(
-                        "Extraction failed for tile (%d, %d)",
-                        ix,
-                        iy,
-                        exc_info=True,
-                    )
-                    continue
-
-                est = CurrentEstimate(
-                    ux=est.ux,
-                    uy=est.uy,
-                    speed=est.speed,
-                    direction=est.direction,
-                    snr=est.snr,
-                    depth=est.depth,
-                    center_x=cx,
-                    center_y=cy,
+            try:
+                extractor = CurrentExtractor(sub, config=cfg)
+                est = extractor.estimate
+            except Exception:
+                logger.debug(
+                    "Extraction failed for tile (%d, %d)",
+                    ix,
+                    iy,
+                    exc_info=True,
                 )
-                estimates.append(est)
+                continue
 
-                snr_map[iy, ix] = est.snr
-                if est.snr >= min_snr:
-                    ux_map[iy, ix] = est.ux
-                    uy_map[iy, ix] = est.uy
-                    speed_map[iy, ix] = est.speed
-                    dir_map[iy, ix] = est.direction
+            est = CurrentEstimate(
+                ux=est.ux,
+                uy=est.uy,
+                speed=est.speed,
+                direction=est.direction,
+                snr=est.snr,
+                depth=est.depth,
+                center_x=tile["center_x"],
+                center_y=tile["center_y"],
+            )
+            estimates.append(est)
+
+            snr_map[iy, ix] = est.snr
+            if est.snr >= min_snr:
+                ux_map[iy, ix] = est.ux
+                uy_map[iy, ix] = est.uy
+                speed_map[iy, ix] = est.speed
+                dir_map[iy, ix] = est.direction
 
         return cls(
             ux=ux_map,
@@ -500,15 +457,193 @@ class CurrentMap:
             speed=speed_map,
             direction=dir_map,
             snr=snr_map,
-            tile_x_centers=tile_x_centers,
-            tile_y_centers=tile_y_centers,
-            depth=depth,
+            tile_x_centers=specs["tile_x_centers"],
+            tile_y_centers=specs["tile_y_centers"],
+            depth=specs["depth"],
             center_lat=cube.center_lat,
             center_lon=cube.center_lon,
             start_time=cube.timestamps[0],
             end_time=cube.timestamps[-1],
             estimates=estimates,
         )
+
+    @classmethod
+    def from_tile_results(
+        cls,
+        tile_specs: dict,
+        tile_results: list[dict],
+        cube_metadata: dict,
+    ) -> CurrentMap:
+        """Assemble a CurrentMap from parallel tile extraction results.
+
+        Args:
+            tile_specs: Tile geometry from :func:`compute_tile_specs`.
+            tile_results: List of result dicts from parallel tile workers.
+                Each dict has keys: ix, iy, ux, uy, speed, direction, snr,
+                depth, center_x, center_y. May have ``error`` key for failures.
+            cube_metadata: Dict with ``center_lat``, ``center_lon``,
+                ``start_time``, ``end_time``.
+
+        Returns:
+            CurrentMap with current vectors at each tile center.
+        """
+        n_tiles_y = tile_specs["n_tiles_y"]
+        n_tiles_x = tile_specs["n_tiles_x"]
+        min_snr = tile_specs["min_snr"]
+
+        ux_map = np.full((n_tiles_y, n_tiles_x), np.nan)
+        uy_map = np.full((n_tiles_y, n_tiles_x), np.nan)
+        speed_map = np.full((n_tiles_y, n_tiles_x), np.nan)
+        dir_map = np.full((n_tiles_y, n_tiles_x), np.nan)
+        snr_map = np.full((n_tiles_y, n_tiles_x), np.nan)
+
+        estimates: list[CurrentEstimate] = []
+
+        for result in tile_results:
+            if result.get("error"):
+                continue
+
+            iy = result["iy"]
+            ix = result["ix"]
+            est = CurrentEstimate(
+                ux=result["ux"],
+                uy=result["uy"],
+                speed=result["speed"],
+                direction=result["direction"],
+                snr=result["snr"],
+                depth=result["depth"],
+                center_x=result["center_x"],
+                center_y=result["center_y"],
+            )
+            estimates.append(est)
+
+            snr_map[iy, ix] = est.snr
+            if est.snr >= min_snr:
+                ux_map[iy, ix] = est.ux
+                uy_map[iy, ix] = est.uy
+                speed_map[iy, ix] = est.speed
+                dir_map[iy, ix] = est.direction
+
+        return cls(
+            ux=ux_map,
+            uy=uy_map,
+            speed=speed_map,
+            direction=dir_map,
+            snr=snr_map,
+            tile_x_centers=tile_specs["tile_x_centers"],
+            tile_y_centers=tile_specs["tile_y_centers"],
+            depth=tile_specs["depth"],
+            center_lat=cube_metadata["center_lat"],
+            center_lon=cube_metadata["center_lon"],
+            start_time=cube_metadata["start_time"],
+            end_time=cube_metadata["end_time"],
+            estimates=estimates,
+        )
+
+
+# ============================================================
+# Tile Geometry
+# ============================================================
+
+
+def compute_tile_specs(cube: FrameCube, config: Config | None = None) -> dict:
+    """Compute tile geometry for spatial current extraction.
+
+    Divides the cube's spatial domain into overlapping sub-regions
+    suitable for independent current extraction.
+
+    Args:
+        cube: 3D space-time cube of radar intensity.
+        config: Configuration object for extraction parameters.
+
+    Returns:
+        Dict with keys:
+        - ``n_tiles_x``, ``n_tiles_y``: Number of tiles in each direction.
+        - ``tiles``: List of tile dicts with ``ix``, ``iy``, ``x_start``,
+          ``x_end``, ``y_start``, ``y_end``, ``center_x``, ``center_y``.
+        - ``tile_x_centers``, ``tile_y_centers``: 1D arrays of tile center
+          positions (meters).
+        - ``min_snr``: Minimum SNR threshold.
+        - ``depth``: Water depth (meters).
+    """
+    from wamos_tpw.config import NullConfig
+
+    cfg = config or NullConfig()
+
+    sub_region_size = cfg.get("current.sub_region_size", _SUB_REGION_SIZE_DEFAULT)
+    sub_region_overlap = cfg.get("current.sub_region_overlap", _SUB_REGION_OVERLAP_DEFAULT)
+    min_snr = cfg.get("current.min_snr", _MIN_SNR_DEFAULT)
+    depth = cfg.get("current.depth", _DEPTH_DEFAULT)
+
+    stride = sub_region_size * (1.0 - sub_region_overlap)
+    tile_size_pixels = int(round(sub_region_size / cube.grid_spacing))
+
+    # X tiles
+    x_range = cube.x_centers[-1] - cube.x_centers[0]
+    n_tiles_x = max(1, int((x_range - sub_region_size) / stride) + 1)
+    if x_range < sub_region_size:
+        n_tiles_x = 1
+
+    # Y tiles
+    y_range = cube.y_centers[-1] - cube.y_centers[0]
+    n_tiles_y = max(1, int((y_range - sub_region_size) / stride) + 1)
+    if y_range < sub_region_size:
+        n_tiles_y = 1
+
+    # Compute tile start positions
+    if n_tiles_x == 1:
+        tile_x_starts = [0]
+    else:
+        tile_x_starts = [int(round(i * stride / cube.grid_spacing)) for i in range(n_tiles_x)]
+    if n_tiles_y == 1:
+        tile_y_starts = [0]
+    else:
+        tile_y_starts = [int(round(i * stride / cube.grid_spacing)) for i in range(n_tiles_y)]
+
+    tile_x_centers = np.empty(n_tiles_x)
+    tile_y_centers = np.empty(n_tiles_y)
+    tiles: list[dict] = []
+
+    for iy, y_start in enumerate(tile_y_starts):
+        y_end = min(y_start + tile_size_pixels, cube.n_y)
+        if y_end - y_start < tile_size_pixels // 2:
+            y_start = max(0, cube.n_y - tile_size_pixels)
+            y_end = cube.n_y
+
+        cy = float(np.mean(cube.y_centers[y_start:y_end]))
+        tile_y_centers[iy] = cy
+
+        for ix, x_start in enumerate(tile_x_starts):
+            x_end = min(x_start + tile_size_pixels, cube.n_x)
+            if x_end - x_start < tile_size_pixels // 2:
+                x_start = max(0, cube.n_x - tile_size_pixels)
+                x_end = cube.n_x
+
+            cx = float(np.mean(cube.x_centers[x_start:x_end]))
+            tile_x_centers[ix] = cx
+
+            tiles.append(
+                {
+                    "ix": ix,
+                    "iy": iy,
+                    "x_start": x_start,
+                    "x_end": x_end,
+                    "y_start": y_start,
+                    "y_end": y_end,
+                    "center_x": cx,
+                    "center_y": cy,
+                }
+            )
+
+    return {
+        "n_tiles_x": n_tiles_x,
+        "n_tiles_y": n_tiles_y,
+        "tiles": tiles,
+        "tile_x_centers": tile_x_centers,
+        "tile_y_centers": tile_y_centers,
+        "min_snr": min_snr,
+        "depth": depth,
+    }
 
 
 # ============================================================

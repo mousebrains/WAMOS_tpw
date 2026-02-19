@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from wamos_tpw.current import CurrentMap, FrameCube
+from wamos_tpw.current import CurrentMap, FrameCube, compute_tile_specs
 from wamos_tpw.grid import compute_common_grid_from_stats
 from wamos_tpw.merged_image import TimeWindowConfig
 from wamos_tpw.window import create_time_windows
@@ -170,16 +170,23 @@ class CurrentPipeline:
         """Yield CurrentMap objects as analysis blocks complete.
 
         Uses the same streaming architecture as :class:`FilesMergePipeline`
-        but instead of merging frames, builds FrameCubes and extracts currents.
+        but instead of merging frames, builds FrameCubes and submits tile
+        extractions as HIGHEST-priority tasks for parallel processing.
+
+        Backpressure: at most ``max_cubes_in_flight`` cube intensity arrays
+        are held in shared memory simultaneously. Additional completed cubes
+        queue in process memory until room opens.
         """
         from tqdm import tqdm
 
+        from wamos_tpw.current_tasks import CURRENT_TASK_HANDLERS
         from wamos_tpw.interpolator_tasks import TASK_HANDLERS
         from wamos_tpw.priority_executor import (
             Priority,
             PriorityProcessExecutor,
             SharedMemoryManager,
             TripletCollector,
+            create_shared_array,
         )
 
         if not self._windows:
@@ -207,9 +214,12 @@ class CurrentPipeline:
 
         config_dict = self._config._config if self._config else None
 
+        # Merge handler dicts so workers can handle all task types
+        all_handlers = {**TASK_HANDLERS, **CURRENT_TASK_HANDLERS}
+
         executor = PriorityProcessExecutor(
             max_workers=self._n_workers,
-            task_handlers=TASK_HANDLERS,
+            task_handlers=all_handlers,
         )
         executor.start()
         shm_manager = SharedMemoryManager()
@@ -230,6 +240,77 @@ class CurrentPipeline:
         file_shm_names: dict[int, list[str]] = defaultdict(list)
 
         triplet_collector = TripletCollector(total_files=len(self._files))
+
+        # Tile extraction state
+        pending_tiles: dict[int, int] = {}  # cube_id -> tiles remaining
+        cube_tile_specs: dict[int, dict] = {}  # cube_id -> tile_specs
+        cube_tile_results: dict[int, list[dict]] = {}  # cube_id -> collected results
+        cube_shm_names: dict[int, str] = {}  # cube_id -> SHM name
+        cube_metadata: dict[int, dict] = {}  # cube_id -> metadata
+        cubes_in_flight = 0
+        cubes_ready_to_submit: list[tuple[FrameCube, int]] = []  # (cube, window_idx)
+        max_cubes_in_flight = 2
+        pending_tiles_count = 0  # total tile tasks outstanding
+        next_cube_id = 0
+
+        def _submit_cube_tiles(cube: FrameCube, window_idx: int) -> None:
+            """Put cube intensity into shared memory and submit tile tasks."""
+            nonlocal cubes_in_flight, pending_tiles_count, next_cube_id
+
+            cube_id = next_cube_id
+            next_cube_id += 1
+
+            # Shared memory for cube intensity
+            shm_name, shm_shape, shm_dtype = create_shared_array(cube.intensity)
+            shm_manager.register(shm_name, refcount=1)
+            cube_shm_names[cube_id] = shm_name
+
+            specs = compute_tile_specs(cube, self._config)
+            cube_tile_specs[cube_id] = specs
+            cube_tile_results[cube_id] = []
+
+            start_time, end_time = window_time_ranges[window_idx]
+            cube_metadata[cube_id] = {
+                "center_lat": cube.center_lat,
+                "center_lon": cube.center_lon,
+                "start_time": cube.timestamps[0],
+                "end_time": cube.timestamps[-1],
+            }
+
+            n_tiles = len(specs["tiles"])
+            pending_tiles[cube_id] = n_tiles
+            pending_tiles_count += n_tiles
+
+            for tile in specs["tiles"]:
+                task_data = (
+                    shm_name,
+                    shm_shape,
+                    shm_dtype,
+                    tile["x_start"],
+                    tile["x_end"],
+                    tile["y_start"],
+                    tile["y_end"],
+                    tile["ix"],
+                    tile["iy"],
+                    cube_id,
+                    cube.dt,
+                    cube.grid_spacing,
+                    cube.x_centers,
+                    cube.y_centers,
+                    cube.center_lat,
+                    cube.center_lon,
+                    config_dict,
+                )
+                executor.submit(Priority.HIGHEST, "extract_tile", task_data)
+
+            cubes_in_flight += 1
+            logger.debug(
+                "Submitted %d tile tasks for cube %d (window %d), cubes_in_flight=%d",
+                n_tiles,
+                cube_id,
+                window_idx,
+                cubes_in_flight,
+            )
 
         def submit_batch(n: int) -> int:
             nonlocal files_submitted, pending_files
@@ -267,7 +348,13 @@ class CurrentPipeline:
 
         submit_batch(max_pending)
 
-        while pending_files > 0 or pending_interp > 0 or files_submitted < total_files:
+        while (
+            pending_files > 0
+            or pending_interp > 0
+            or pending_tiles_count > 0
+            or cubes_ready_to_submit
+            or files_submitted < total_files
+        ):
             result = executor.get_result(timeout=0.1)
             if result is None:
                 if files_submitted < total_files and pending_files < max_pending:
@@ -279,6 +366,21 @@ class CurrentPipeline:
                 if result.task_type == "process_file":
                     pending_files -= 1
                     pbar_files.update(1)
+                elif result.task_type == "extract_tile":
+                    pending_tiles_count -= 1
+                    # Still need to track tile completion for cube assembly
+                    data = result.data
+                    if data is not None and "cube_id" in data:
+                        cube_id = data["cube_id"]
+                        if cube_id in pending_tiles:
+                            pending_tiles[cube_id] -= 1
+                            cube_tile_results.setdefault(cube_id, []).append(
+                                {
+                                    "error": result.error,
+                                    "ix": data.get("ix", 0),
+                                    "iy": data.get("iy", 0),
+                                }
+                            )
                 else:
                     pending_interp -= 1
                     pbar_interp.update(1)
@@ -355,15 +457,10 @@ class CurrentPipeline:
 
                             cube = self._build_cube(frames)
                             if cube is not None:
-                                try:
-                                    current_map = CurrentMap.from_cube(cube, self._config)
-                                    self._n_processed += 1
-                                    pbar_current.update(1)
-                                    yield current_map
-                                except Exception:
-                                    logger.exception(
-                                        "Current extraction failed for window %d", window_idx
-                                    )
+                                if cubes_in_flight < max_cubes_in_flight:
+                                    _submit_cube_tiles(cube, window_idx)
+                                else:
+                                    cubes_ready_to_submit.append((cube, window_idx))
 
                 for prev, current, next_frame in triplet_collector.ready_triplets():
                     task_data = (
@@ -378,6 +475,39 @@ class CurrentPipeline:
                     )
                     executor.submit(Priority.MEDIUM, "interpolate", task_data)
                     pending_interp += 1
+
+            elif result.task_type == "extract_tile":
+                pending_tiles_count -= 1
+                data = result.data
+                cube_id = data["cube_id"]
+
+                pending_tiles[cube_id] -= 1
+                cube_tile_results[cube_id].append(data)
+
+                if pending_tiles[cube_id] == 0:
+                    # All tiles for this cube are done — assemble CurrentMap
+                    specs = cube_tile_specs.pop(cube_id)
+                    results = cube_tile_results.pop(cube_id)
+                    meta = cube_metadata.pop(cube_id)
+                    del pending_tiles[cube_id]
+
+                    # Release cube shared memory
+                    shm_name = cube_shm_names.pop(cube_id)
+                    shm_manager.release(shm_name)
+                    cubes_in_flight -= 1
+
+                    try:
+                        current_map = CurrentMap.from_tile_results(specs, results, meta)
+                        self._n_processed += 1
+                        pbar_current.update(1)
+                        yield current_map
+                    except Exception:
+                        logger.exception("Failed to assemble CurrentMap for cube %d", cube_id)
+
+                    # Submit next queued cube if room
+                    if cubes_ready_to_submit and cubes_in_flight < max_cubes_in_flight:
+                        next_cube, next_window_idx = cubes_ready_to_submit.pop(0)
+                        _submit_cube_tiles(next_cube, next_window_idx)
 
         pbar_files.close()
         pbar_interp.close()

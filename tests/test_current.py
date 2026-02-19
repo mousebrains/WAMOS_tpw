@@ -16,6 +16,7 @@ from wamos_tpw.current import (
     CurrentExtractor,
     CurrentMap,
     FrameCube,
+    compute_tile_specs,
     dispersion_relation,
 )
 
@@ -538,3 +539,225 @@ class TestCurrentEstimate:
         assert est.uy == -0.3
         assert est.speed == pytest.approx(0.583)
         assert est.depth == np.inf
+
+
+# ============================================================
+# Test compute_tile_specs
+# ============================================================
+
+
+class TestComputeTileSpecs:
+    """Tests for the compute_tile_specs function."""
+
+    def test_single_tile(self):
+        """Large sub_region_size should produce exactly one tile."""
+        cube = make_synthetic_cube(n_t=8, n_xy=64, dx=7.5, dt=1.0)
+
+        from wamos_tpw.config import Config
+
+        config = Config()
+        config["current.sub_region_size"] = 5000.0
+
+        specs = compute_tile_specs(cube, config)
+
+        assert specs["n_tiles_x"] == 1
+        assert specs["n_tiles_y"] == 1
+        assert len(specs["tiles"]) == 1
+        assert len(specs["tile_x_centers"]) == 1
+        assert len(specs["tile_y_centers"]) == 1
+
+    def test_multiple_tiles(self):
+        """Small sub_region_size should produce multiple tiles."""
+        cube = make_synthetic_cube(n_t=8, n_xy=128, dx=7.5, dt=1.0)
+
+        from wamos_tpw.config import Config
+
+        config = Config()
+        config["current.sub_region_size"] = 400.0
+        config["current.sub_region_overlap"] = 0.0
+
+        specs = compute_tile_specs(cube, config)
+
+        assert specs["n_tiles_x"] >= 2
+        assert specs["n_tiles_y"] >= 2
+        assert len(specs["tiles"]) == specs["n_tiles_x"] * specs["n_tiles_y"]
+
+    def test_tile_geometry_matches_from_cube(self):
+        """Tile specs should produce same geometry as from_cube uses internally."""
+        cube = make_synthetic_cube(n_t=8, n_xy=64, dx=7.5, dt=1.0)
+
+        from wamos_tpw.config import Config
+
+        config = Config()
+        config["current.sub_region_size"] = 200.0
+        config["current.sub_region_overlap"] = 0.5
+        config["current.min_snr"] = 0.0
+
+        specs = compute_tile_specs(cube, config)
+        current_map = CurrentMap.from_cube(cube, config=config)
+
+        assert specs["n_tiles_x"] == current_map.n_tiles_x
+        assert specs["n_tiles_y"] == current_map.n_tiles_y
+        np.testing.assert_array_equal(specs["tile_x_centers"], current_map.tile_x_centers)
+        np.testing.assert_array_equal(specs["tile_y_centers"], current_map.tile_y_centers)
+
+    def test_tile_fields(self):
+        """Each tile dict should have required fields."""
+        cube = make_synthetic_cube(n_t=8, n_xy=64, dx=7.5, dt=1.0)
+        specs = compute_tile_specs(cube)
+
+        for tile in specs["tiles"]:
+            assert "ix" in tile
+            assert "iy" in tile
+            assert "x_start" in tile
+            assert "x_end" in tile
+            assert "y_start" in tile
+            assert "y_end" in tile
+            assert "center_x" in tile
+            assert "center_y" in tile
+            assert tile["x_end"] > tile["x_start"]
+            assert tile["y_end"] > tile["y_start"]
+
+
+# ============================================================
+# Test CurrentMap.from_tile_results
+# ============================================================
+
+
+class TestFromTileResults:
+    """Tests for CurrentMap.from_tile_results assembly."""
+
+    def test_matches_serial(self):
+        """from_tile_results should produce same output as serial from_cube."""
+        cube = make_synthetic_cube(
+            ux=0.3,
+            uy=-0.2,
+            n_t=32,
+            n_xy=64,
+            dx=7.5,
+            dt=1.5,
+            noise_level=0.1,
+        )
+
+        from wamos_tpw.config import Config
+
+        config = Config()
+        config["current.sub_region_size"] = 5000.0
+        config["current.min_snr"] = 0.0
+
+        # Serial extraction
+        serial_map = CurrentMap.from_cube(cube, config=config)
+
+        # Manual tile extraction to simulate parallel results
+        specs = compute_tile_specs(cube, config)
+        tile_results = []
+        for tile in specs["tiles"]:
+            sub = cube.sub_cube(tile["x_start"], tile["x_end"], tile["y_start"], tile["y_end"])
+            extractor = CurrentExtractor(sub, config=config)
+            est = extractor.estimate
+            tile_results.append(
+                {
+                    "ix": tile["ix"],
+                    "iy": tile["iy"],
+                    "ux": est.ux,
+                    "uy": est.uy,
+                    "speed": est.speed,
+                    "direction": est.direction,
+                    "snr": est.snr,
+                    "depth": est.depth,
+                    "center_x": est.center_x,
+                    "center_y": est.center_y,
+                }
+            )
+
+        meta = {
+            "center_lat": cube.center_lat,
+            "center_lon": cube.center_lon,
+            "start_time": cube.timestamps[0],
+            "end_time": cube.timestamps[-1],
+        }
+        assembled = CurrentMap.from_tile_results(specs, tile_results, meta)
+
+        np.testing.assert_array_equal(assembled.ux, serial_map.ux)
+        np.testing.assert_array_equal(assembled.uy, serial_map.uy)
+        np.testing.assert_array_equal(assembled.snr, serial_map.snr)
+        assert assembled.center_lat == serial_map.center_lat
+        assert assembled.center_lon == serial_map.center_lon
+
+    def test_error_tiles_become_nan(self):
+        """Tiles with error key should produce NaN in output."""
+        cube = make_synthetic_cube(n_t=8, n_xy=32, dx=7.5, dt=1.0)
+        specs = compute_tile_specs(cube)
+
+        # Simulate all tiles failing
+        tile_results = [
+            {"error": "test error", "ix": t["ix"], "iy": t["iy"]} for t in specs["tiles"]
+        ]
+        meta = {
+            "center_lat": 32.0,
+            "center_lon": -117.0,
+            "start_time": np.datetime64("2022-01-01"),
+            "end_time": np.datetime64("2022-01-01T00:00:10"),
+        }
+
+        cm = CurrentMap.from_tile_results(specs, tile_results, meta)
+
+        assert np.all(np.isnan(cm.ux))
+        assert np.all(np.isnan(cm.snr))
+        assert len(cm.estimates) == 0
+
+    def test_multi_tile_assembly(self):
+        """Assembly with multiple tiles and SNR filtering."""
+        cube = make_synthetic_cube(
+            ux=0.5,
+            uy=-0.3,
+            n_t=32,
+            n_xy=128,
+            dx=7.5,
+            dt=1.5,
+            noise_level=0.1,
+        )
+
+        from wamos_tpw.config import Config
+
+        config = Config()
+        config["current.sub_region_size"] = 400.0
+        config["current.sub_region_overlap"] = 0.0
+        config["current.min_snr"] = 0.0
+
+        serial_map = CurrentMap.from_cube(cube, config=config)
+
+        specs = compute_tile_specs(cube, config)
+        tile_results = []
+        for tile in specs["tiles"]:
+            sub = cube.sub_cube(tile["x_start"], tile["x_end"], tile["y_start"], tile["y_end"])
+            try:
+                extractor = CurrentExtractor(sub, config=config)
+                est = extractor.estimate
+                tile_results.append(
+                    {
+                        "ix": tile["ix"],
+                        "iy": tile["iy"],
+                        "ux": est.ux,
+                        "uy": est.uy,
+                        "speed": est.speed,
+                        "direction": est.direction,
+                        "snr": est.snr,
+                        "depth": est.depth,
+                        "center_x": est.center_x,
+                        "center_y": est.center_y,
+                    }
+                )
+            except Exception:
+                tile_results.append({"error": "failed", "ix": tile["ix"], "iy": tile["iy"]})
+
+        meta = {
+            "center_lat": cube.center_lat,
+            "center_lon": cube.center_lon,
+            "start_time": cube.timestamps[0],
+            "end_time": cube.timestamps[-1],
+        }
+        assembled = CurrentMap.from_tile_results(specs, tile_results, meta)
+
+        np.testing.assert_array_equal(assembled.ux, serial_map.ux)
+        np.testing.assert_array_equal(assembled.snr, serial_map.snr)
