@@ -1063,20 +1063,54 @@ def run_cube_diag(args) -> None:
         logger.warning("No cubes were built — check time range and data availability")
         return
 
-    # Run CubeCurrentDiag on each cube
+    # Parallel whole-cube current extraction (GIL released during numpy/scipy)
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from tqdm import tqdm
+
     from wamos_tpw.current_diagnostics import CubeCurrentDiag
 
-    for i, cube in enumerate(cubes):
-        diag = CubeCurrentDiag(cube, config=config)
-        est = diag.estimate
-        logger.info(
-            "Cube %d/%d: speed=%.2f m/s, dir=%.1f°, SNR=%.2f",
-            i + 1,
-            len(cubes),
-            est.speed,
-            est.direction,
-            est.snr,
-        )
+    n_diag_workers = min(len(cubes), args.workers or os.cpu_count() or 1)
+    diags: list[CubeCurrentDiag | None] = [None] * len(cubes)
+
+    logger.info("Extracting whole-cube currents with %d threads", n_diag_workers)
+
+    pbar = tqdm(
+        total=len(cubes),
+        desc="Cube diagnostics",
+        unit="cube",
+        disable=not args.progress,
+    )
+
+    with ThreadPoolExecutor(max_workers=n_diag_workers) as pool:
+        futures = {
+            pool.submit(CubeCurrentDiag, cube, config=config): i for i, cube in enumerate(cubes)
+        }
+        for future in as_completed(futures):
+            i = futures[future]
+            try:
+                diags[i] = future.result()
+            except Exception:
+                logger.exception("Failed to extract current for cube %d", i)
+                pbar.update(1)
+                continue
+            est = diags[i].estimate
+            logger.info(
+                "Cube %d/%d: speed=%.2f m/s, dir=%.1f°, SNR=%.2f",
+                i + 1,
+                len(cubes),
+                est.speed,
+                est.direction,
+                est.snr,
+            )
+            pbar.update(1)
+
+    pbar.close()
+
+    # Sequential plotting (matplotlib is not thread-safe)
+    for i, diag in enumerate(diags):
+        if diag is None:
+            continue
 
         if args.output_dir:
             import matplotlib.pyplot as plt
@@ -1084,7 +1118,7 @@ def run_cube_diag(args) -> None:
             fig = plt.figure(figsize=(14, 12))
             fig.suptitle(f"Cube {i + 1}/{len(cubes)}")
             diag.plot(fig=fig)
-            t_str = np.datetime_as_string(cube.timestamps[0], unit="s")
+            t_str = np.datetime_as_string(cubes[i].timestamps[0], unit="s")
             t_str = t_str.replace(":", "-").replace("T", "_")
             filepath = Path(args.output_dir) / f"cube_diag_{t_str}.png"
             fig.savefig(filepath, dpi=150, bbox_inches="tight")
