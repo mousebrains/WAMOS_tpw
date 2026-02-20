@@ -721,6 +721,7 @@ class CurrentExtractor:
         # Run the extraction pipeline
         prepared = self._prepare_cube()
         self.power_spectrum, self.kx, self.ky, self.omega = self._compute_3d_fft(prepared)
+        self._cache_spectral_geometry()
         coarse_ux, coarse_uy, self._search_surface = self._grid_search()
 
         if self._do_refine:
@@ -776,13 +777,10 @@ class CurrentExtractor:
         win_t = signal.windows.get_window(self._window_name, n_t, fftbins=False)
         win_y = signal.windows.get_window(self._window_name, n_y, fftbins=False)
         win_x = signal.windows.get_window(self._window_name, n_x, fftbins=False)
-        # 3D separable window via outer products
-        window_3d = (
-            win_t[:, np.newaxis, np.newaxis]
-            * win_y[np.newaxis, :, np.newaxis]
-            * win_x[np.newaxis, np.newaxis, :]
-        )
-        data *= window_3d
+        # Apply separable window in-place (avoids full 3D temporary)
+        data *= win_t[:, np.newaxis, np.newaxis]
+        data *= win_y[np.newaxis, :, np.newaxis]
+        data *= win_x[np.newaxis, np.newaxis, :]
 
         return data
 
@@ -810,7 +808,7 @@ class CurrentExtractor:
         dx = self._cube.grid_spacing
 
         # Full 3D FFT: output shape (n_t, n_y, n_x)
-        spectrum = scipy_fft.fftn(data)
+        spectrum = scipy_fft.fftn(data, workers=-1)
         power = np.abs(spectrum) ** 2
 
         # Frequency axes (full, including negative)
@@ -820,17 +818,43 @@ class CurrentExtractor:
 
         return power, kx, ky, omega
 
+    def _cache_spectral_geometry(self) -> None:
+        """Pre-compute spectral geometry arrays reused across shell energy evaluations.
+
+        Caches wavenumber grids, dispersion relation values, and valid-bin
+        indices so that ``_shell_energy`` and ``_grid_search`` avoid
+        recomputing meshgrid, sqrt, and dispersion_relation on every call.
+        """
+        kx_2d, ky_2d = np.meshgrid(self.kx, self.ky)  # (n_ky, n_kx)
+        k_mag = np.sqrt(kx_2d**2 + ky_2d**2)
+
+        sub_region_size = max(
+            self._cube.x_centers[-1] - self._cube.x_centers[0],
+            self._cube.y_centers[-1] - self._cube.y_centers[0],
+        )
+        k_min = self._k_min_factor * 2.0 * np.pi / sub_region_size if sub_region_size > 0 else 0.0
+        valid = k_mag > k_min
+
+        n_t = self.power_spectrum.shape[0]
+        d_omega = 2.0 * np.pi / (n_t * self._cube.dt)
+        omega_nyq = np.pi / self._cube.dt
+
+        # Extract valid-bin indices and pre-compute per-bin constants
+        iy_v, ix_v = np.where(valid)
+        self._se_kx: np.ndarray = kx_2d[iy_v, ix_v]  # (n_valid,)
+        self._se_ky: np.ndarray = ky_2d[iy_v, ix_v]  # (n_valid,)
+        self._se_om0: np.ndarray = dispersion_relation(k_mag[iy_v, ix_v], self._depth)  # (n_valid,)
+        self._se_iy: np.ndarray = iy_v
+        self._se_ix: np.ndarray = ix_v
+        self._se_d_omega: float = d_omega
+        self._se_omega_nyq: float = omega_nyq
+        self._se_n_t: int = n_t
+
     def _shell_energy(self, ux: float, uy: float) -> tuple[float, int]:
         """Compute total energy on the Doppler-shifted dispersion shell.
 
-        For each (kx, ky) bin, the expected observed frequency is:
-
-        .. math::
-
-            \\omega = \\pm \\omega_0(|k|, d) + k_x U_x + k_y U_y
-
-        Energy is summed from the nearest omega bin for all valid
-        wavenumber bins on both dispersion branches.
+        Uses cached spectral geometry from ``_cache_spectral_geometry``
+        to avoid redundant meshgrid / dispersion_relation computation.
 
         Args:
             ux: Eastward current candidate (m/s).
@@ -839,84 +863,40 @@ class CurrentExtractor:
         Returns:
             Tuple of (total shell energy, number of shell bins sampled).
         """
-        P = self.power_spectrum  # (n_t, n_y, n_x)
-        kx = self.kx
-        ky = self.ky
-        depth = self._depth
+        doppler = self._se_kx * ux + self._se_ky * uy  # (n_valid,)
 
-        n_t, n_ky, n_kx = P.shape
-
-        # Minimum wavenumber to avoid low-frequency contamination
-        sub_region_size = max(
-            self._cube.x_centers[-1] - self._cube.x_centers[0],
-            self._cube.y_centers[-1] - self._cube.y_centers[0],
-        )
-        k_min = self._k_min_factor * 2.0 * np.pi / sub_region_size if sub_region_size > 0 else 0.0
-
-        # Vectorized computation over all (ky, kx) pairs
-        kx_2d, ky_2d = np.meshgrid(kx, ky)  # (n_ky, n_kx)
-        k_mag = np.sqrt(kx_2d**2 + ky_2d**2)
-
-        # Mask: skip DC and low wavenumbers
-        valid = k_mag > k_min
-
-        # Intrinsic frequency
-        omega_0 = dispersion_relation(k_mag, depth)
-
-        # Dispersion shell in the full 3D FFT.
-        #
-        # A physical wave cos(kx*x + ky*y - omega_obs*t) produces DFT peaks at:
-        #   (omega_fft = -omega_obs, ky_fft = +ky, kx_fft = +kx)
-        # and its conjugate. The Doppler-shifted observed frequency is:
-        #   omega_obs = omega_0(|k|) + kx*Ux + ky*Uy
-        #
-        # So the DFT peak in the omega axis is at:
-        #   omega_fft = -(omega_0(|k|) + kx_fft*Ux + ky_fft*Uy)
-        #
-        # For the negative dispersion branch (backward-propagating waves):
-        #   omega_fft = -(-omega_0(|k|) + kx_fft*Ux + ky_fft*Uy)
-        #             =   omega_0(|k|) - kx_fft*Ux - ky_fft*Uy
-        doppler = kx_2d * ux + ky_2d * uy
-        omega_pred_pos = -(omega_0 + doppler)  # positive dispersion branch
-        omega_pred_neg = omega_0 - doppler  # negative dispersion branch
-
-        d_omega = 2.0 * np.pi / (n_t * self._cube.dt)
-        omega_nyquist = np.pi / self._cube.dt
+        P = self.power_spectrum
+        n_t = self._se_n_t
+        d_omega = self._se_d_omega
+        omega_nyq = self._se_omega_nyq
+        iy_v, ix_v = self._se_iy, self._se_ix
 
         energy = 0.0
-        n_shell_bins = 0
+        n_shell = 0
 
-        for omega_pred in [omega_pred_pos, omega_pred_neg]:
-            # Linearly interpolate between the two nearest FFT bins
-            # for sub-bin precision.
-            frac_idx = omega_pred / d_omega
-            idx_lo = np.floor(frac_idx).astype(int)
-            weight_hi = frac_idx - idx_lo  # fractional part
-            weight_lo = 1.0 - weight_hi
-
-            idx_lo_wrapped = idx_lo % n_t
-            idx_hi_wrapped = (idx_lo + 1) % n_t
-
-            ok = valid & (np.abs(omega_pred) < omega_nyquist)
-
-            iy_arr, ix_arr = np.where(ok)
-            lo_idx = idx_lo_wrapped[ok]
-            hi_idx = idx_hi_wrapped[ok]
-            w_lo = weight_lo[ok]
-            w_hi = weight_hi[ok]
-
+        for omega_pred in [-(self._se_om0 + doppler), self._se_om0 - doppler]:
+            ok = np.abs(omega_pred) < omega_nyq
+            op = omega_pred[ok]
+            frac = op / d_omega
+            lo = np.floor(frac).astype(np.intp)
+            w_hi = frac - lo
+            lo_w = lo % n_t
+            hi_w = (lo + 1) % n_t
+            iy_ok, ix_ok = iy_v[ok], ix_v[ok]
             energy += float(
-                np.sum(w_lo * P[lo_idx, iy_arr, ix_arr] + w_hi * P[hi_idx, iy_arr, ix_arr])
+                np.sum((1.0 - w_hi) * P[lo_w, iy_ok, ix_ok] + w_hi * P[hi_w, iy_ok, ix_ok])
             )
-            n_shell_bins += int(ok.sum())
+            n_shell += int(ok.sum())
 
-        return energy, n_shell_bins
+        return energy, n_shell
 
     def _grid_search(self) -> tuple[float, float, np.ndarray]:
-        """Brute-force grid search over (Ux, Uy) candidates.
+        """Vectorized grid search over (Ux, Uy) candidates.
 
-        Tests all combinations on a regular grid within the search radius
-        and returns the candidate with maximum shell energy.
+        For each ``uy`` row, batches all valid ``ux`` candidates and
+        evaluates both dispersion branches in a single vectorized gather
+        from the power spectrum, eliminating the per-candidate Python
+        loop and redundant array construction.
 
         Returns:
             Tuple of (best_ux, best_uy, search_surface).
@@ -925,26 +905,83 @@ class CurrentExtractor:
         radius = self._search_radius
         step = self._search_step
 
-        # Create candidate grid
         candidates = np.arange(-radius, radius + step / 2, step)
         n = len(candidates)
-
         search_surface = np.zeros((n, n))
+
+        kx_v = self._se_kx
+        ky_v = self._se_ky
+        om0_v = self._se_om0
+        iy_v = self._se_iy
+        ix_v = self._se_ix
+
+        P = self.power_spectrum
+        n_t = self._se_n_t
+        d_omega = self._se_d_omega
+        omega_nyq = self._se_omega_nyq
+
+        n_valid = len(kx_v)
+
         best_energy = -1.0
         best_ux = 0.0
         best_uy = 0.0
 
-        for iy, uy_cand in enumerate(candidates):
-            for ix, ux_cand in enumerate(candidates):
-                # Skip candidates outside the circular search region
-                if ux_cand**2 + uy_cand**2 > radius**2:
-                    continue
-                energy, _ = self._shell_energy(ux_cand, uy_cand)
-                search_surface[iy, ix] = energy
-                if energy > best_energy:
-                    best_energy = energy
-                    best_ux = float(ux_cand)
-                    best_uy = float(uy_cand)
+        if n_valid == 0:
+            logger.debug(
+                "Grid search best: Ux=%.2f, Uy=%.2f, energy=%.2e",
+                best_ux,
+                best_uy,
+                best_energy,
+            )
+            return best_ux, best_uy, search_surface
+
+        # Auto-chunk ux batch to cap memory (~6 working arrays per element)
+        _MAX_BATCH_BYTES = 256 * 1024 * 1024
+        chunk_size = max(1, _MAX_BATCH_BYTES // (n_valid * 8 * 6))
+
+        for iy_idx, uy_cand in enumerate(candidates):
+            max_ux = np.sqrt(max(0.0, radius**2 - uy_cand**2))
+            inside = np.abs(candidates) <= max_ux + step * 0.01
+            ix_indices = np.where(inside)[0]
+            ux_batch = candidates[inside]
+            if len(ux_batch) == 0:
+                continue
+
+            ky_contrib = ky_v * uy_cand  # (n_valid,)
+            row_energy = np.zeros(len(ux_batch))
+
+            for start in range(0, len(ux_batch), chunk_size):
+                end = min(start + chunk_size, len(ux_batch))
+                ux_chunk = ux_batch[start:end]  # (n_chunk,)
+
+                # Doppler shift — shape (n_chunk, n_valid)
+                doppler = kx_v[np.newaxis, :] * ux_chunk[:, np.newaxis] + ky_contrib[np.newaxis, :]
+
+                chunk_energy = np.zeros(len(ux_chunk))
+                for sign in (-1.0, 1.0):
+                    omega_pred = sign * om0_v[np.newaxis, :] - doppler
+                    ok = np.abs(omega_pred) < omega_nyq
+
+                    frac = omega_pred / d_omega
+                    lo = np.floor(frac).astype(np.intp)
+                    w_hi = frac - lo
+                    lo_w = lo % n_t
+                    hi_w = (lo + 1) % n_t
+
+                    P_lo = P[lo_w, iy_v[np.newaxis, :], ix_v[np.newaxis, :]]
+                    P_hi = P[hi_w, iy_v[np.newaxis, :], ix_v[np.newaxis, :]]
+                    contrib = (1.0 - w_hi) * P_lo + w_hi * P_hi
+                    contrib[~ok] = 0.0
+                    chunk_energy += contrib.sum(axis=1)
+
+                row_energy[start:end] = chunk_energy
+
+            search_surface[iy_idx, ix_indices] = row_energy
+            row_best_idx = int(np.argmax(row_energy))
+            if row_energy[row_best_idx] > best_energy:
+                best_energy = row_energy[row_best_idx]
+                best_ux = float(ux_batch[row_best_idx])
+                best_uy = float(uy_cand)
 
         logger.debug(
             "Grid search best: Ux=%.2f, Uy=%.2f, energy=%.2e",
