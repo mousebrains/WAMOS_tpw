@@ -1087,70 +1087,63 @@ def run_cube_diag(args) -> None:
         logger.warning("No cubes were built — check time range and data availability")
         return
 
-    # Parallel whole-cube current extraction (GIL released during numpy/scipy)
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
+    # Process cubes one at a time, giving all workers to the inner sub-cube
+    # parallelism (numpy/scipy release the GIL).  This keeps at most one
+    # power spectrum (~1.2 GB) alive instead of n_cube_workers of them.
     from tqdm import tqdm
 
     from wamos_tpw.current_diagnostics import CubeCurrentDiag
 
     n_workers = args.workers or os.cpu_count() or 1
-    n_cube_workers = min(len(cubes), n_workers)
-    n_inner_workers = max(1, n_workers // n_cube_workers)
-    diags: list[CubeCurrentDiag | None] = [None] * len(cubes)
+    n_cubes = len(cubes)
 
     logger.info(
-        "Extracting cube currents: %d cubes x %d inner threads (%d total)",
-        n_cube_workers,
-        n_inner_workers,
-        n_cube_workers * n_inner_workers,
+        "Extracting cube currents: %d cubes, %d inner threads each",
+        n_cubes,
+        n_workers,
     )
 
     pbar = tqdm(
-        total=len(cubes),
+        total=n_cubes,
         desc="Cube diagnostics",
         unit="cube",
         disable=not args.progress,
     )
 
-    with ThreadPoolExecutor(max_workers=n_cube_workers) as pool:
-        futures = {
-            pool.submit(CubeCurrentDiag, cube, config=config, n_workers=n_inner_workers): i
-            for i, cube in enumerate(cubes)
-        }
-        for future in as_completed(futures):
-            i = futures[future]
-            try:
-                diags[i] = future.result()
-            except Exception:
-                logger.exception("Failed to extract current for cube %d", i)
-                pbar.update(1)
-                continue
-            est = diags[i].estimate
-            logger.info(
-                "Cube %d/%d: speed=%.2f m/s, dir=%.1f°, SNR=%.2f",
-                i + 1,
-                len(cubes),
-                est.speed,
-                est.direction,
-                est.snr,
-            )
+    figures: list = []  # only for --plot (interactive display)
+
+    for i in range(n_cubes):
+        cube = cubes[i]
+        cubes[i] = None  # type: ignore[assignment]  # free list ref early
+        t0 = cube.timestamps[0]  # save before cube may be freed
+
+        try:
+            diag = CubeCurrentDiag(cube, config=config, n_workers=n_workers)
+        except Exception:
+            logger.exception("Failed to extract current for cube %d", i)
             pbar.update(1)
-
-    pbar.close()
-
-    # Sequential plotting (matplotlib is not thread-safe)
-    for i, diag in enumerate(diags):
-        if diag is None:
             continue
+        finally:
+            del cube  # free cube intensity after diag caches mean
 
+        est = diag.estimate
+        logger.info(
+            "Cube %d/%d: speed=%.2f m/s, dir=%.1f°, SNR=%.2f",
+            i + 1,
+            n_cubes,
+            est.speed,
+            est.direction,
+            est.snr,
+        )
+
+        # Plot immediately then discard the diag
         if args.output_dir:
             import matplotlib.pyplot as plt
 
             fig = plt.figure(figsize=(14, 12))
-            fig.suptitle(f"Cube {i + 1}/{len(cubes)}")
+            fig.suptitle(f"Cube {i + 1}/{n_cubes}")
             diag.plot(fig=fig)
-            t_str = np.datetime_as_string(cubes[i].timestamps[0], unit="s")
+            t_str = np.datetime_as_string(t0, unit="s")
             t_str = t_str.replace(":", "-").replace("T", "_")
             filepath = Path(args.output_dir) / f"cube_diag_{t_str}.png"
             fig.savefig(filepath, dpi=150, bbox_inches="tight")
@@ -1161,10 +1154,16 @@ def run_cube_diag(args) -> None:
             import matplotlib.pyplot as plt
 
             fig = plt.figure(figsize=(14, 12))
-            fig.suptitle(f"Cube {i + 1}/{len(cubes)}")
+            fig.suptitle(f"Cube {i + 1}/{n_cubes}")
             diag.plot(fig=fig)
+            figures.append(fig)
 
-    if args.plot:
+        del diag
+        pbar.update(1)
+
+    pbar.close()
+
+    if args.plot and figures:
         import matplotlib.pyplot as plt
 
         plt.show()

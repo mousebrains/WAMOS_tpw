@@ -100,6 +100,8 @@ def _do_extract_tile(task):
                 "depth": est.depth,
                 "center_x": est.center_x,
                 "center_y": est.center_y,
+                "peak_ratio": est.peak_ratio,
+                "fom": est.fom,
             }
         )
     except Exception as e:

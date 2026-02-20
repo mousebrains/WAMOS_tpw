@@ -77,6 +77,7 @@ _SEARCH_RADIUS_DEFAULT = 3.0  # m/s
 _SEARCH_STEP_DEFAULT = 0.1  # m/s
 _REFINE_DEFAULT = True
 _MIN_SNR_DEFAULT = 1.5
+_MIN_FOM_DEFAULT = 3.0
 _FFT_WINDOW_DEFAULT = "hann"
 _K_MIN_FACTOR_DEFAULT = 2.0
 
@@ -333,6 +334,8 @@ class CurrentEstimate:
     depth: float
     center_x: float = 0.0
     center_y: float = 0.0
+    peak_ratio: float = 1.0
+    fom: float = 0.0
 
 
 @dataclass
@@ -441,6 +444,8 @@ class CurrentMap:
                 depth=est.depth,
                 center_x=tile["center_x"],
                 center_y=tile["center_y"],
+                peak_ratio=est.peak_ratio,
+                fom=est.fom,
             )
             estimates.append(est)
 
@@ -514,6 +519,8 @@ class CurrentMap:
                 depth=result["depth"],
                 center_x=result["center_x"],
                 center_y=result["center_y"],
+                peak_ratio=result.get("peak_ratio", 1.0),
+                fom=result.get("fom", 0.0),
             )
             estimates.append(est)
 
@@ -573,6 +580,7 @@ def compute_tile_specs(cube: FrameCube, config: Config | None = None) -> dict:
     sub_region_size = cfg.get("current.sub_region_size", _SUB_REGION_SIZE_DEFAULT)
     sub_region_overlap = cfg.get("current.sub_region_overlap", _SUB_REGION_OVERLAP_DEFAULT)
     min_snr = cfg.get("current.min_snr", _MIN_SNR_DEFAULT)
+    min_fom = cfg.get("current.min_fom", _MIN_FOM_DEFAULT)
     depth = cfg.get("current.depth", _DEPTH_DEFAULT)
 
     stride = sub_region_size * (1.0 - sub_region_overlap)
@@ -642,6 +650,7 @@ def compute_tile_specs(cube: FrameCube, config: Config | None = None) -> dict:
         "tile_x_centers": tile_x_centers,
         "tile_y_centers": tile_y_centers,
         "min_snr": min_snr,
+        "min_fom": min_fom,
         "depth": depth,
     }
 
@@ -733,6 +742,13 @@ class CurrentExtractor:
         direction = float(np.rad2deg(np.arctan2(ux, uy)) % 360)  # TO convention, CW from N
         snr = self._compute_snr(ux, uy)
 
+        nonzero = self._search_surface[self._search_surface > 0]
+        if len(nonzero) > 0:
+            peak_ratio = float(np.max(nonzero) / np.mean(nonzero))
+        else:
+            peak_ratio = 1.0
+        fom = snr * peak_ratio
+
         self.estimate = CurrentEstimate(
             ux=ux,
             uy=uy,
@@ -742,6 +758,8 @@ class CurrentExtractor:
             depth=self._depth,
             center_x=float(np.mean(cube.x_centers)),
             center_y=float(np.mean(cube.y_centers)),
+            peak_ratio=peak_ratio,
+            fom=fom,
         )
 
     def _prepare_cube(self) -> np.ndarray:

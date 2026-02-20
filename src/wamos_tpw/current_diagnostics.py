@@ -188,7 +188,7 @@ class CurrentDiag:
         ax.set_title(
             f"Shell energy surface\n"
             f"Ux={est.ux:.2f}, Uy={est.uy:.2f}, "
-            f"speed={est.speed:.2f} m/s, SNR={est.snr:.2f}"
+            f"speed={est.speed:.2f} m/s, SNR={est.snr:.2f}, FOM={est.fom:.1f}"
         )
         ax.set_aspect("equal")
         ax.legend(fontsize=7)
@@ -309,6 +309,10 @@ class CubeCurrentDiag:
     current vectors extracted from spatial sub-cubes via
     :func:`compute_tile_specs`.
 
+    After construction the heavy arrays (power spectrum, cube intensity) are
+    freed.  Only lightweight 2-D slices (~1.5 MB each), the search surface
+    (~30 KB), and the scalar estimate are retained for plotting.
+
     Args:
         cube: A :class:`FrameCube` with radar intensity data.
         config: Optional configuration object for :class:`CurrentExtractor`.
@@ -324,13 +328,14 @@ class CubeCurrentDiag:
         import os
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        from wamos_tpw.current import CurrentExtractor, compute_tile_specs
+        from scipy.fft import fftshift
 
-        self._cube = cube
+        from wamos_tpw.current import CurrentExtractor, compute_tile_specs
 
         # Tile geometry
         specs = compute_tile_specs(cube, config)
         self._min_snr = specs["min_snr"]
+        self._min_fom = specs.get("min_fom", 3.0)
 
         # Run whole-cube + all sub-cube extractions in parallel
         n_workers = n_workers or os.cpu_count() or 1
@@ -353,8 +358,7 @@ class CubeCurrentDiag:
                 tile_futures[future] = tile
 
             # Collect whole-cube result
-            self._extractor = whole_future.result()
-            self._diag = CurrentDiag(self._extractor)
+            extractor = whole_future.result()
 
             # Collect sub-cube results
             self._tile_estimates: list[dict] = []
@@ -372,6 +376,8 @@ class CubeCurrentDiag:
                             "speed": est.speed,
                             "direction": est.direction,
                             "snr": est.snr,
+                            "peak_ratio": est.peak_ratio,
+                            "fom": est.fom,
                         }
                     )
                 except Exception:
@@ -382,10 +388,38 @@ class CubeCurrentDiag:
                         exc_info=True,
                     )
 
+        # ---- Cache lightweight plotting data, then free heavy arrays ----
+
+        # Pre-compute mean intensity (n_y, n_x float64) before dropping cube
+        self._mean_intensity = np.nanmean(cube.intensity, axis=0)
+        self._x_centers = cube.x_centers
+        self._y_centers = cube.y_centers
+
+        # Cache the estimate (a tiny dataclass)
+        self._estimate = extractor.estimate
+
+        # Cache fftshift-ed 2-D spectral slices (~1.5 MB total)
+        P = extractor.power_spectrum  # (n_t, n_ky, n_kx)
+        ky_zero_idx = int(np.argmin(np.abs(extractor.ky)))
+        kx_zero_idx = int(np.argmin(np.abs(extractor.kx)))
+        self._kx_omega_slice = fftshift(P[:, ky_zero_idx, :])  # (n_t, n_kx)
+        self._ky_omega_slice = fftshift(P[:, :, kx_zero_idx])  # (n_t, n_ky)
+        self._kx_shifted = fftshift(extractor.kx)
+        self._ky_shifted = fftshift(extractor.ky)
+        self._omega_shifted = fftshift(extractor.omega)
+
+        # Cache search surface (~30 KB) and its parameters
+        self._search_surface = extractor._search_surface
+        self._search_radius = extractor._search_radius
+        self._search_step = extractor._search_step
+
+        # Heavy objects are now unreferenced and eligible for GC
+        del extractor
+
     @property
     def estimate(self) -> Any:
         """The whole-cube :class:`CurrentEstimate`."""
-        return self._extractor.estimate
+        return self._estimate
 
     @property
     def tile_estimates(self) -> list[dict]:
@@ -406,9 +440,9 @@ class CubeCurrentDiag:
             axes = fig.subplots(2, 2)
 
         self._plot_intensity_with_current(axes[0, 0])
-        self._diag._plot_kx_omega(axes[0, 1])
-        self._diag._plot_ky_omega(axes[1, 0])
-        self._diag._plot_search_surface(axes[1, 1])
+        self._plot_kx_omega(axes[0, 1])
+        self._plot_ky_omega(axes[1, 0])
+        self._plot_search_surface(axes[1, 1])
 
         fig.tight_layout()
 
@@ -416,23 +450,19 @@ class CubeCurrentDiag:
         """Plot time-averaged intensity with sub-cube current vectors."""
         import matplotlib.pyplot as plt
 
-        cube = self._cube
-        est = self._extractor.estimate
-
-        # Time-averaged intensity
-        mean_intensity = np.nanmean(cube.intensity, axis=0)
+        est = self._estimate
 
         im = ax.pcolormesh(
-            cube.x_centers,
-            cube.y_centers,
-            mean_intensity,
+            self._x_centers,
+            self._y_centers,
+            self._mean_intensity,
             shading="auto",
             cmap="gray",
         )
         plt.colorbar(im, ax=ax, label="Intensity")
 
-        # Sub-cube current vectors (filtered by min_snr)
-        valid = [t for t in self._tile_estimates if t["snr"] >= self._min_snr]
+        # Sub-cube current vectors (filtered by min_fom)
+        valid = [t for t in self._tile_estimates if t["fom"] >= self._min_fom]
         if valid:
             cx = np.array([t["center_x"] for t in valid])
             cy = np.array([t["center_y"] for t in valid])
@@ -459,8 +489,9 @@ class CubeCurrentDiag:
 
         # Annotate with whole-cube summary
         ax.annotate(
-            f"whole: {est.speed:.2f} m/s, {est.direction:.1f}\u00b0, SNR={est.snr:.2f}\n"
-            f"tiles: {n_valid}/{n_total} (SNR\u2265{self._min_snr:.1f})",
+            f"whole: {est.speed:.2f} m/s, {est.direction:.1f}\u00b0, "
+            f"SNR={est.snr:.2f}, FOM={est.fom:.1f}\n"
+            f"tiles: {n_valid}/{n_total} (FOM\u2265{self._min_fom:.1f})",
             xy=(0.02, 0.98),
             xycoords="axes fraction",
             verticalalignment="top",
@@ -473,3 +504,88 @@ class CubeCurrentDiag:
         ax.set_ylabel("y (m)")
         ax.set_title("Time-avg intensity + current")
         ax.set_aspect("equal")
+
+    def _plot_kx_omega(self, ax: Any) -> None:
+        """Plot kx-omega slice at ky=0 with dispersion curve overlay."""
+        from wamos_tpw.current import dispersion_relation
+
+        est = self._estimate
+        log_power = np.log10(np.maximum(self._kx_omega_slice, 1e-10))
+
+        ax.pcolormesh(
+            self._kx_shifted,
+            self._omega_shifted,
+            log_power,
+            shading="auto",
+            cmap="viridis",
+        )
+
+        k_plot = np.linspace(self._kx_shifted.min(), self._kx_shifted.max(), 200)
+        omega_0 = dispersion_relation(np.abs(k_plot), est.depth)
+        omega_disp_pos = -(omega_0 + k_plot * est.ux)
+        omega_disp_neg = omega_0 - k_plot * est.ux
+
+        ax.plot(k_plot, omega_disp_pos, "r-", linewidth=1.5, label="Dispersion (+)")
+        ax.plot(k_plot, omega_disp_neg, "r--", linewidth=1.0, label="Dispersion (-)")
+
+        ax.set_xlabel("kx (rad/m)")
+        ax.set_ylabel("omega (rad/s)")
+        ax.set_title("P(kx, omega) at ky=0")
+        ax.legend(fontsize=7)
+
+    def _plot_ky_omega(self, ax: Any) -> None:
+        """Plot ky-omega slice at kx=0 with dispersion curve overlay."""
+        from wamos_tpw.current import dispersion_relation
+
+        est = self._estimate
+        log_power = np.log10(np.maximum(self._ky_omega_slice, 1e-10))
+
+        ax.pcolormesh(
+            self._ky_shifted,
+            self._omega_shifted,
+            log_power,
+            shading="auto",
+            cmap="viridis",
+        )
+
+        k_plot = np.linspace(self._ky_shifted.min(), self._ky_shifted.max(), 200)
+        omega_0 = dispersion_relation(np.abs(k_plot), est.depth)
+        omega_disp_pos = -(omega_0 + k_plot * est.uy)
+        omega_disp_neg = omega_0 - k_plot * est.uy
+
+        ax.plot(k_plot, omega_disp_pos, "r-", linewidth=1.5, label="Dispersion (+)")
+        ax.plot(k_plot, omega_disp_neg, "r--", linewidth=1.0, label="Dispersion (-)")
+
+        ax.set_xlabel("ky (rad/m)")
+        ax.set_ylabel("omega (rad/s)")
+        ax.set_title("P(ky, omega) at kx=0")
+        ax.legend(fontsize=7)
+
+    def _plot_search_surface(self, ax: Any) -> None:
+        """Plot the (Ux, Uy) search surface with the maximum marked."""
+        est = self._estimate
+        radius = self._search_radius
+        step = self._search_step
+        candidates = np.arange(-radius, radius + step / 2, step)
+
+        ax.pcolormesh(
+            candidates,
+            candidates,
+            self._search_surface,
+            shading="auto",
+            cmap="hot",
+        )
+
+        ax.plot(est.ux, est.uy, "cx", markersize=12, markeredgewidth=2, label="Estimate")
+        ax.set_xlabel("Ux (m/s)")
+        ax.set_ylabel("Uy (m/s)")
+        ax.set_title(
+            f"Shell energy surface\n"
+            f"Ux={est.ux:.2f}, Uy={est.uy:.2f}, "
+            f"speed={est.speed:.2f} m/s, SNR={est.snr:.2f}, FOM={est.fom:.1f}"
+        )
+        ax.set_aspect("equal")
+        ax.legend(fontsize=7)
+
+        theta = np.linspace(0, 2 * np.pi, 100)
+        ax.plot(radius * np.cos(theta), radius * np.sin(theta), "w--", linewidth=0.5, alpha=0.5)
