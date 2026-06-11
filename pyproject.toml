@@ -92,6 +92,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 markers = [
     "gpu: marks tests that require a CuPy GPU backend",
+    "slow: marks long-running validation tests (deselect with '-m \"not slow\"')",
 ]
 
 [tool.mypy]

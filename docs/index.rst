@@ -97,6 +97,7 @@ Contents
    examples
    performance
    current_extraction_review
+   resolution_validation
 
 .. toctree::
    :maxdepth: 2
