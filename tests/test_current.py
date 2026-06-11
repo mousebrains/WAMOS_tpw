@@ -379,6 +379,95 @@ class TestCurrentExtractor:
         if est.speed > 0.3:
             assert abs(est.direction - 90.0) < 30.0, f"Direction: {est.direction:.1f}, expected ~90"
 
+    def test_static_pattern_with_drift(self):
+        """A strong, slowly varying background must not bias the estimate.
+
+        Real radar image spectra are red: the residual static backscatter
+        pattern and slow modulations put enormous power near omega = 0
+        across many wavenumbers. A raw shell-energy objective gets pulled
+        toward currents whose shell passes through that leakage ridge;
+        the omega_min cut and per-bin normalization protect against it.
+        """
+        from scipy.ndimage import gaussian_filter
+
+        true_ux, true_uy = 0.5, -0.3
+        n_t, n_xy = 64, 128
+        cube = make_synthetic_cube(
+            ux=true_ux,
+            uy=true_uy,
+            n_t=n_t,
+            n_xy=n_xy,
+            dx=7.5,
+            dt=1.5,
+            noise_level=0.05,
+            n_waves=12,
+        )
+
+        # Spatially smooth static pattern (~50 m scale) with a slow temporal
+        # ramp — anomaly std several times the wave signal std.
+        rng = np.random.default_rng(7)
+        field = gaussian_filter(rng.normal(size=(n_xy, n_xy)), sigma=4.0)
+        field /= field.std()
+        ramp = 1.0 + 0.5 * np.linspace(0.0, 1.0, n_t)
+        cube.intensity += 60.0 * field[np.newaxis] * ramp[:, np.newaxis, np.newaxis]
+
+        extractor = CurrentExtractor(cube)
+        est = extractor.estimate
+
+        assert abs(est.ux - true_ux) < 0.2, f"Ux error: {abs(est.ux - true_ux):.3f}"
+        assert abs(est.uy - true_uy) < 0.2, f"Uy error: {abs(est.uy - true_uy):.3f}"
+
+    def test_all_nan_frames(self):
+        """Entirely missing frames must not corrupt the estimate.
+
+        Missing frames should contribute zero anomaly, not a large
+        artifact slab from naive NaN filling.
+        """
+        true_ux, true_uy = 0.5, -0.3
+        cube = make_synthetic_cube(
+            ux=true_ux,
+            uy=true_uy,
+            n_t=64,
+            n_xy=128,
+            dx=7.5,
+            dt=1.5,
+            noise_level=0.05,
+            n_waves=12,
+        )
+        cube.intensity[10] = np.nan
+        cube.intensity[41] = np.nan
+
+        extractor = CurrentExtractor(cube)
+        est = extractor.estimate
+
+        assert abs(est.ux - true_ux) < 0.2, f"Ux error: {abs(est.ux - true_ux):.3f}"
+        assert abs(est.uy - true_uy) < 0.2, f"Uy error: {abs(est.uy - true_uy):.3f}"
+
+    def test_pure_noise_snr_near_one(self):
+        """Pure noise should give SNR ~ 1 (per-bin normalized ratio)."""
+        rng = np.random.default_rng(99)
+        data = rng.normal(size=(32, 64, 64))
+        cube = FrameCube.from_arrays(data, dt=1.5, dx=7.5)
+
+        extractor = CurrentExtractor(cube)
+        est = extractor.estimate
+
+        assert 0.3 < est.snr < 3.0, f"Pure-noise SNR should be ~1, got {est.snr:.2f}"
+
+    def test_k_max_config(self):
+        """current.k_max should limit the wavenumber annulus."""
+        from wamos_tpw.config import Config
+
+        cube = make_synthetic_cube(n_t=16, n_xy=64, dx=7.5, dt=1.5)
+
+        config = Config()
+        k_max = 0.05
+        config["current.k_max"] = k_max
+        extractor = CurrentExtractor(cube, config=config)
+
+        k_used = np.sqrt(extractor._se_kx**2 + extractor._se_ky**2)
+        assert np.all(k_used <= k_max + 1e-12)
+
     def test_without_refinement(self):
         """Should work without refinement (coarse grid search only)."""
         cube = make_synthetic_cube(

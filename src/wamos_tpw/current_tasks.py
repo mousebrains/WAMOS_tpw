@@ -102,6 +102,10 @@ def _do_extract_tile(task):
                 "center_y": est.center_y,
                 "peak_ratio": est.peak_ratio,
                 "fom": est.fom,
+                "ux_err": est.ux_err,
+                "uy_err": est.uy_err,
+                "n_ls_points": est.n_ls_points,
+                "ls_rms": est.ls_rms,
             }
         )
     except Exception as e:

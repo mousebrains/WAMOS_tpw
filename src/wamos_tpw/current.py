@@ -26,8 +26,9 @@ Algorithm Summary::
           remove temporal mean, apply 3D Hann window, handle NaN
           -> 3D FFT -> power spectrum P(kx, ky, omega)
           -> grid search over (Ux, Uy) candidates:
-              for each candidate, sum P on the Doppler-shifted dispersion shell
-          -> (Ux, Uy) that maximizes shell energy -> refine with scipy.optimize
+              for each candidate, mean P per bin on the Doppler-shifted
+              dispersion shell (k_min < k <= k_max, omega_min <= |omega| < Nyquist)
+          -> (Ux, Uy) that maximizes mean shell power -> refine with scipy.optimize
           -> CurrentEstimate(ux, uy, speed, direction, snr)
       -> assemble into CurrentMap (spatial vector field)
 
@@ -47,7 +48,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from scipy import fft as scipy_fft
-from scipy import optimize, signal
+from scipy import signal
 
 if TYPE_CHECKING:
     from wamos_tpw.config import Config
@@ -80,6 +81,14 @@ _MIN_SNR_DEFAULT = 1.5
 _MIN_FOM_DEFAULT = 3.0
 _FFT_WINDOW_DEFAULT = "hann"
 _K_MIN_FACTOR_DEFAULT = 2.0
+# Exclude shell samples with |omega| < omega_min_factor * d_omega: the
+# residual static pattern and its window leakage concentrate enormous
+# power near omega = 0, which would otherwise attract the shell fit.
+_OMEGA_MIN_FACTOR_DEFAULT = 2.0
+# Reject (Ux, Uy) candidates whose dispersion shell retains fewer than
+# this fraction of the maximum possible shell bins (2 branches x n_valid):
+# means over very few bins are noise-dominated.
+_MIN_SHELL_FRACTION_DEFAULT = 0.25
 
 
 # ============================================================
@@ -220,6 +229,18 @@ class FrameCube:
         if n_t >= 2:
             diffs = np.diff(timestamps.astype("datetime64[ms]").astype(np.float64)) / 1000.0
             dt = float(np.median(diffs))
+            # The 3D FFT assumes uniform temporal sampling; warn when the
+            # antenna rotation period jitters or frames are missing, since
+            # that smears energy along the omega axis and biases the fit.
+            spread = float(np.max(np.abs(diffs - dt))) if len(diffs) else 0.0
+            if dt > 0 and spread > 0.1 * dt:
+                logger.warning(
+                    "Non-uniform frame intervals: median dt=%.2fs, max deviation=%.2fs "
+                    "(%.0f%%); FFT assumes uniform sampling",
+                    dt,
+                    spread,
+                    100.0 * spread / dt,
+                )
         else:
             dt = 1.0
 
@@ -324,6 +345,13 @@ class CurrentEstimate:
         depth: Water depth used for the estimate (meters, inf for deep water).
         center_x: X position of the sub-region center (meters).
         center_y: Y position of the sub-region center (meters).
+        peak_ratio: Max/mean of the (Ux, Uy) search surface.
+        fom: Figure of merit (snr * peak_ratio).
+        ux_err: 1-sigma uncertainty of ux from the least-squares dispersion
+                fit (m/s, NaN when refinement did not run).
+        uy_err: 1-sigma uncertainty of uy (m/s, NaN when unavailable).
+        n_ls_points: Number of spectral peaks used by the least-squares fit.
+        ls_rms: RMS frequency residual of the least-squares fit (rad/s).
     """
 
     ux: float
@@ -336,6 +364,10 @@ class CurrentEstimate:
     center_y: float = 0.0
     peak_ratio: float = 1.0
     fom: float = 0.0
+    ux_err: float = float("nan")
+    uy_err: float = float("nan")
+    n_ls_points: int = 0
+    ls_rms: float = float("nan")
 
 
 @dataclass
@@ -356,6 +388,9 @@ class CurrentMap:
         start_time: Start time of the analysis block.
         end_time: End time of the analysis block.
         estimates: List of all CurrentEstimate objects (including rejected).
+        ux_err: 2D array of 1-sigma ux uncertainties (m/s) from the
+                least-squares dispersion fit (None for legacy maps).
+        uy_err: 2D array of 1-sigma uy uncertainties (m/s).
     """
 
     ux: np.ndarray
@@ -371,6 +406,8 @@ class CurrentMap:
     start_time: np.datetime64 = field(default_factory=lambda: np.datetime64("NaT"))
     end_time: np.datetime64 = field(default_factory=lambda: np.datetime64("NaT"))
     estimates: list[CurrentEstimate] = field(default_factory=list)
+    ux_err: np.ndarray | None = None
+    uy_err: np.ndarray | None = None
 
     @property
     def n_tiles_x(self) -> int:
@@ -415,6 +452,8 @@ class CurrentMap:
         speed_map = np.full((n_tiles_y, n_tiles_x), np.nan)
         dir_map = np.full((n_tiles_y, n_tiles_x), np.nan)
         snr_map = np.full((n_tiles_y, n_tiles_x), np.nan)
+        ux_err_map = np.full((n_tiles_y, n_tiles_x), np.nan)
+        uy_err_map = np.full((n_tiles_y, n_tiles_x), np.nan)
 
         estimates: list[CurrentEstimate] = []
 
@@ -446,6 +485,10 @@ class CurrentMap:
                 center_y=tile["center_y"],
                 peak_ratio=est.peak_ratio,
                 fom=est.fom,
+                ux_err=est.ux_err,
+                uy_err=est.uy_err,
+                n_ls_points=est.n_ls_points,
+                ls_rms=est.ls_rms,
             )
             estimates.append(est)
 
@@ -455,6 +498,8 @@ class CurrentMap:
                 uy_map[iy, ix] = est.uy
                 speed_map[iy, ix] = est.speed
                 dir_map[iy, ix] = est.direction
+                ux_err_map[iy, ix] = est.ux_err
+                uy_err_map[iy, ix] = est.uy_err
 
         return cls(
             ux=ux_map,
@@ -470,6 +515,8 @@ class CurrentMap:
             start_time=cube.timestamps[0],
             end_time=cube.timestamps[-1],
             estimates=estimates,
+            ux_err=ux_err_map,
+            uy_err=uy_err_map,
         )
 
     @classmethod
@@ -501,6 +548,8 @@ class CurrentMap:
         speed_map = np.full((n_tiles_y, n_tiles_x), np.nan)
         dir_map = np.full((n_tiles_y, n_tiles_x), np.nan)
         snr_map = np.full((n_tiles_y, n_tiles_x), np.nan)
+        ux_err_map = np.full((n_tiles_y, n_tiles_x), np.nan)
+        uy_err_map = np.full((n_tiles_y, n_tiles_x), np.nan)
 
         estimates: list[CurrentEstimate] = []
 
@@ -521,6 +570,10 @@ class CurrentMap:
                 center_y=result["center_y"],
                 peak_ratio=result.get("peak_ratio", 1.0),
                 fom=result.get("fom", 0.0),
+                ux_err=result.get("ux_err", float("nan")),
+                uy_err=result.get("uy_err", float("nan")),
+                n_ls_points=result.get("n_ls_points", 0),
+                ls_rms=result.get("ls_rms", float("nan")),
             )
             estimates.append(est)
 
@@ -530,6 +583,8 @@ class CurrentMap:
                 uy_map[iy, ix] = est.uy
                 speed_map[iy, ix] = est.speed
                 dir_map[iy, ix] = est.direction
+                ux_err_map[iy, ix] = est.ux_err
+                uy_err_map[iy, ix] = est.uy_err
 
         return cls(
             ux=ux_map,
@@ -545,6 +600,8 @@ class CurrentMap:
             start_time=cube_metadata["start_time"],
             end_time=cube_metadata["end_time"],
             estimates=estimates,
+            ux_err=ux_err_map,
+            uy_err=uy_err_map,
         )
 
 
@@ -725,6 +782,13 @@ class CurrentExtractor:
         self._search_step = self._cfg.get("current.search_step", _SEARCH_STEP_DEFAULT)
         self._do_refine = self._cfg.get("current.refine", _REFINE_DEFAULT)
         self._k_min_factor = self._cfg.get("current.k_min_factor", _K_MIN_FACTOR_DEFAULT)
+        self._k_max = self._cfg.get("current.k_max", None)  # rad/m; None -> pi/(2*dx)
+        self._omega_min_factor = self._cfg.get(
+            "current.omega_min_factor", _OMEGA_MIN_FACTOR_DEFAULT
+        )
+        self._min_shell_fraction = self._cfg.get(
+            "current.min_shell_fraction", _MIN_SHELL_FRACTION_DEFAULT
+        )
         self._window_name = self._cfg.get("current.fft_window", _FFT_WINDOW_DEFAULT)
 
         # Run the extraction pipeline
@@ -733,6 +797,7 @@ class CurrentExtractor:
         self._cache_spectral_geometry()
         coarse_ux, coarse_uy, self._search_surface = self._grid_search()
 
+        self._ls_stats: dict | None = None
         if self._do_refine:
             ux, uy = self._refine(coarse_ux, coarse_uy)
         else:
@@ -749,6 +814,7 @@ class CurrentExtractor:
             peak_ratio = 1.0
         fom = snr * peak_ratio
 
+        ls = self._ls_stats or {}
         self.estimate = CurrentEstimate(
             ux=ux,
             uy=uy,
@@ -760,14 +826,21 @@ class CurrentExtractor:
             center_y=float(np.mean(cube.y_centers)),
             peak_ratio=peak_ratio,
             fom=fom,
+            ux_err=ls.get("ux_err", float("nan")),
+            uy_err=ls.get("uy_err", float("nan")),
+            n_ls_points=ls.get("n_points", 0),
+            ls_rms=ls.get("rms", float("nan")),
         )
 
     def _prepare_cube(self) -> np.ndarray:
         """Prepare the intensity cube for FFT analysis.
 
         Steps:
-        1. Replace NaN values with spatial mean per time step.
-        2. Remove temporal mean (detrend).
+        1. Remove the per-pixel temporal mean (computed over valid samples
+           only), which removes the static backscatter pattern.
+        2. Set missing samples (NaN) to zero anomaly so data gaps — shadow
+           sectors, frames with no coverage, pixels outside the radar disc —
+           contribute no spurious spectral energy.
         3. Apply 3D window function (e.g. Hann).
 
         Returns:
@@ -776,20 +849,14 @@ class CurrentExtractor:
         data = self._cube.intensity.copy()
         n_t, n_y, n_x = data.shape
 
-        # Step 1: Fill NaN with per-timestep spatial mean
-        for t in range(n_t):
-            frame = data[t]
-            nan_mask = np.isnan(frame)
-            if np.any(nan_mask):
-                valid_mean = np.nanmean(frame)
-                if np.isfinite(valid_mean):
-                    frame[nan_mask] = valid_mean
-                else:
-                    frame[nan_mask] = 0.0
-
-        # Step 2: Remove temporal mean
-        temporal_mean = np.mean(data, axis=0)
+        # Steps 1+2: per-pixel temporal mean over valid samples; gaps -> 0
+        valid = np.isfinite(data)
+        counts = valid.sum(axis=0)
+        sums = np.where(valid, data, 0.0).sum(axis=0)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            temporal_mean = sums / counts
         data -= temporal_mean
+        data[~np.isfinite(data)] = 0.0
 
         # Step 3: Apply 3D window
         win_t = signal.windows.get_window(self._window_name, n_t, fftbins=False)
@@ -851,11 +918,18 @@ class CurrentExtractor:
             self._cube.y_centers[-1] - self._cube.y_centers[0],
         )
         k_min = self._k_min_factor * 2.0 * np.pi / sub_region_size if sub_region_size > 0 else 0.0
-        valid = k_mag > k_min
+        # High-wavenumber cutoff: bins near the spatial Nyquist are dominated
+        # by speckle, gridding artifacts, and temporally aliased short waves.
+        # Default keeps wavelengths >= 4 grid cells.
+        k_max = self._k_max
+        if k_max is None:
+            k_max = np.pi / (2.0 * self._cube.grid_spacing)
+        valid = (k_mag > k_min) & (k_mag <= k_max)
 
         n_t = self.power_spectrum.shape[0]
         d_omega = 2.0 * np.pi / (n_t * self._cube.dt)
         omega_nyq = np.pi / self._cube.dt
+        omega_min = self._omega_min_factor * d_omega
 
         # Extract valid-bin indices and pre-compute per-bin constants
         iy_v, ix_v = np.where(valid)
@@ -866,9 +940,36 @@ class CurrentExtractor:
         self._se_ix: np.ndarray = ix_v
         self._se_d_omega: float = d_omega
         self._se_omega_nyq: float = omega_nyq
+        self._se_omega_min: float = omega_min
         self._se_n_t: int = n_t
 
-    def _shell_energy(self, ux: float, uy: float) -> tuple[float, int]:
+        # Total energy and bin count over the analysis set — the valid k
+        # annulus restricted to omega_min <= |omega| < omega_nyq — used by
+        # _compute_snr so that noise is estimated from bins the shell could
+        # actually occupy (not the static pattern at omega ~ 0 or k bins
+        # outside [k_min, k_max]).
+        omega_abs = np.abs(self.omega)
+        rows_ok = (omega_abs >= omega_min) & (omega_abs < omega_nyq)
+        if len(iy_v) > 0 and np.any(rows_ok):
+            cols = self.power_spectrum[:, iy_v, ix_v]  # (n_t, n_valid)
+            self._se_analysis_energy: float = float(cols[rows_ok].sum())
+            self._se_n_analysis: int = int(rows_ok.sum()) * len(iy_v)
+            # Noise-floor-subtracted gather table for the fit objective:
+            # subtract each (kx, ky) column's median power over omega and
+            # clip at zero. Wave signal occupies one or two omega bins per
+            # column and stands far above the median, so it survives; the
+            # broadband noise pedestal and most static-pattern leakage are
+            # removed, so they no longer pull the shell fit toward hot
+            # off-dispersion regions.
+            self._se_cols_filtered: np.ndarray = np.maximum(
+                cols - np.median(cols, axis=0, keepdims=True), 0.0
+            )
+        else:
+            self._se_analysis_energy = 0.0
+            self._se_n_analysis = 0
+            self._se_cols_filtered = np.zeros((n_t, len(iy_v)))
+
+    def _shell_energy(self, ux: float, uy: float, filtered: bool = False) -> tuple[float, int]:
         """Compute total energy on the Doppler-shifted dispersion shell.
 
         Uses cached spectral geometry from ``_cache_spectral_geometry``
@@ -877,9 +978,12 @@ class CurrentExtractor:
         Args:
             ux: Eastward current candidate (m/s).
             uy: Northward current candidate (m/s).
+            filtered: When True, sample the noise-floor-subtracted gather
+                table (the fit objective); when False, sum raw spectral
+                power (for SNR).
 
         Returns:
-            Tuple of (total shell energy, number of shell bins sampled).
+            Tuple of (shell energy, number of shell bins sampled).
         """
         doppler = self._se_kx * ux + self._se_ky * uy  # (n_valid,)
 
@@ -887,23 +991,29 @@ class CurrentExtractor:
         n_t = self._se_n_t
         d_omega = self._se_d_omega
         omega_nyq = self._se_omega_nyq
+        omega_min = self._se_omega_min
         iy_v, ix_v = self._se_iy, self._se_ix
 
         energy = 0.0
         n_shell = 0
 
         for omega_pred in [-(self._se_om0 + doppler), self._se_om0 - doppler]:
-            ok = np.abs(omega_pred) < omega_nyq
+            abs_pred = np.abs(omega_pred)
+            ok = (abs_pred < omega_nyq) & (abs_pred >= omega_min)
             op = omega_pred[ok]
             frac = op / d_omega
             lo = np.floor(frac).astype(np.intp)
             w_hi = frac - lo
             lo_w = lo % n_t
             hi_w = (lo + 1) % n_t
-            iy_ok, ix_ok = iy_v[ok], ix_v[ok]
-            energy += float(
-                np.sum((1.0 - w_hi) * P[lo_w, iy_ok, ix_ok] + w_hi * P[hi_w, iy_ok, ix_ok])
-            )
+            if filtered:
+                cols_f = self._se_cols_filtered
+                col_idx = np.where(ok)[0]
+                contrib = (1.0 - w_hi) * cols_f[lo_w, col_idx] + w_hi * cols_f[hi_w, col_idx]
+            else:
+                iy_ok, ix_ok = iy_v[ok], ix_v[ok]
+                contrib = (1.0 - w_hi) * P[lo_w, iy_ok, ix_ok] + w_hi * P[hi_w, iy_ok, ix_ok]
+            energy += float(np.sum(contrib))
             n_shell += int(ok.sum())
 
         return energy, n_shell
@@ -916,9 +1026,17 @@ class CurrentExtractor:
         from the power spectrum, eliminating the per-candidate Python
         loop and redundant array construction.
 
+        The objective is the *mean* power per shell bin, not the raw sum:
+        the number of shell bins inside the temporal Nyquist varies with
+        the candidate current (large Doppler shifts move bins in or out of
+        range), so a raw sum systematically favors candidates that merely
+        sample more bins. Candidates retaining fewer than
+        ``min_shell_fraction`` of the possible shell bins are rejected.
+
         Returns:
             Tuple of (best_ux, best_uy, search_surface).
-            search_surface is a 2D array of energies indexed by (uy, ux) grid.
+            search_surface is a 2D array of mean shell power indexed by
+            (uy, ux) grid.
         """
         radius = self._search_radius
         step = self._search_step
@@ -930,13 +1048,12 @@ class CurrentExtractor:
         kx_v = self._se_kx
         ky_v = self._se_ky
         om0_v = self._se_om0
-        iy_v = self._se_iy
-        ix_v = self._se_ix
+        cols_f = self._se_cols_filtered
 
-        P = self.power_spectrum
         n_t = self._se_n_t
         d_omega = self._se_d_omega
         omega_nyq = self._se_omega_nyq
+        omega_min = self._se_omega_min
 
         n_valid = len(kx_v)
 
@@ -952,6 +1069,9 @@ class CurrentExtractor:
                 best_energy,
             )
             return best_ux, best_uy, search_surface
+
+        min_count = max(1, int(self._min_shell_fraction * 2 * n_valid))
+        col_idx = np.arange(n_valid)
 
         # Auto-chunk ux batch to cap memory (~6 working arrays per element)
         _MAX_BATCH_BYTES = 256 * 1024 * 1024
@@ -976,9 +1096,11 @@ class CurrentExtractor:
                 doppler = kx_v[np.newaxis, :] * ux_chunk[:, np.newaxis] + ky_contrib[np.newaxis, :]
 
                 chunk_energy = np.zeros(len(ux_chunk))
+                chunk_count = np.zeros(len(ux_chunk), dtype=np.intp)
                 for sign in (-1.0, 1.0):
                     omega_pred = sign * om0_v[np.newaxis, :] - doppler
-                    ok = np.abs(omega_pred) < omega_nyq
+                    abs_pred = np.abs(omega_pred)
+                    ok = (abs_pred < omega_nyq) & (abs_pred >= omega_min)
 
                     frac = omega_pred / d_omega
                     lo = np.floor(frac).astype(np.intp)
@@ -986,13 +1108,18 @@ class CurrentExtractor:
                     lo_w = lo % n_t
                     hi_w = (lo + 1) % n_t
 
-                    P_lo = P[lo_w, iy_v[np.newaxis, :], ix_v[np.newaxis, :]]
-                    P_hi = P[hi_w, iy_v[np.newaxis, :], ix_v[np.newaxis, :]]
+                    P_lo = cols_f[lo_w, col_idx[np.newaxis, :]]
+                    P_hi = cols_f[hi_w, col_idx[np.newaxis, :]]
                     contrib = (1.0 - w_hi) * P_lo + w_hi * P_hi
                     contrib[~ok] = 0.0
                     chunk_energy += contrib.sum(axis=1)
+                    chunk_count += ok.sum(axis=1)
 
-                row_energy[start:end] = chunk_energy
+                # Mean power per shell bin; reject sparse shells
+                enough = chunk_count >= min_count
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    chunk_mean = np.where(enough, chunk_energy / chunk_count, 0.0)
+                row_energy[start:end] = chunk_mean
 
             search_surface[iy_idx, ix_indices] = row_energy
             row_best_idx = int(np.argmax(row_energy))
@@ -1011,7 +1138,30 @@ class CurrentExtractor:
         return best_ux, best_uy, search_surface
 
     def _refine(self, coarse_ux: float, coarse_uy: float) -> tuple[float, float]:
-        """Refine the coarse grid search result using Nelder-Mead optimization.
+        """Refine the coarse estimate by weighted least squares on peak frequencies.
+
+        The coarse energy-maximization is limited by the omega bin width:
+        one bin corresponds to delta_U = d_omega / k, which for typical
+        record lengths (~1 minute) and wave numbers is 0.5-1 m/s. Following
+        Young et al. (1985) and Senet et al. (2001), this method instead
+
+        1. predicts, for each valid (kx, ky) column, where the positive
+           dispersion branch ``omega = omega_0 - k . U`` should lie,
+        2. locates the actual spectral peak within a velocity-scaled window
+           of the prediction and interpolates its coordinates to sub-bin
+           accuracy in omega AND in (kx, ky) — without the latter, a wave
+           whose true k falls between grid columns produces a frequency
+           mismatch of up to c_g * d_k / 2,
+        3. solves the weighted linear least-squares problem
+           ``omega_0(k_obs) - omega_peak = kx*Ux + ky*Uy`` with
+           inverse-variance weights and sigma-clipping in velocity units,
+
+        iterating three times so the search windows re-center on the
+        improved estimate. Falls back to the coarse estimate when too few
+        usable peaks exist or the solution leaves the search disc.
+
+        Sets ``self._ls_stats`` with keys ``ux_err``, ``uy_err``,
+        ``n_points``, ``rms`` (residual rms, rad/s) when successful.
 
         Args:
             coarse_ux: Coarse eastward current estimate (m/s).
@@ -1020,48 +1170,179 @@ class CurrentExtractor:
         Returns:
             Refined (ux, uy) tuple.
         """
+        cols_f = self._se_cols_filtered  # (n_t, n_valid)
+        kx_v = self._se_kx
+        ky_v = self._se_ky
+        om0_v = self._se_om0
+        iy_v, ix_v = self._se_iy, self._se_ix
+        n_t = self._se_n_t
+        d_omega = self._se_d_omega
+        omega_nyq = self._se_omega_nyq
+        omega_min = self._se_omega_min
 
-        def neg_energy(uxy: np.ndarray) -> float:
-            energy, _ = self._shell_energy(float(uxy[0]), float(uxy[1]))
-            return -energy
+        P = self.power_spectrum
+        n_ky = len(self.ky)
+        n_kx = len(self.kx)
+        d_k = float(self.kx[1] - self.kx[0]) if n_kx > 1 else 0.0
+        # Per-column noise floor for sub-bin k interpolation across columns
+        med2d = np.median(P, axis=0)  # (n_ky, n_kx)
 
-        result = optimize.minimize(
-            neg_energy,
-            x0=np.array([coarse_ux, coarse_uy]),
-            method="Nelder-Mead",
-            options={
-                "xatol": self._search_step / 10.0,
-                "fatol": 1e-6,
-                "maxiter": 200,
-            },
-        )
+        _MAX_SEARCH_BINS = 3
+        _DU_WINDOW = 1.5  # m/s: peak search window in velocity units
+        _MIN_POINTS = 6
+        _CLIP_SIGMA = 2.5
+        # Modeled per-point frequency standard deviation: sub-bin
+        # interpolation accuracy in omega plus the k-quantization error
+        # mapped through the group velocity (dominant at low k).
+        _C_OMEGA = 0.3  # fraction of d_omega
+        _C_K = 0.3  # fraction of d_k
 
-        refined_ux, refined_uy = float(result.x[0]), float(result.x[1])
+        def _parabolic(qm: np.ndarray, q0: np.ndarray, qp: np.ndarray) -> np.ndarray:
+            denom = qm - 2.0 * q0 + qp
+            with np.errstate(invalid="ignore", divide="ignore"):
+                delta = np.where(denom < 0, 0.5 * (qm - qp) / denom, 0.0)
+            return np.clip(np.nan_to_num(delta), -0.5, 0.5)
 
-        # Reject refinement if it moved more than one coarse step from the
-        # grid search best — large jumps indicate chasing noise, not signal.
-        max_shift = self._search_step * 1.5
-        shift = np.sqrt((refined_ux - coarse_ux) ** 2 + (refined_uy - coarse_uy) ** 2)
+        ux, uy = coarse_ux, coarse_uy
+        stats: dict | None = None
 
-        if not result.success or shift > max_shift:
-            if not result.success:
-                logger.debug("Refinement did not converge, using coarse estimate")
-            else:
-                logger.debug(
-                    "Refinement jumped too far (%.2f > %.2f), using coarse estimate",
-                    shift,
-                    max_shift,
-                )
+        for _ in range(3):
+            k_mag = np.sqrt(kx_v**2 + ky_v**2)
+            omega_pred = om0_v - (kx_v * ux + ky_v * uy)
+
+            # Peak search half-width in bins, scaled so the window spans
+            # ~ +- _DU_WINDOW m/s of current at each wavenumber. This keeps
+            # low-k columns from locking onto leakage peaks that would map
+            # to huge velocity errors.
+            half_w = np.clip(
+                np.round(_DU_WINDOW * k_mag / d_omega).astype(np.intp),
+                1,
+                _MAX_SEARCH_BINS,
+            )
+
+            margin = (half_w + 1) * d_omega
+            usable = (np.abs(omega_pred) < omega_nyq - margin) & (np.abs(omega_pred) >= omega_min)
+            idx = np.where(usable)[0]
+            if len(idx) < _MIN_POINTS:
+                return coarse_ux, coarse_uy
+
+            base = np.round(omega_pred[idx] / d_omega).astype(np.intp)
+            offsets = np.arange(-_MAX_SEARCH_BINS, _MAX_SEARCH_BINS + 1)
+            cand_rows = (base[:, np.newaxis] + offsets[np.newaxis, :]) % n_t
+            powers = cols_f[cand_rows, idx[:, np.newaxis]].copy()  # (n_pts, n_off)
+            powers[np.abs(offsets)[np.newaxis, :] > half_w[idx][:, np.newaxis]] = -1.0
+
+            best = powers.argmax(axis=1)
+            peak_row = base + offsets[best]
+            p0 = powers[np.arange(len(idx)), best]
+
+            pm = cols_f[(peak_row - 1) % n_t, idx]
+            pp = cols_f[(peak_row + 1) % n_t, idx]
+
+            # Keep genuine interior peaks with positive power
+            good = (p0 > 0) & (p0 >= pm) & (p0 >= pp)
+            if good.sum() < _MIN_POINTS:
+                return coarse_ux, coarse_uy
+            s = np.where(good)[0]
+
+            # Sub-bin omega via parabolic interpolation
+            delta_w = _parabolic(pm[s], p0[s], pp[s])
+            omega_obs = (peak_row[s] + delta_w) * d_omega
+
+            # Sub-bin (kx, ky) via parabolic interpolation across neighbor
+            # columns at the peak's omega row. Without this, a wave whose
+            # true k falls between grid columns is assigned the bin-center
+            # k, and omega_0(k_bin) is wrong by up to c_g * d_k / 2.
+            row0 = peak_row[s] % n_t
+            iy_c = iy_v[idx][s]
+            ix_c = ix_v[idx][s]
+
+            def _fval(rows: np.ndarray, iy: np.ndarray, ix: np.ndarray) -> np.ndarray:
+                return np.maximum(P[rows, iy, ix] - med2d[iy, ix], 0.0)
+
+            qxm = _fval(row0, iy_c, (ix_c - 1) % n_kx)
+            qx0 = _fval(row0, iy_c, ix_c)
+            qxp = _fval(row0, iy_c, (ix_c + 1) % n_kx)
+            qym = _fval(row0, (iy_c - 1) % n_ky, ix_c)
+            qyp = _fval(row0, (iy_c + 1) % n_ky, ix_c)
+
+            kx_obs = kx_v[idx][s] + _parabolic(qxm, qx0, qxp) * d_k
+            ky_obs = ky_v[idx][s] + _parabolic(qym, qx0, qyp) * d_k
+            km_obs = np.sqrt(kx_obs**2 + ky_obs**2)
+            om0_obs = dispersion_relation(km_obs, self._depth)
+
+            y = om0_obs - omega_obs
+            a = np.column_stack([kx_obs, ky_obs])
+
+            # Inverse-variance weights: quality (peak power) over modeled
+            # frequency variance. The c_g term downweights low-k columns,
+            # whose k-quantization errors map to large velocity errors.
+            c_g = 0.5 * np.sqrt(_G / np.maximum(km_obs, 1e-12))
+            sigma2_omega = (_C_OMEGA * d_omega) ** 2 + (_C_K * c_g * d_k) ** 2
+            w = p0[s] / sigma2_omega
+
+            # Weighted LS with sigma-clipping in *velocity* units: a
+            # frequency residual r maps to a velocity error r / |k|, so
+            # clipping in velocity space removes low-k leakage points whose
+            # frequency residuals look innocuous.
+            keep = np.ones(len(y), dtype=bool)
+            sol = np.array([ux, uy])
+            for _clip in range(4):
+                resid = y - a @ sol
+                resid_vel = resid / np.maximum(km_obs, 1e-12)
+                w_vel = w * km_obs**2
+                sigma_u = np.sqrt(max(1e-12, np.average(resid_vel[keep] ** 2, weights=w_vel[keep])))
+                keep = np.abs(resid_vel) <= _CLIP_SIGMA * sigma_u
+                if keep.sum() < _MIN_POINTS:
+                    return coarse_ux, coarse_uy
+                aw = a[keep] * np.sqrt(w[keep])[:, np.newaxis]
+                yw = y[keep] * np.sqrt(w[keep])
+                sol, *_ = np.linalg.lstsq(aw, yw, rcond=None)
+
+            ux, uy = float(sol[0]), float(sol[1])
+
+            # Parameter uncertainty from the weighted normal equations:
+            # Cov(beta) = sigma2 * (A^T W A)^-1 with sigma2 = sum(w r^2)/dof
+            # (scale-invariant in the relative weights w).
+            aw = a[keep] * np.sqrt(w[keep])[:, np.newaxis]
+            resid = (y - a @ sol)[keep]
+            n_pts = int(keep.sum())
+            dof = max(1, n_pts - 2)
+            sigma2 = float(np.sum(w[keep] * resid**2) / dof)
+            try:
+                cov = sigma2 * np.linalg.inv(aw.T @ aw)
+                ux_err = float(np.sqrt(max(0.0, cov[0, 0])))
+                uy_err = float(np.sqrt(max(0.0, cov[1, 1])))
+            except np.linalg.LinAlgError:
+                ux_err = uy_err = float("nan")
+
+            stats = {
+                "ux_err": ux_err,
+                "uy_err": uy_err,
+                "n_points": n_pts,
+                "rms": float(np.sqrt(np.mean(resid**2))),
+            }
+
+        if not (np.isfinite(ux) and np.isfinite(uy)):
+            return coarse_ux, coarse_uy
+        if np.sqrt(ux**2 + uy**2) > self._search_radius:
+            logger.debug(
+                "LS refinement left the search disc (%.2f, %.2f); using coarse estimate",
+                ux,
+                uy,
+            )
             return coarse_ux, coarse_uy
 
+        self._ls_stats = stats
         logger.debug(
-            "Refinement: (%.3f, %.3f) -> (%.3f, %.3f)",
+            "LS refinement: (%.3f, %.3f) -> (%.3f, %.3f), n=%s",
             coarse_ux,
             coarse_uy,
-            refined_ux,
-            refined_uy,
+            ux,
+            uy,
+            stats["n_points"] if stats else "?",
         )
-        return refined_ux, refined_uy
+        return ux, uy
 
     def _compute_snr(self, ux: float, uy: float) -> float:
         """Compute signal-to-noise ratio for the estimated current.
@@ -1072,7 +1353,15 @@ class CurrentExtractor:
             SNR = (shell_energy / N_shell) / (noise_energy / N_noise)
 
         where ``N_shell`` is the number of bins sampled on the
-        dispersion shell and ``N_noise = N_total - N_shell``.
+        dispersion shell and ``N_noise = N_analysis - N_shell``.
+
+        Both shell and noise are restricted to the analysis set — the
+        valid wavenumber annulus ``k_min < |k| <= k_max`` with
+        ``omega_min <= |omega| < omega_nyq`` — so the SNR compares the
+        shell against bins the shell could actually occupy. Including
+        the (enormous) static-pattern energy near omega = 0 or k bins
+        outside the annulus would deflate the SNR by an arbitrary,
+        scene-dependent factor and make thresholds meaningless.
 
         This gives SNR ~ 1 for pure noise and SNR >> 1 when energy
         is concentrated on the dispersion shell.
@@ -1085,8 +1374,8 @@ class CurrentExtractor:
             Signal-to-noise ratio (>= 0). Returns 0 if total energy is zero.
         """
         shell_energy, n_shell = self._shell_energy(ux, uy)
-        total_energy = float(np.sum(self.power_spectrum))
-        n_total = self.power_spectrum.size
+        total_energy = self._se_analysis_energy
+        n_total = self._se_n_analysis
 
         if total_energy <= 0 or n_shell <= 0:
             return 0.0
