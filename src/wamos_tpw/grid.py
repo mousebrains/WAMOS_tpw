@@ -50,7 +50,9 @@ __all__ = [
     "compute_common_grid",
     "compute_common_grid_from_stats",
     "project_frame_to_common_grid",
+    "quantize_anchor",
     "remap_to_common_grid",
+    "snap_origin",
 ]
 
 
@@ -105,6 +107,43 @@ class GridParams:
 
 _DEG2M = 111_319.5  # meters per degree of latitude
 
+# Coarse cell (degrees) for quantizing equirectangular reference positions.
+# Frames processed independently quantize their own mean position; as long
+# as they fall in the same cell (ship drift << 0.25 deg ~ 28 km within an
+# analysis window) they choose identical references, making their grids
+# commensurate so that remapping between them is exact (no second
+# nearest-neighbor quantization error).
+_ANCHOR_CELL_DEG = 0.25
+
+
+def quantize_anchor(lat: float, lon: float, cell: float = _ANCHOR_CELL_DEG) -> tuple[float, float]:
+    """Quantize a reference position to a coarse global lattice.
+
+    Independently processed frames that quantize positions in the same
+    cell obtain identical equirectangular references (and therefore
+    identical meters-per-degree scales), so their grids can be snapped to
+    a shared lattice.
+
+    Args:
+        lat: Latitude in degrees.
+        lon: Longitude in degrees.
+        cell: Quantization cell size in degrees.
+
+    Returns:
+        (anchor_lat, anchor_lon) on the lattice.
+    """
+    return (round(lat / cell) * cell, round(lon / cell) * cell)
+
+
+def snap_origin(value: float, spacing: float) -> float:
+    """Snap a grid origin down to an integer multiple of the grid spacing.
+
+    Grids whose origins are multiples of a shared spacing (in a shared
+    reference frame) have coincident cell centers, so remapping between
+    them moves no data across cell boundaries.
+    """
+    return float(np.floor(value / spacing) * spacing)
+
 
 # =============================================================================
 # Grid Computation Functions
@@ -133,11 +172,11 @@ def compute_common_grid(
     Returns:
         GridParams with grid parameters.
     """
-    # Get reference position (center of all data)
+    # Reference position: quantized so independently computed grids share
+    # the same equirectangular frame (see quantize_anchor)
     all_lats = np.concatenate(latitudes)
     all_lons = np.concatenate(longitudes)
-    ref_lat = float(np.mean(all_lats))
-    ref_lon = float(np.mean(all_lons))
+    ref_lat, ref_lon = quantize_anchor(float(np.mean(all_lats)), float(np.mean(all_lons)))
 
     # Equirectangular projection: convert lat/lon to meters
     m_per_deg_lon = _DEG2M * np.cos(np.deg2rad(ref_lat))
@@ -147,12 +186,13 @@ def compute_common_grid(
     # Grid spacing from average range resolution, scaled by resolution_scale
     grid_spacing = float(np.mean(range_resolutions)) / resolution_scale
 
-    # Grid extent: data extent + max radar range + padding
+    # Grid extent: data extent + max radar range + padding, with the origin
+    # snapped to the shared lattice so per-frame grids remap exactly
     max_range = float(np.max(max_ranges)) * padding
 
-    x_min = all_x.min() - max_range
+    x_min = snap_origin(all_x.min() - max_range, grid_spacing)
     x_max = all_x.max() + max_range
-    y_min = all_y.min() - max_range
+    y_min = snap_origin(all_y.min() - max_range, grid_spacing)
     y_max = all_y.max() + max_range
 
     # Create bin edges aligned to grid spacing
@@ -225,10 +265,12 @@ def compute_common_grid_from_stats(
     if not position_stats:
         raise ValueError("position_stats cannot be empty")
 
-    # Compute reference position from per-frame means
-    # Mean of means equals true mean when all frames have equal counts
-    ref_lat = float(np.mean([s["lat_mean"] for s in position_stats]))
-    ref_lon = float(np.mean([s["lon_mean"] for s in position_stats]))
+    # Reference position from per-frame means, quantized so independently
+    # computed grids share the same equirectangular frame (quantize_anchor)
+    ref_lat, ref_lon = quantize_anchor(
+        float(np.mean([s["lat_mean"] for s in position_stats])),
+        float(np.mean([s["lon_mean"] for s in position_stats])),
+    )
 
     # Equirectangular projection parameters
     m_per_deg_lon = _DEG2M * np.cos(np.deg2rad(ref_lat))
@@ -248,12 +290,13 @@ def compute_common_grid_from_stats(
     # Grid spacing from average range resolution, scaled by resolution_scale
     grid_spacing = float(np.mean(range_resolutions)) / resolution_scale
 
-    # Grid extent: data extent + max radar range + padding
+    # Grid extent: data extent + max radar range + padding, with the origin
+    # snapped to the shared lattice so per-frame grids remap exactly
     max_range = float(np.max(max_ranges)) * padding
 
-    x_min = x_data_min - max_range
+    x_min = snap_origin(x_data_min - max_range, grid_spacing)
     x_max = x_data_max + max_range
-    y_min = y_data_min - max_range
+    y_min = snap_origin(y_data_min - max_range, grid_spacing)
     y_max = y_data_max + max_range
 
     # Create bin edges aligned to grid spacing

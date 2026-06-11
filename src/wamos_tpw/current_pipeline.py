@@ -262,8 +262,13 @@ class CurrentPipeline:
         pending_tiles_count = 0  # total tile tasks outstanding
         next_cube_id = 0
 
-        def _submit_cube_tiles(cube: FrameCube, window_idx: int) -> None:
-            """Put cube intensity into shared memory and submit tile tasks."""
+        def _submit_cube_tiles(cube: FrameCube, window_idx: int) -> int:
+            """Put cube intensity into shared memory and submit tile tasks.
+
+            Returns the cube id. Tiles masked by ``compute_tile_specs``
+            (seam/radar) are not submitted; a cube may end up with zero
+            pending tiles, which the caller must finish immediately.
+            """
             nonlocal cubes_in_flight, pending_tiles_count, next_cube_id
 
             cube_id = next_cube_id
@@ -286,11 +291,12 @@ class CurrentPipeline:
                 "end_time": cube.timestamps[-1],
             }
 
-            n_tiles = len(specs["tiles"])
+            active_tiles = [t for t in specs["tiles"] if not t.get("masked")]
+            n_tiles = len(active_tiles)
             pending_tiles[cube_id] = n_tiles
             pending_tiles_count += n_tiles
 
-            for tile in specs["tiles"]:
+            for tile in active_tiles:
                 task_data = (
                     shm_name,
                     shm_shape,
@@ -314,12 +320,50 @@ class CurrentPipeline:
 
             cubes_in_flight += 1
             logger.debug(
-                "Submitted %d tile tasks for cube %d (window %d), cubes_in_flight=%d",
+                "Submitted %d/%d tile tasks for cube %d (window %d), cubes_in_flight=%d",
                 n_tiles,
+                len(specs["tiles"]),
                 cube_id,
                 window_idx,
                 cubes_in_flight,
             )
+            return cube_id
+
+        def _finish_cube(cube_id: int) -> CurrentMap | None:
+            """Assemble the CurrentMap for a fully processed cube and clean up."""
+            nonlocal cubes_in_flight
+
+            specs = cube_tile_specs.pop(cube_id)
+            results = cube_tile_results.pop(cube_id)
+            meta = cube_metadata.pop(cube_id)
+            del pending_tiles[cube_id]
+
+            shm_name = cube_shm_names.pop(cube_id)
+            shm_manager.release(shm_name)
+            cubes_in_flight -= 1
+
+            try:
+                return CurrentMap.from_tile_results(specs, results, meta)
+            except Exception:
+                logger.exception("Failed to assemble CurrentMap for cube %d", cube_id)
+                return None
+
+        def _drain_ready_queue() -> list[CurrentMap]:
+            """Submit queued cubes while there is room.
+
+            Cubes whose tiles are all masked finish immediately and their
+            maps are returned for the caller to yield.
+            """
+            done: list[CurrentMap] = []
+            while cubes_ready_to_submit and cubes_in_flight < max_cubes_in_flight:
+                next_cube, next_window_idx = cubes_ready_to_submit.pop(0)
+                cid = _submit_cube_tiles(next_cube, next_window_idx)
+                if pending_tiles[cid] == 0:
+                    finished = _finish_cube(cid)
+                    pbar_current.update(1)
+                    if finished is not None:
+                        done.append(finished)
+            return done
 
         def submit_batch(n: int) -> int:
             nonlocal files_submitted, pending_files
@@ -390,6 +434,16 @@ class CurrentPipeline:
                                     "iy": data.get("iy", 0),
                                 }
                             )
+                            if pending_tiles[cube_id] == 0:
+                                # The failing tile was the cube's last one
+                                current_map = _finish_cube(cube_id)
+                                pbar_current.update(1)
+                                if current_map is not None:
+                                    self._n_processed += 1
+                                    yield current_map
+                                for ready_map in _drain_ready_queue():
+                                    self._n_processed += 1
+                                    yield ready_map
                 else:
                     pending_interp -= 1
                     pbar_interp.update(1)
@@ -469,7 +523,13 @@ class CurrentPipeline:
                                 if on_cube is not None:
                                     on_cube(cube)
                                 elif cubes_in_flight < max_cubes_in_flight:
-                                    _submit_cube_tiles(cube, window_idx)
+                                    cid = _submit_cube_tiles(cube, window_idx)
+                                    if pending_tiles[cid] == 0:
+                                        current_map = _finish_cube(cid)
+                                        pbar_current.update(1)
+                                        if current_map is not None:
+                                            self._n_processed += 1
+                                            yield current_map
                                 else:
                                     cubes_ready_to_submit.append((cube, window_idx))
 
@@ -497,28 +557,17 @@ class CurrentPipeline:
 
                 if pending_tiles[cube_id] == 0:
                     # All tiles for this cube are done — assemble CurrentMap
-                    specs = cube_tile_specs.pop(cube_id)
-                    results = cube_tile_results.pop(cube_id)
-                    meta = cube_metadata.pop(cube_id)
-                    del pending_tiles[cube_id]
-
-                    # Release cube shared memory
-                    shm_name = cube_shm_names.pop(cube_id)
-                    shm_manager.release(shm_name)
-                    cubes_in_flight -= 1
-
-                    try:
-                        current_map = CurrentMap.from_tile_results(specs, results, meta)
+                    current_map = _finish_cube(cube_id)
+                    pbar_current.update(1)
+                    if current_map is not None:
                         self._n_processed += 1
-                        pbar_current.update(1)
                         yield current_map
-                    except Exception:
-                        logger.exception("Failed to assemble CurrentMap for cube %d", cube_id)
 
-                    # Submit next queued cube if room
-                    if cubes_ready_to_submit and cubes_in_flight < max_cubes_in_flight:
-                        next_cube, next_window_idx = cubes_ready_to_submit.pop(0)
-                        _submit_cube_tiles(next_cube, next_window_idx)
+                    # Submit queued cubes while room (cubes with all tiles
+                    # masked finish immediately)
+                    for ready_map in _drain_ready_queue():
+                        self._n_processed += 1
+                        yield ready_map
 
         pbar_files.close()
         pbar_interp.close()
@@ -746,6 +795,14 @@ def _add_arguments(parser) -> None:
         default="netcdf",
         help="Output format (default: netcdf)",
     )
+    parser.add_argument(
+        "--composite-minutes",
+        type=float,
+        default=None,
+        help="Combine successive block maps into inverse-variance weighted "
+        "composites over windows of this many minutes (writes additional "
+        "current_composite_*.nc files)",
+    )
 
     # Processing options
     parser.add_argument(
@@ -869,8 +926,47 @@ def run(args) -> None:
 
     logger.info("Extracted %d current maps", len(current_maps))
 
+    composite_minutes = getattr(args, "composite_minutes", None)
+    if composite_minutes and current_maps:
+        _write_composites(current_maps, composite_minutes, args.output_dir, config)
+
     if args.plot and current_maps:
         _show_current_viewer(current_maps)
+
+
+def _write_composites(
+    current_maps: list[CurrentMap],
+    composite_minutes: float,
+    output_dir: str | None,
+    config: Config,
+) -> None:
+    """Group block maps into composite windows and write composite NetCDFs."""
+    from collections import defaultdict
+
+    from wamos_tpw.current_composite import composite_current_maps, write_composite_netcdf
+
+    window = np.timedelta64(int(composite_minutes * 60_000), "ms")
+    t0 = min(cm.start_time for cm in current_maps)
+
+    groups: dict[int, list[CurrentMap]] = defaultdict(list)
+    for cm in current_maps:
+        groups[int((cm.start_time - t0) // window)].append(cm)
+
+    min_snr = config.get("current.min_snr", 1.5)
+
+    for key in sorted(groups):
+        comp = composite_current_maps(groups[key], min_snr=min_snr)
+        if comp is None:
+            continue
+        logger.info(
+            "Composite %s..%s: %d maps, %d populated cells",
+            comp.start_time,
+            comp.end_time,
+            comp.n_maps,
+            int(np.sum(comp.n_obs >= 2)),
+        )
+        if output_dir:
+            write_composite_netcdf(comp, output_dir)
 
 
 def _write_current_png(current_map: CurrentMap, output_dir: str) -> str:

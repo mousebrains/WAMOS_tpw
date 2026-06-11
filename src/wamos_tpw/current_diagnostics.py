@@ -345,9 +345,11 @@ class CubeCurrentDiag:
             # Submit whole-cube extraction
             whole_future = pool.submit(CurrentExtractor, cube, config=config)
 
-            # Submit sub-cube extractions
+            # Submit sub-cube extractions (skip seam/radar-masked tiles)
             tile_futures: dict[Any, dict] = {}
             for tile in specs["tiles"]:
+                if tile.get("masked"):
+                    continue
                 sub = cube.sub_cube(
                     tile["x_start"],
                     tile["x_end"],
