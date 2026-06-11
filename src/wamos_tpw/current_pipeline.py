@@ -781,6 +781,14 @@ def _add_arguments(parser) -> None:
         default=None,
         help="Minimum SNR to accept estimate (default: 1.5)",
     )
+    parser.add_argument(
+        "--max-tile-range",
+        type=float,
+        default=None,
+        help="Mask tiles farther than this from the radar in meters "
+        "(default: off; ~3000 recommended — wave signal degrades "
+        "steadily with range)",
+    )
 
     # Output options
     parser.add_argument(
@@ -908,6 +916,8 @@ def run(args) -> None:
         config["current.search_radius"] = args.search_radius
     if args.min_snr is not None:
         config["current.min_snr"] = args.min_snr
+    if getattr(args, "max_tile_range", None) is not None:
+        config["current.max_tile_range"] = args.max_tile_range
 
     # Field inversion overrides
     if getattr(args, "window_sizes", None):

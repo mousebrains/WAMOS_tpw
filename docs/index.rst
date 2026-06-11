@@ -98,6 +98,7 @@ Contents
    performance
    current_extraction_review
    resolution_validation
+   realdata_findings
 
 .. toctree::
    :maxdepth: 2

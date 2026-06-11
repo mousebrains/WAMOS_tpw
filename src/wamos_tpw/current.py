@@ -93,6 +93,12 @@ _MIN_SHELL_FRACTION_DEFAULT = 0.25
 # Mask tiles containing the radar or crossed by the antenna rotation seam
 # (pixels on either side of the seam were observed a full rotation apart)
 _MASK_SEAM_DEFAULT = True
+# Mask tiles whose center is farther than this from the radar (meters);
+# None disables. Real-data validation (Revelle 2022, Thompson 2025) shows
+# the wave signal degrades steadily with range — tile scatter grows from
+# ~0.5 m/s inside 2 km to >2 m/s beyond 4 km — so ~3000 is a good value
+# for these installations.
+_MAX_TILE_RANGE_DEFAULT = None
 
 
 # ============================================================
@@ -714,6 +720,18 @@ def compute_tile_specs(
     min_fom = cfg.get("current.min_fom", _MIN_FOM_DEFAULT)
     depth = cfg.get("current.depth", _DEPTH_DEFAULT)
     mask_seam = cfg.get("current.mask_seam", _MASK_SEAM_DEFAULT)
+    max_tile_range = cfg.get("current.max_tile_range", _MAX_TILE_RANGE_DEFAULT)
+
+    # Median radar position in cube coordinates, for range gating
+    radar_x = radar_y = None
+    if (
+        max_tile_range is not None
+        and cube.ship_x is not None
+        and cube.ship_y is not None
+        and np.any(np.isfinite(cube.ship_x))
+    ):
+        radar_x = float(np.nanmedian(cube.ship_x))
+        radar_y = float(np.nanmedian(cube.ship_y))
 
     stride = sub_region_size * (1.0 - sub_region_overlap)
     tile_size_pixels = int(round(sub_region_size / cube.grid_spacing))
@@ -770,6 +788,10 @@ def compute_tile_specs(
                 float(cube.y_centers[y_end - 1] + half),
             )
 
+            masked = mask_seam and _tile_contains_seam(cube, *tile_bounds)
+            if not masked and radar_x is not None:
+                masked = np.hypot(cx - radar_x, cy - radar_y) > max_tile_range
+
             tiles.append(
                 {
                     "ix": ix,
@@ -780,14 +802,18 @@ def compute_tile_specs(
                     "y_end": y_end,
                     "center_x": cx,
                     "center_y": cy,
-                    "masked": mask_seam and _tile_contains_seam(cube, *tile_bounds),
+                    "masked": masked,
                     "scale": 0,
                 }
             )
 
     n_masked = sum(1 for t in tiles if t["masked"])
     if n_masked:
-        logger.debug("Masked %d/%d tiles (seam or radar inside)", n_masked, len(tiles))
+        logger.debug(
+            "Masked %d/%d tiles (seam, radar inside, or beyond max range)",
+            n_masked,
+            len(tiles),
+        )
 
     return {
         "n_tiles_x": n_tiles_x,
