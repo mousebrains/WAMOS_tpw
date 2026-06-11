@@ -61,6 +61,7 @@ __all__ = [
     "CurrentExtractor",
     "CurrentMap",
     "FrameCube",
+    "compute_multiscale_tile_specs",
     "compute_tile_specs",
     "dispersion_relation",
 ]
@@ -399,8 +400,13 @@ class CurrentEstimate:
         ux_err: 1-sigma uncertainty of ux from the least-squares dispersion
                 fit (m/s, NaN when refinement did not run).
         uy_err: 1-sigma uncertainty of uy (m/s, NaN when unavailable).
+        cov_uxuy: Covariance between ux and uy from the least-squares fit
+                (m^2/s^2, NaN when unavailable).
         n_ls_points: Number of spectral peaks used by the least-squares fit.
         ls_rms: RMS frequency residual of the least-squares fit (rad/s).
+        window_size: Side length (m) of the analysis window that produced
+                this estimate (0 when unknown); the estimate is an average
+                of the current over that footprint.
     """
 
     ux: float
@@ -415,8 +421,10 @@ class CurrentEstimate:
     fom: float = 0.0
     ux_err: float = float("nan")
     uy_err: float = float("nan")
+    cov_uxuy: float = float("nan")
     n_ls_points: int = 0
     ls_rms: float = float("nan")
+    window_size: float = 0.0
 
 
 @dataclass
@@ -623,10 +631,17 @@ class CurrentMap:
                 fom=result.get("fom", 0.0),
                 ux_err=result.get("ux_err", float("nan")),
                 uy_err=result.get("uy_err", float("nan")),
+                cov_uxuy=result.get("cov_uxuy", float("nan")),
                 n_ls_points=result.get("n_ls_points", 0),
                 ls_rms=result.get("ls_rms", float("nan")),
+                window_size=result.get("window_size", 0.0),
             )
             estimates.append(est)
+
+            # Only primary-scale tiles populate the regular map arrays;
+            # extra scales contribute estimates for the field inversion
+            if result.get("scale", 0) != 0:
+                continue
 
             snr_map[iy, ix] = est.snr
             if est.snr >= min_snr:
@@ -661,7 +676,11 @@ class CurrentMap:
 # ============================================================
 
 
-def compute_tile_specs(cube: FrameCube, config: Config | None = None) -> dict:
+def compute_tile_specs(
+    cube: FrameCube,
+    config: Config | None = None,
+    sub_region_size: float | None = None,
+) -> dict:
     """Compute tile geometry for spatial current extraction.
 
     Divides the cube's spatial domain into overlapping sub-regions
@@ -670,12 +689,15 @@ def compute_tile_specs(cube: FrameCube, config: Config | None = None) -> dict:
     Args:
         cube: 3D space-time cube of radar intensity.
         config: Configuration object for extraction parameters.
+        sub_region_size: Override the configured window size (meters);
+            used by :func:`compute_multiscale_tile_specs`.
 
     Returns:
         Dict with keys:
         - ``n_tiles_x``, ``n_tiles_y``: Number of tiles in each direction.
         - ``tiles``: List of tile dicts with ``ix``, ``iy``, ``x_start``,
-          ``x_end``, ``y_start``, ``y_end``, ``center_x``, ``center_y``.
+          ``x_end``, ``y_start``, ``y_end``, ``center_x``, ``center_y``,
+          ``masked``, ``scale``.
         - ``tile_x_centers``, ``tile_y_centers``: 1D arrays of tile center
           positions (meters).
         - ``min_snr``: Minimum SNR threshold.
@@ -685,7 +707,8 @@ def compute_tile_specs(cube: FrameCube, config: Config | None = None) -> dict:
 
     cfg = config or NullConfig()
 
-    sub_region_size = cfg.get("current.sub_region_size", _SUB_REGION_SIZE_DEFAULT)
+    if sub_region_size is None:
+        sub_region_size = cfg.get("current.sub_region_size", _SUB_REGION_SIZE_DEFAULT)
     sub_region_overlap = cfg.get("current.sub_region_overlap", _SUB_REGION_OVERLAP_DEFAULT)
     min_snr = cfg.get("current.min_snr", _MIN_SNR_DEFAULT)
     min_fom = cfg.get("current.min_fom", _MIN_FOM_DEFAULT)
@@ -758,6 +781,7 @@ def compute_tile_specs(cube: FrameCube, config: Config | None = None) -> dict:
                     "center_x": cx,
                     "center_y": cy,
                     "masked": mask_seam and _tile_contains_seam(cube, *tile_bounds),
+                    "scale": 0,
                 }
             )
 
@@ -775,6 +799,46 @@ def compute_tile_specs(cube: FrameCube, config: Config | None = None) -> dict:
         "min_fom": min_fom,
         "depth": depth,
     }
+
+
+def compute_multiscale_tile_specs(cube: FrameCube, config: Config | None = None) -> dict:
+    """Compute tile geometry over one or more window sizes.
+
+    The first entry of ``current.window_sizes`` is the primary scale and
+    defines the regular tile grid of the resulting :class:`CurrentMap`;
+    tiles from additional sizes are appended with ``scale >= 1`` and only
+    contribute estimates (for the joint field inversion in
+    :mod:`wamos_tpw.current_field`), never the map arrays.
+
+    Falls back to plain :func:`compute_tile_specs` when
+    ``current.window_sizes`` is not configured.
+
+    Args:
+        cube: 3D space-time cube of radar intensity.
+        config: Configuration object.
+
+    Returns:
+        Spec dict as :func:`compute_tile_specs`, with extra-scale tiles
+        appended to ``tiles`` and a ``window_sizes`` key.
+    """
+    from wamos_tpw.config import NullConfig
+
+    cfg = config or NullConfig()
+    sizes = cfg.get("current.window_sizes", None)
+    if not sizes:
+        return compute_tile_specs(cube, config)
+
+    sizes = [float(s) for s in sizes]
+    specs = compute_tile_specs(cube, config, sub_region_size=sizes[0])
+
+    for scale, size in enumerate(sizes[1:], start=1):
+        extra = compute_tile_specs(cube, config, sub_region_size=size)
+        for tile in extra["tiles"]:
+            tile["scale"] = scale
+            specs["tiles"].append(tile)
+
+    specs["window_sizes"] = sizes
+    return specs
 
 
 def _ray_intersects_rect(
@@ -967,8 +1031,16 @@ class CurrentExtractor:
             fom=fom,
             ux_err=ls.get("ux_err", float("nan")),
             uy_err=ls.get("uy_err", float("nan")),
+            cov_uxuy=ls.get("cov_uxuy", float("nan")),
             n_ls_points=ls.get("n_points", 0),
             ls_rms=ls.get("rms", float("nan")),
+            window_size=float(
+                max(
+                    cube.x_centers[-1] - cube.x_centers[0],
+                    cube.y_centers[-1] - cube.y_centers[0],
+                )
+                + cube.grid_spacing
+            ),
         )
 
     def _prepare_cube(self) -> np.ndarray:
@@ -1452,12 +1524,15 @@ class CurrentExtractor:
                 cov = sigma2 * np.linalg.inv(aw.T @ aw)
                 ux_err = float(np.sqrt(max(0.0, cov[0, 0])))
                 uy_err = float(np.sqrt(max(0.0, cov[1, 1])))
+                cov_uxuy = float(cov[0, 1])
             except np.linalg.LinAlgError:
                 ux_err = uy_err = float("nan")
+                cov_uxuy = float("nan")
 
             stats = {
                 "ux_err": ux_err,
                 "uy_err": uy_err,
+                "cov_uxuy": cov_uxuy,
                 "n_points": n_pts,
                 "rms": float(np.sqrt(np.mean(resid**2))),
             }

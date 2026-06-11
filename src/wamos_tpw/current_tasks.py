@@ -47,12 +47,14 @@ def _do_extract_tile(task):
         center_lat,
         center_lon,
         config_dict,
-    ) = task.data
+    ) = task.data[:17]
+    scale = task.data[17] if len(task.data) > 17 else 0
 
     result_base = {
         "cube_id": cube_id,
         "ix": ix,
         "iy": iy,
+        "scale": scale,
     }
 
     try:
@@ -104,8 +106,10 @@ def _do_extract_tile(task):
                 "fom": est.fom,
                 "ux_err": est.ux_err,
                 "uy_err": est.uy_err,
+                "cov_uxuy": est.cov_uxuy,
                 "n_ls_points": est.n_ls_points,
                 "ls_rms": est.ls_rms,
+                "window_size": est.window_size,
             }
         )
     except Exception as e:

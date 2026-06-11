@@ -709,6 +709,95 @@ class TestComputeTileSpecs:
 
 
 # ============================================================
+# Test multi-scale tile specs
+# ============================================================
+
+
+class TestMultiscaleTileSpecs:
+    """Tests for compute_multiscale_tile_specs."""
+
+    def test_fallback_without_config(self):
+        """Without window_sizes the result equals compute_tile_specs."""
+        from wamos_tpw.current import compute_multiscale_tile_specs
+
+        cube = make_synthetic_cube(n_t=8, n_xy=128, dx=7.5, dt=1.0)
+        specs = compute_multiscale_tile_specs(cube)
+        ref = compute_tile_specs(cube)
+        assert len(specs["tiles"]) == len(ref["tiles"])
+        assert all(t["scale"] == 0 for t in specs["tiles"])
+
+    def test_extra_scales_appended(self):
+        """Additional window sizes append scale>=1 tiles."""
+        from wamos_tpw.config import Config
+        from wamos_tpw.current import compute_multiscale_tile_specs
+
+        cube = make_synthetic_cube(n_t=8, n_xy=128, dx=7.5, dt=1.0)
+        config = Config()
+        config["current.window_sizes"] = [800.0, 400.0]
+        config["current.sub_region_overlap"] = 0.0
+
+        specs = compute_multiscale_tile_specs(cube, config)
+
+        scales = {t["scale"] for t in specs["tiles"]}
+        assert scales == {0, 1}
+        n0 = sum(1 for t in specs["tiles"] if t["scale"] == 0)
+        n1 = sum(1 for t in specs["tiles"] if t["scale"] == 1)
+        assert n1 > n0  # smaller windows -> more tiles
+        # Primary scale defines the regular map geometry
+        assert specs["n_tiles_x"] * specs["n_tiles_y"] == n0
+        assert specs["window_sizes"] == [800.0, 400.0]
+
+    def test_extra_scale_results_not_in_map_arrays(self):
+        """from_tile_results keeps scale>=1 out of the regular arrays."""
+        cube = make_synthetic_cube(n_t=8, n_xy=64, dx=7.5, dt=1.0)
+        specs = compute_tile_specs(cube)
+
+        results = [
+            {
+                "ix": 0,
+                "iy": 0,
+                "ux": 0.5,
+                "uy": -0.3,
+                "speed": 0.58,
+                "direction": 120.0,
+                "snr": 10.0,
+                "depth": np.inf,
+                "center_x": 0.0,
+                "center_y": 0.0,
+                "scale": 0,
+            },
+            {
+                # Out-of-range indices for the primary grid: must be ignored
+                # for the arrays but kept as an estimate
+                "ix": 0,
+                "iy": 0,
+                "ux": 1.5,
+                "uy": 0.7,
+                "speed": 1.66,
+                "direction": 65.0,
+                "snr": 20.0,
+                "depth": np.inf,
+                "center_x": 100.0,
+                "center_y": 100.0,
+                "scale": 1,
+                "window_size": 400.0,
+            },
+        ]
+        meta = {
+            "center_lat": 32.0,
+            "center_lon": -117.0,
+            "start_time": np.datetime64("2022-01-01"),
+            "end_time": np.datetime64("2022-01-01T00:01:00"),
+        }
+        specs["min_snr"] = 0.0
+        cm = CurrentMap.from_tile_results(specs, results, meta)
+
+        assert len(cm.estimates) == 2
+        assert cm.ux[0, 0] == 0.5  # scale-0 value, not the scale-1 one
+        assert {e.window_size for e in cm.estimates} == {0.0, 400.0}
+
+
+# ============================================================
 # Test seam / radar tile masking
 # ============================================================
 
