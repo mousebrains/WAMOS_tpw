@@ -709,6 +709,107 @@ class TestComputeTileSpecs:
 
 
 # ============================================================
+# Test seam / radar tile masking
+# ============================================================
+
+
+class TestSeamMasking:
+    """Tests for rotation-seam and radar-position tile masking."""
+
+    @staticmethod
+    def _cube_with_ship(n_xy=128, dx=7.5, ship_x=0.0, ship_y=0.0, seam=45.0):
+        cube = make_synthetic_cube(n_t=8, n_xy=n_xy, dx=dx, dt=1.0)
+        n_t = cube.n_t
+        cube.ship_x = np.full(n_t, ship_x)
+        cube.ship_y = np.full(n_t, ship_y)
+        cube.seam_bearing = np.full(n_t, seam)
+        return cube
+
+    def test_no_ship_info_unmasked(self):
+        """Cubes without ship track (synthetic) have no masked tiles."""
+        cube = make_synthetic_cube(n_t=8, n_xy=128, dx=7.5, dt=1.0)
+        specs = compute_tile_specs(cube)
+        assert all(not t["masked"] for t in specs["tiles"])
+
+    def test_radar_tile_masked(self):
+        """The tile containing the radar position is masked."""
+        from wamos_tpw.config import Config
+
+        cube = self._cube_with_ship(ship_x=0.0, ship_y=0.0, seam=45.0)
+        config = Config()
+        config["current.sub_region_size"] = 400.0
+        config["current.sub_region_overlap"] = 0.0
+        specs = compute_tile_specs(cube, config)
+
+        masked = [t for t in specs["tiles"] if t["masked"]]
+        assert masked, "Expected at least the radar-containing tile masked"
+        # The tile whose bounds contain (0, 0) must be among them
+        center_tiles = [
+            t
+            for t in specs["tiles"]
+            if cube.x_centers[t["x_start"]] <= 0 <= cube.x_centers[t["x_end"] - 1]
+            and cube.y_centers[t["y_start"]] <= 0 <= cube.y_centers[t["y_end"] - 1]
+        ]
+        assert all(t["masked"] for t in center_tiles)
+
+    def test_seam_ray_masks_downstream_tiles(self):
+        """Tiles along the seam bearing are masked; opposite side is not."""
+        from wamos_tpw.config import Config
+
+        # Radar at cube center, seam pointing due north (bearing 0)
+        cube = self._cube_with_ship(ship_x=0.0, ship_y=0.0, seam=0.0)
+        config = Config()
+        config["current.sub_region_size"] = 300.0
+        config["current.sub_region_overlap"] = 0.0
+        specs = compute_tile_specs(cube, config)
+
+        for t in specs["tiles"]:
+            x0 = cube.x_centers[t["x_start"]]
+            x1 = cube.x_centers[t["x_end"] - 1]
+            y1 = cube.y_centers[t["y_end"] - 1]
+            straddles_x = x0 - 4 <= 0 <= x1 + 4
+            if straddles_x and y1 > 0:
+                assert t["masked"], f"Northward tile on seam not masked: {t}"
+            if not straddles_x and y1 < 0:
+                assert not t["masked"], f"Off-seam southern tile masked: {t}"
+
+    def test_mask_seam_config_off(self):
+        """current.mask_seam = False disables masking."""
+        from wamos_tpw.config import Config
+
+        cube = self._cube_with_ship()
+        config = Config()
+        config["current.sub_region_size"] = 400.0
+        config["current.mask_seam"] = False
+        specs = compute_tile_specs(cube, config)
+        assert all(not t["masked"] for t in specs["tiles"])
+
+    def test_from_cube_skips_masked(self):
+        """CurrentMap.from_cube leaves masked tiles as NaN."""
+        from wamos_tpw.config import Config
+
+        cube = self._cube_with_ship()
+        config = Config()
+        config["current.sub_region_size"] = 400.0
+        config["current.sub_region_overlap"] = 0.0
+        config["current.min_snr"] = 0.0
+
+        specs = compute_tile_specs(cube, config)
+        current_map = CurrentMap.from_cube(cube, config=config)
+
+        for t in specs["tiles"]:
+            if t["masked"]:
+                assert np.isnan(current_map.snr[t["iy"], t["ix"]])
+
+    def test_sub_cube_preserves_ship_track(self):
+        """sub_cube passes ship track and seam through unchanged."""
+        cube = self._cube_with_ship()
+        sub = cube.sub_cube(0, 16, 0, 16)
+        np.testing.assert_array_equal(sub.ship_x, cube.ship_x)
+        np.testing.assert_array_equal(sub.seam_bearing, cube.seam_bearing)
+
+
+# ============================================================
 # Test CurrentMap.from_tile_results
 # ============================================================
 

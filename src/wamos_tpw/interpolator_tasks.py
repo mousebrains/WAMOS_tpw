@@ -765,6 +765,15 @@ def _do_interpolate(task) -> Result:
         "lon_mean": float(np.mean(lons)),
     }
 
+    # Earth bearing of the rotation seam (radial 0 = start of rotation).
+    # Pixels on either side of this radial were observed a full antenna
+    # rotation apart; downstream current extraction masks tiles it crosses.
+    seam_bearing = None
+    if theta is not None and headings is not None and len(headings) > 0 and len(theta) > 0:
+        seam = float((float(theta[0]) + float(headings[0])) % 360.0)
+        if np.isfinite(seam):
+            seam_bearing = seam
+
     result_data = {
         "file_index": current_data.file_index,
         "frame_index": current_data.frame_index,
@@ -779,6 +788,8 @@ def _do_interpolate(task) -> Result:
         "headings": headings,
         # Position statistics for efficient grid computation
         "position_stats": position_stats,
+        # Earth bearing (deg) of the antenna rotation seam (radial 0)
+        "seam_bearing": seam_bearing,
         # Ship and wind metadata (scalar, from .pol file)
         "ship_speed": current_data.ship_speed,
         "wind_speed": current_data.wind_speed,

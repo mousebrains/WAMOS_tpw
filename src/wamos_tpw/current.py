@@ -89,6 +89,9 @@ _OMEGA_MIN_FACTOR_DEFAULT = 2.0
 # this fraction of the maximum possible shell bins (2 branches x n_valid):
 # means over very few bins are noise-dominated.
 _MIN_SHELL_FRACTION_DEFAULT = 0.25
+# Mask tiles containing the radar or crossed by the antenna rotation seam
+# (pixels on either side of the seam were observed a full rotation apart)
+_MASK_SEAM_DEFAULT = True
 
 
 # ============================================================
@@ -109,6 +112,12 @@ class FrameCube:
         grid_spacing: Grid cell size in meters.
         center_lat: Grid center latitude in degrees.
         center_lon: Grid center longitude in degrees.
+        ship_x: Per-frame radar x position in cube coordinates (meters),
+                or None when unknown (e.g. synthetic cubes).
+        ship_y: Per-frame radar y position in cube coordinates (meters).
+        seam_bearing: Per-frame earth bearing (deg) of the antenna rotation
+                seam (radial 0); NaN when unknown. Pixels on either side of
+                the seam radial were observed a full rotation apart.
     """
 
     intensity: np.ndarray  # (n_t, n_y, n_x)
@@ -119,6 +128,9 @@ class FrameCube:
     grid_spacing: float
     center_lat: float
     center_lon: float
+    ship_x: np.ndarray | None = None
+    ship_y: np.ndarray | None = None
+    seam_bearing: np.ndarray | None = None
 
     @property
     def n_t(self) -> int:
@@ -167,9 +179,38 @@ class FrameCube:
 
         intensity_cube = np.full((n_t, n_y, n_x), np.nan, dtype=np.float64)
         timestamps = np.empty(n_t, dtype="datetime64[ns]")
+        ship_x = np.full(n_t, np.nan)
+        ship_y = np.full(n_t, np.nan)
+        seam_bearing = np.full(n_t, np.nan)
+
+        # Grid center in absolute equirectangular meters, for converting
+        # ship positions to cube-centered coordinates
+        x_edges_abs = grid_params.get("x_edges_abs")
+        y_edges_abs = grid_params.get("y_edges_abs")
+        ref_lat = grid_params.get("ref_lat")
+        ref_lon = grid_params.get("ref_lon")
+        m_per_deg = grid_params.get("m_per_deg_lon")
+        have_abs = (
+            x_edges_abs is not None
+            and y_edges_abs is not None
+            and ref_lat is not None
+            and ref_lon is not None
+            and m_per_deg is not None
+        )
+        if have_abs:
+            x_center_abs = (x_edges_abs[0] + x_edges_abs[-1]) / 2
+            y_center_abs = (y_edges_abs[0] + y_edges_abs[-1]) / 2
 
         for i, frame_data in enumerate(frames):
             timestamps[i] = frame_data["timestamp"]
+
+            stats = frame_data.get("position_stats")
+            if have_abs and stats is not None:
+                ship_x[i] = (stats["lon_mean"] - ref_lon) * m_per_deg - x_center_abs
+                ship_y[i] = (stats["lat_mean"] - ref_lat) * _DEG2M - y_center_abs
+            seam = frame_data.get("seam_bearing")
+            if seam is not None:
+                seam_bearing[i] = seam
 
             proj_intensity = frame_data.get("projected_intensity")
             if proj_intensity is None:
@@ -256,6 +297,9 @@ class FrameCube:
             grid_spacing=grid_params["grid_spacing"],
             center_lat=grid_params["center_lat"],
             center_lon=grid_params["center_lon"],
+            ship_x=ship_x if np.any(np.isfinite(ship_x)) else None,
+            ship_y=ship_y if np.any(np.isfinite(ship_y)) else None,
+            seam_bearing=seam_bearing if np.any(np.isfinite(seam_bearing)) else None,
         )
 
     @classmethod
@@ -328,6 +372,11 @@ class FrameCube:
             grid_spacing=self.grid_spacing,
             center_lat=self.center_lat,
             center_lon=self.center_lon,
+            # Ship track and seam are in whole-cube coordinates, which the
+            # sliced x/y centers preserve (sub_cube does not re-center)
+            ship_x=self.ship_x,
+            ship_y=self.ship_y,
+            seam_bearing=self.seam_bearing,
         )
 
 
@@ -458,6 +507,8 @@ class CurrentMap:
         estimates: list[CurrentEstimate] = []
 
         for tile in specs["tiles"]:
+            if tile.get("masked"):
+                continue
             iy = tile["iy"]
             ix = tile["ix"]
             sub = cube.sub_cube(tile["x_start"], tile["x_end"], tile["y_start"], tile["y_end"])
@@ -639,6 +690,7 @@ def compute_tile_specs(cube: FrameCube, config: Config | None = None) -> dict:
     min_snr = cfg.get("current.min_snr", _MIN_SNR_DEFAULT)
     min_fom = cfg.get("current.min_fom", _MIN_FOM_DEFAULT)
     depth = cfg.get("current.depth", _DEPTH_DEFAULT)
+    mask_seam = cfg.get("current.mask_seam", _MASK_SEAM_DEFAULT)
 
     stride = sub_region_size * (1.0 - sub_region_overlap)
     tile_size_pixels = int(round(sub_region_size / cube.grid_spacing))
@@ -687,6 +739,14 @@ def compute_tile_specs(cube: FrameCube, config: Config | None = None) -> dict:
             cx = float(np.mean(cube.x_centers[x_start:x_end]))
             tile_x_centers[ix] = cx
 
+            half = cube.grid_spacing / 2
+            tile_bounds = (
+                float(cube.x_centers[x_start] - half),
+                float(cube.x_centers[x_end - 1] + half),
+                float(cube.y_centers[y_start] - half),
+                float(cube.y_centers[y_end - 1] + half),
+            )
+
             tiles.append(
                 {
                     "ix": ix,
@@ -697,8 +757,13 @@ def compute_tile_specs(cube: FrameCube, config: Config | None = None) -> dict:
                     "y_end": y_end,
                     "center_x": cx,
                     "center_y": cy,
+                    "masked": mask_seam and _tile_contains_seam(cube, *tile_bounds),
                 }
             )
+
+    n_masked = sum(1 for t in tiles if t["masked"])
+    if n_masked:
+        logger.debug("Masked %d/%d tiles (seam or radar inside)", n_masked, len(tiles))
 
     return {
         "n_tiles_x": n_tiles_x,
@@ -710,6 +775,80 @@ def compute_tile_specs(cube: FrameCube, config: Config | None = None) -> dict:
         "min_fom": min_fom,
         "depth": depth,
     }
+
+
+def _ray_intersects_rect(
+    px: float,
+    py: float,
+    bearing_deg: float,
+    x_min: float,
+    x_max: float,
+    y_min: float,
+    y_max: float,
+) -> bool:
+    """Test whether a ray from (px, py) at a compass bearing crosses a rectangle.
+
+    Bearing is degrees clockwise from north, so the direction vector is
+    (sin(bearing), cos(bearing)). Uses the slab method; a ray starting
+    inside the rectangle counts as intersecting.
+    """
+    b = np.deg2rad(bearing_deg)
+    dx = float(np.sin(b))
+    dy = float(np.cos(b))
+
+    t_min = 0.0
+    t_max = np.inf
+
+    for p, d, lo, hi in ((px, dx, x_min, x_max), (py, dy, y_min, y_max)):
+        if abs(d) < 1e-12:
+            if p < lo or p > hi:
+                return False
+        else:
+            t1 = (lo - p) / d
+            t2 = (hi - p) / d
+            if t1 > t2:
+                t1, t2 = t2, t1
+            t_min = max(t_min, t1)
+            t_max = min(t_max, t2)
+            if t_min > t_max:
+                return False
+
+    return True
+
+
+def _tile_contains_seam(
+    cube: FrameCube,
+    x_min: float,
+    x_max: float,
+    y_min: float,
+    y_max: float,
+) -> bool:
+    """Check whether any frame's rotation seam (or the radar itself) is in the tile.
+
+    Pixels on either side of the seam radial were observed a full antenna
+    rotation apart, so a tile the seam crosses contains a time discontinuity
+    of ~dt within single "snapshots". A tile containing the radar position
+    spans all azimuths and always contains the seam.
+
+    Returns False when the cube has no ship-track information (synthetic
+    cubes), leaving such cubes unmasked.
+    """
+    if cube.ship_x is None or cube.ship_y is None:
+        return False
+
+    seam = cube.seam_bearing if cube.seam_bearing is not None else np.full(len(cube.ship_x), np.nan)
+
+    for px, py, bearing in zip(cube.ship_x, cube.ship_y, seam, strict=True):
+        if not (np.isfinite(px) and np.isfinite(py)):
+            continue
+        if x_min <= px <= x_max and y_min <= py <= y_max:
+            return True
+        if np.isfinite(bearing) and _ray_intersects_rect(
+            float(px), float(py), float(bearing), x_min, x_max, y_min, y_max
+        ):
+            return True
+
+    return False
 
 
 # ============================================================
