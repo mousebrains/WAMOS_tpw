@@ -862,6 +862,32 @@ class TestSeamMasking:
             if not straddles_x and y1 < 0:
                 assert not t["masked"], f"Off-seam southern tile masked: {t}"
 
+    def test_max_tile_range(self):
+        """Tiles beyond current.max_tile_range from the radar are masked."""
+        from wamos_tpw.config import Config
+
+        cube = self._cube_with_ship(ship_x=0.0, ship_y=0.0, seam=0.0)
+        config = Config()
+        config["current.sub_region_size"] = 300.0
+        config["current.sub_region_overlap"] = 0.0
+        config["current.mask_seam"] = False
+        config["current.max_tile_range"] = 250.0
+
+        specs = compute_tile_specs(cube, config)
+        for t in specs["tiles"]:
+            r = np.hypot(t["center_x"], t["center_y"])
+            assert t["masked"] == (r > 250.0), f"tile at r={r:.0f}: {t['masked']}"
+
+    def test_max_tile_range_needs_ship_track(self):
+        """Range gating is inert when the cube has no ship positions."""
+        from wamos_tpw.config import Config
+
+        cube = make_synthetic_cube(n_t=8, n_xy=128, dx=7.5, dt=1.0)
+        config = Config()
+        config["current.max_tile_range"] = 100.0
+        specs = compute_tile_specs(cube, config)
+        assert all(not t["masked"] for t in specs["tiles"])
+
     def test_mask_seam_config_off(self):
         """current.mask_seam = False disables masking."""
         from wamos_tpw.config import Config
