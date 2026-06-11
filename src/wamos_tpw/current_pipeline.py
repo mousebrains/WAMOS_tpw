@@ -795,6 +795,14 @@ def _add_arguments(parser) -> None:
         default="netcdf",
         help="Output format (default: netcdf)",
     )
+    parser.add_argument(
+        "--composite-minutes",
+        type=float,
+        default=None,
+        help="Combine successive block maps into inverse-variance weighted "
+        "composites over windows of this many minutes (writes additional "
+        "current_composite_*.nc files)",
+    )
 
     # Processing options
     parser.add_argument(
@@ -918,8 +926,47 @@ def run(args) -> None:
 
     logger.info("Extracted %d current maps", len(current_maps))
 
+    composite_minutes = getattr(args, "composite_minutes", None)
+    if composite_minutes and current_maps:
+        _write_composites(current_maps, composite_minutes, args.output_dir, config)
+
     if args.plot and current_maps:
         _show_current_viewer(current_maps)
+
+
+def _write_composites(
+    current_maps: list[CurrentMap],
+    composite_minutes: float,
+    output_dir: str | None,
+    config: Config,
+) -> None:
+    """Group block maps into composite windows and write composite NetCDFs."""
+    from collections import defaultdict
+
+    from wamos_tpw.current_composite import composite_current_maps, write_composite_netcdf
+
+    window = np.timedelta64(int(composite_minutes * 60_000), "ms")
+    t0 = min(cm.start_time for cm in current_maps)
+
+    groups: dict[int, list[CurrentMap]] = defaultdict(list)
+    for cm in current_maps:
+        groups[int((cm.start_time - t0) // window)].append(cm)
+
+    min_snr = config.get("current.min_snr", 1.5)
+
+    for key in sorted(groups):
+        comp = composite_current_maps(groups[key], min_snr=min_snr)
+        if comp is None:
+            continue
+        logger.info(
+            "Composite %s..%s: %d maps, %d populated cells",
+            comp.start_time,
+            comp.end_time,
+            comp.n_maps,
+            int(np.sum(comp.n_obs >= 2)),
+        )
+        if output_dir:
+            write_composite_netcdf(comp, output_dir)
 
 
 def _write_current_png(current_map: CurrentMap, output_dir: str) -> str:
