@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from wamos_tpw.current import CurrentMap, FrameCube, compute_tile_specs
+from wamos_tpw.current import CurrentMap, FrameCube, compute_multiscale_tile_specs
 from wamos_tpw.grid import compute_common_grid_from_stats
 from wamos_tpw.merged_image import TimeWindowConfig
 from wamos_tpw.window import create_time_windows
@@ -279,7 +279,7 @@ class CurrentPipeline:
             shm_manager.register(shm_name, refcount=1)
             cube_shm_names[cube_id] = shm_name
 
-            specs = compute_tile_specs(cube, self._config)
+            specs = compute_multiscale_tile_specs(cube, self._config)
             cube_tile_specs[cube_id] = specs
             cube_tile_results[cube_id] = []
 
@@ -315,6 +315,7 @@ class CurrentPipeline:
                     cube.center_lat,
                     cube.center_lon,
                     config_dict,
+                    tile.get("scale", 0),
                 )
                 executor.submit(Priority.HIGHEST, "extract_tile", task_data)
 
@@ -804,6 +805,42 @@ def _add_arguments(parser) -> None:
         "current_composite_*.nc files)",
     )
 
+    # Joint field inversion options
+    parser.add_argument(
+        "--field",
+        action="store_true",
+        help="Solve a joint regularized inversion of all window estimates "
+        "for a fine-grid current field per block (writes "
+        "current_field_*.nc files)",
+    )
+    parser.add_argument(
+        "--window-sizes",
+        type=str,
+        default=None,
+        help="Comma-separated analysis window sizes in meters, e.g. "
+        "'2000,1000'. The first defines the regular tile map; additional "
+        "sizes contribute estimates to the field inversion "
+        "(default: sub-region size only; with --field: '2000,1000')",
+    )
+    parser.add_argument(
+        "--field-spacing",
+        type=float,
+        default=None,
+        help="Field inversion output cell size in meters (default: 250)",
+    )
+    parser.add_argument(
+        "--field-correlation-length",
+        type=float,
+        default=None,
+        help="Smoothness prior length scale in meters (default: 1000)",
+    )
+    parser.add_argument(
+        "--field-sigma-prior",
+        type=float,
+        default=None,
+        help="Expected current variation over the correlation length in m/s (default: 0.3)",
+    )
+
     # Processing options
     parser.add_argument(
         "--workers",
@@ -872,6 +909,20 @@ def run(args) -> None:
     if args.min_snr is not None:
         config["current.min_snr"] = args.min_snr
 
+    # Field inversion overrides
+    if getattr(args, "window_sizes", None):
+        config["current.window_sizes"] = [float(s) for s in args.window_sizes.split(",")]
+    elif getattr(args, "field", False) and not config.get("current.window_sizes", None):
+        config["current.window_sizes"] = [2000.0, 1000.0]
+    if getattr(args, "field", False):
+        config["current.field"] = True
+    if getattr(args, "field_spacing", None) is not None:
+        config["current.field_spacing"] = args.field_spacing
+    if getattr(args, "field_correlation_length", None) is not None:
+        config["current.field_correlation_length"] = args.field_correlation_length
+    if getattr(args, "field_sigma_prior", None) is not None:
+        config["current.field_sigma_prior"] = args.field_sigma_prior
+
     filenames = Filenames(args.stime, args.etime, args.polar_path)
     files = list(filenames)
 
@@ -923,6 +974,8 @@ def run(args) -> None:
                 write_current_netcdf(current_map, args.output_dir)
             if args.format in ("png", "both"):
                 _write_current_png(current_map, args.output_dir)
+        if config.get("current.field", False):
+            _write_field(current_map, args.output_dir, config)
 
     logger.info("Extracted %d current maps", len(current_maps))
 
@@ -932,6 +985,35 @@ def run(args) -> None:
 
     if args.plot and current_maps:
         _show_current_viewer(current_maps)
+
+
+def _write_field(
+    current_map: CurrentMap,
+    output_dir: str | None,
+    config: Config,
+) -> None:
+    """Solve the joint field inversion for one block and write its NetCDF."""
+    from wamos_tpw.current_field import solve_current_field, write_field_netcdf
+
+    fld = solve_current_field(
+        current_map.estimates,
+        field_spacing=config.get("current.field_spacing", 250.0),
+        correlation_length=config.get("current.field_correlation_length", 1000.0),
+        sigma_prior=config.get("current.field_sigma_prior", 0.3),
+        min_snr=config.get("current.min_snr", 1.5),
+        center_lat=current_map.center_lat,
+        center_lon=current_map.center_lon,
+        start_time=current_map.start_time,
+        end_time=current_map.end_time,
+    )
+    if fld is None:
+        logger.warning(
+            "Field inversion produced no result for block %s",
+            current_map.start_time,
+        )
+        return
+    if output_dir:
+        write_field_netcdf(fld, output_dir)
 
 
 def _write_composites(
