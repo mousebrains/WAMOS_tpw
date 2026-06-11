@@ -359,8 +359,10 @@ def _project_frame_numpy(
     y_origin = y_edges_abs[0]
     inv_spacing = 1.0 / grid_spacing
 
-    x_idx = ((x_coords - x_origin) * inv_spacing).astype(np.int32)
-    y_idx = ((y_coords - y_origin) * inv_spacing).astype(np.int32)
+    # floor (not int-cast) so coordinates in (-spacing, 0) fall outside the
+    # grid instead of being truncated into bin 0
+    x_idx = np.floor((x_coords - x_origin) * inv_spacing).astype(np.int32)
+    y_idx = np.floor((y_coords - y_origin) * inv_spacing).astype(np.int32)
 
     # Flatten arrays
     x_flat = x_idx.ravel()
@@ -435,8 +437,8 @@ if _HAS_CUPY_GPU:
         y_origin = float(y_edges_abs[0])
         inv_spacing = 1.0 / grid_spacing
 
-        x_idx = ((x_coords - x_origin) * inv_spacing).astype(_cp.int32)
-        y_idx = ((y_coords - y_origin) * inv_spacing).astype(_cp.int32)
+        x_idx = _cp.floor((x_coords - x_origin) * inv_spacing).astype(_cp.int32)
+        y_idx = _cp.floor((y_coords - y_origin) * inv_spacing).astype(_cp.int32)
 
         # Flatten
         x_flat = x_idx.ravel()
@@ -532,9 +534,9 @@ def remap_to_common_grid(
     src_x_centers = (src_x_edges[:-1] + src_x_edges[1:]) * 0.5
     src_y_centers = (src_y_edges[:-1] + src_y_edges[1:]) * 0.5
 
-    # Compute destination indices for 1D arrays
-    dst_ix_1d = ((src_x_centers - dst_x0) * inv_dst_dx).astype(np.int32)
-    dst_iy_1d = ((src_y_centers - dst_y0) * inv_dst_dy).astype(np.int32)
+    # Compute destination indices for 1D arrays (floor: see projection note)
+    dst_ix_1d = np.floor((src_x_centers - dst_x0) * inv_dst_dx).astype(np.int32)
+    dst_iy_1d = np.floor((src_y_centers - dst_y0) * inv_dst_dy).astype(np.int32)
 
     # Find valid x and y ranges (cells that map into destination grid)
     valid_x = (dst_ix_1d >= 0) & (dst_ix_1d < dst_n_x)
@@ -663,9 +665,9 @@ try:
                 x = sin_b * r + sx
                 y = cos_b * r + sy
 
-                # Convert to grid indices
-                x_idx = int((x - x_origin) * inv_spacing)
-                y_idx = int((y - y_origin) * inv_spacing)
+                # Convert to grid indices (floor: see projection note)
+                x_idx = int(np.floor((x - x_origin) * inv_spacing))
+                y_idx = int(np.floor((y - y_origin) * inv_spacing))
 
                 # Check bounds and accumulate
                 if 0 <= x_idx < n_x and 0 <= y_idx < n_y:
@@ -720,8 +722,8 @@ try:
                 x = sin_b * r + sx
                 y = cos_b * r + sy
 
-                x_idx = int((x - x_origin) * inv_spacing)
-                y_idx = int((y - y_origin) * inv_spacing)
+                x_idx = int(np.floor((x - x_origin) * inv_spacing))
+                y_idx = int(np.floor((y - y_origin) * inv_spacing))
 
                 if 0 <= x_idx < n_x and 0 <= y_idx < n_y:
                     linear_idx = y_idx * n_x + x_idx
@@ -891,8 +893,8 @@ try:
         src_x_centers = (src_x_edges[:-1] + src_x_edges[1:]) * 0.5
         src_y_centers = (src_y_edges[:-1] + src_y_edges[1:]) * 0.5
 
-        dst_ix_1d = ((src_x_centers - dst_x0) / dst_dx).astype(np.int32)
-        dst_iy_1d = ((src_y_centers - dst_y0) / dst_dy).astype(np.int32)
+        dst_ix_1d = np.floor((src_x_centers - dst_x0) / dst_dx).astype(np.int32)
+        dst_iy_1d = np.floor((src_y_centers - dst_y0) / dst_dy).astype(np.int32)
 
         valid_x = (dst_ix_1d >= 0) & (dst_ix_1d < dst_n_x)
         valid_y = (dst_iy_1d >= 0) & (dst_iy_1d < dst_n_y)

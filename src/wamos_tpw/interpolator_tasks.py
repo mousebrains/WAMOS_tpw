@@ -76,8 +76,10 @@ try:
                 v = intensity[i, j]
                 if np.isnan(v):
                     continue
-                xi = int((sin_bearing[i] * ground_range[j] + sx) * inv_spacing)
-                yi = int((cos_bearing[i] * ground_range[j] + sy) * inv_spacing)
+                # floor (not int-cast) so coordinates in (-spacing, 0) fall
+                # outside the grid instead of being truncated into bin 0
+                xi = int(np.floor((sin_bearing[i] * ground_range[j] + sx) * inv_spacing))
+                yi = int(np.floor((cos_bearing[i] * ground_range[j] + sy) * inv_spacing))
                 if 0 <= xi < n_x and 0 <= yi < n_y:
                     idx = yi * n_x + xi
                     out_sum[idx] += v
@@ -121,8 +123,8 @@ def _project_cupy(
     x_coords = (_cp.outer(t_sin, t_gr) + (t_sx[:, None] - x_min)) * inv_spacing
     y_coords = (_cp.outer(t_cos, t_gr) + (t_sy[:, None] - y_min)) * inv_spacing
 
-    x_idx = x_coords.astype(_cp.int32).ravel()
-    y_idx = y_coords.astype(_cp.int32).ravel()
+    x_idx = _cp.floor(x_coords).astype(_cp.int32).ravel()
+    y_idx = _cp.floor(y_coords).astype(_cp.int32).ravel()
     vals = t_int.ravel()
 
     valid = (x_idx >= 0) & (x_idx < n_x) & (y_idx >= 0) & (y_idx < n_y) & ~_cp.isnan(vals)
@@ -653,7 +655,7 @@ def _do_interpolate(task) -> Result:
             # Numpy fallback: fused coordinate → grid index computation.
             # Eliminates intermediate float64 x_coords/y_coords arrays.
             x_idx = (
-                (
+                np.floor(
                     (np.outer(sin_bearing, ground_range) + (ship_x[:, np.newaxis] - x_min))
                     * inv_spacing
                 )
@@ -661,7 +663,7 @@ def _do_interpolate(task) -> Result:
                 .ravel()
             )
             y_idx = (
-                (
+                np.floor(
                     (np.outer(cos_bearing, ground_range) + (ship_y[:, np.newaxis] - y_min))
                     * inv_spacing
                 )

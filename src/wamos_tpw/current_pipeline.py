@@ -651,6 +651,30 @@ def write_current_netcdf(current_map: CurrentMap, output_dir: str) -> str:
         },
     )
 
+    if current_map.ux_err is not None and current_map.uy_err is not None:
+        ds["ux_err"] = (
+            ["y", "x"],
+            current_map.ux_err.astype(np.float32),
+            {
+                "long_name": "1-sigma uncertainty of eastward sea water velocity",
+                "units": "m s-1",
+                "comment": "Formal least-squares uncertainty; assumes independent "
+                "spectral peaks, so it underestimates the true error when "
+                "residuals are correlated",
+            },
+        )
+        ds["uy_err"] = (
+            ["y", "x"],
+            current_map.uy_err.astype(np.float32),
+            {
+                "long_name": "1-sigma uncertainty of northward sea water velocity",
+                "units": "m s-1",
+                "comment": "Formal least-squares uncertainty; assumes independent "
+                "spectral peaks, so it underestimates the true error when "
+                "residuals are correlated",
+            },
+        )
+
     encoding = {var: {"zlib": True, "complevel": 4, "dtype": "float32"} for var in ds.data_vars}
     ds.to_netcdf(filepath, encoding=encoding)
 

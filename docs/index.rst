@@ -96,6 +96,7 @@ Contents
    deployment
    examples
    performance
+   current_extraction_review
 
 .. toctree::
    :maxdepth: 2
