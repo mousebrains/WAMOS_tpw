@@ -534,3 +534,112 @@ class TestGridIntegration:
         # Verify shapes
         assert remapped_sum.shape == (coarse_n_y, coarse_n_x)
         assert remapped_count.shape == (coarse_n_y, coarse_n_x)
+
+
+class TestLatticeSnapping:
+    """Tests for shared-anchor quantization and exact lattice remapping."""
+
+    def test_quantize_anchor_same_cell(self):
+        """Nearby positions quantize to the identical anchor."""
+        from wamos_tpw.grid import quantize_anchor
+
+        a1 = quantize_anchor(32.7101, -117.1702)
+        a2 = quantize_anchor(32.7233, -117.1581)  # ~1.5 km away
+        assert a1 == a2
+
+    def test_quantize_anchor_deterministic(self):
+        """Anchor is an exact multiple of the cell size."""
+        from wamos_tpw.grid import quantize_anchor
+
+        lat, lon = quantize_anchor(32.71, -117.17)
+        assert lat == round(lat / 0.25) * 0.25
+        assert lon == round(lon / 0.25) * 0.25
+
+    def test_snap_origin(self):
+        """Origins snap down to multiples of the spacing."""
+        from wamos_tpw.grid import snap_origin
+
+        assert snap_origin(-3001.2, 7.5) == -3007.5
+        assert snap_origin(15.0, 7.5) == 15.0
+
+    def test_remap_is_exact_on_shared_lattice(self):
+        """Frames built on the shared lattice remap with no smearing.
+
+        Simulates two frames at slightly different ship positions, each
+        with its own snapped grid, remapped onto a common grid computed
+        from position stats. Every populated destination cell must receive
+        exactly the value of the coincident source cell (count == 1), i.e.
+        the remap is one-to-one rather than re-binning.
+        """
+        from wamos_tpw.grid import (
+            _DEG2M,
+            compute_common_grid_from_stats,
+            quantize_anchor,
+            remap_to_common_grid,
+            snap_origin,
+        )
+
+        spacing = 7.5
+        max_range = 300.0
+
+        ship_positions = [(32.7101, -117.1702), (32.7115, -117.1689)]
+        stats = [
+            {
+                "lat_min": lat,
+                "lat_max": lat,
+                "lat_mean": lat,
+                "lon_min": lon,
+                "lon_max": lon,
+                "lon_mean": lon,
+            }
+            for lat, lon in ship_positions
+        ]
+
+        common = compute_common_grid_from_stats(
+            position_stats=stats,
+            max_ranges=[max_range, max_range],
+            range_resolutions=[spacing, spacing],
+            padding=1.0,
+        )
+
+        def value_of(x_center: float, y_center: float) -> float:
+            # Unique deterministic value per absolute lattice cell
+            return np.round(x_center / spacing) * 1e4 + np.round(y_center / spacing)
+
+        for lat, lon in ship_positions:
+            ref_lat, ref_lon = quantize_anchor(lat, lon)
+            assert (ref_lat, ref_lon) == (common["ref_lat"], common["ref_lon"])
+            m_per_deg = _DEG2M * np.cos(np.deg2rad(ref_lat))
+
+            sx = (lon - ref_lon) * m_per_deg
+            sy = (lat - ref_lat) * _DEG2M
+            x_min = snap_origin(sx - max_range, spacing)
+            y_min = snap_origin(sy - max_range, spacing)
+            n = int(np.ceil((sx + max_range - x_min) / spacing))
+            m = int(np.ceil((sy + max_range - y_min) / spacing))
+            x_edges = x_min + np.arange(n + 1) * spacing
+            y_edges = y_min + np.arange(m + 1) * spacing
+
+            xc = (x_edges[:-1] + x_edges[1:]) / 2
+            yc = (y_edges[:-1] + y_edges[1:]) / 2
+            intensity = value_of(xc[np.newaxis, :], yc[:, np.newaxis] * 0 + yc[:, np.newaxis])
+
+            dst_sum, dst_count = remap_to_common_grid(
+                intensity=intensity,
+                count=None,
+                src_x_edges=x_edges,
+                src_y_edges=y_edges,
+                dst_x_edges=common["x_edges_abs"],
+                dst_y_edges=common["y_edges_abs"],
+                dst_n_x=common["n_x"],
+                dst_n_y=common["n_y"],
+            )
+
+            # One-to-one: every populated cell received exactly one source cell
+            assert dst_count.max() == 1
+
+            dst_xc = (common["x_edges_abs"][:-1] + common["x_edges_abs"][1:]) / 2
+            dst_yc = (common["y_edges_abs"][:-1] + common["y_edges_abs"][1:]) / 2
+            iy, ix = np.where(dst_count == 1)
+            expected = value_of(dst_xc[ix], dst_yc[iy])
+            np.testing.assert_allclose(dst_sum[iy, ix], expected, rtol=0, atol=1e-9)

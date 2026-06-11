@@ -564,9 +564,14 @@ def _do_interpolate(task) -> Result:
         if longitudes is None:
             longitudes = interp.longitudes
 
-        # Reference point for equirectangular projection
-        ref_lat = float(np.mean(latitudes))
-        ref_lon = float(np.mean(longitudes))
+        # Reference point for equirectangular projection, quantized to a
+        # coarse global lattice so frames processed independently share the
+        # same reference (and meters-per-degree scale); combined with the
+        # origin snapping below this makes per-frame grids commensurate
+        # with the common analysis grid, so remapping is exact.
+        from wamos_tpw.grid import quantize_anchor, snap_origin
+
+        ref_lat, ref_lon = quantize_anchor(float(np.mean(latitudes)), float(np.mean(longitudes)))
 
         # Equirectangular: convert ship lat/lon to meters relative to reference
         _DEG2M = 111_319.5  # meters per degree of latitude
@@ -589,9 +594,9 @@ def _do_interpolate(task) -> Result:
             angular_width = float(ground_range[-1]) * 2 * np.pi / n_bearings
             grid_spacing = max(range_res, angular_width)
 
-        x_min = ship_x.min() - max_range
+        x_min = snap_origin(ship_x.min() - max_range, grid_spacing)
         x_max = ship_x.max() + max_range
-        y_min = ship_y.min() - max_range
+        y_min = snap_origin(ship_y.min() - max_range, grid_spacing)
         y_max = ship_y.max() + max_range
 
         n_x = int(np.ceil((x_max - x_min) / grid_spacing))
