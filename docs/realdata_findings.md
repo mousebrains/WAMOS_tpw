@@ -123,6 +123,17 @@ consistent with semidiurnal tidal currents; the inertial period at 14°N
 (~49 h) is too long to contribute. Wall time: ~50 minutes on the M4 Max
 for 9.2 hours of data — roughly 11x real time at one block every 23 s.
 
+![Time series](figures/realdata/wedding_cake_timeseries.png)
+
+![Hodograph](figures/realdata/wedding_cake_hodograph.png)
+
+![Composite map](figures/realdata/wedding_cake_map.png)
+
+Reproduce with `tools/station_timeseries.py <output-dir> --target
+14.117669,145.113607`; the threshold/range analysis behind Findings 1–3
+is `tools/current_quality_sweep.py <output-dir>` (run the pipeline with
+``--min-snr 0`` first so the full distribution is captured).
+
 ## Recommended starting configuration for bulk reprocessing
 
 ```bash
