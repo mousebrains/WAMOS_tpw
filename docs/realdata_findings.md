@@ -3,8 +3,8 @@
 First real-data shakedown of the rebuilt current-extraction pipeline
 (review + phases 1–3) on two ships and radar installations:
 
-- **R/V Roger Revelle**, 2022-04-05 14:00–14:15 UTC, near Guam
-  (14.09°N 145.13°E, ARCTERX). One frame per `.pol.zst` file, 1.42 s
+- **R/V Roger Revelle**, 2022-04-05 14:00–14:15 UTC, off Wedding Cake
+  (Mt. Taipingot), Rota (14.09°N 145.13°E, ARCTERX). One frame per `.pol.zst` file, 1.42 s
   rotation, 2514 × 1552 polar bins (~7 km range), ship nearly stationary
   (0.5 m/s). Ship-instrument NetCDFs available (`--ship-data`).
 - **R/V Thomas G. Thompson**, 2025-01-16 20:00–20:15 UTC, near Saipan
@@ -28,7 +28,7 @@ The Thompson current is physically sensible — westward at ~0.5 m/s at
 15°N in the Marianas is the North Equatorial Current — and is stable
 block to block **even with the ship underway at 8 knots**, which
 exercises the motion compensation end to end. The Revelle window shows
-weak (0.1–0.3 m/s) currents near Guam; at that amplitude single blocks
+weak (0.1–0.3 m/s) currents off Rota; at that amplitude single blocks
 are noise-dominated and the 15-minute composites are the usable product.
 
 ## Finding 1: wave signal is usable only to ~3 km range
@@ -94,7 +94,7 @@ compositing.
   days 20–24 are misfiled as `2025/DD/HH` (month level missing).
   `Filenames` discovery cannot see the misfiled days; moving them under
   `2025/01/` makes them discoverable.
-- **Land contamination (Revelle)**: Guam is inside the radar range;
+- **Land contamination (Revelle)**: Rota is inside the radar range;
   land tiles currently rely on SNR/FOM gating to fail. A coastline or
   static-intensity land mask would be a clean future improvement, but
   the 3 km range gate already removes most affected tiles at this site.
@@ -103,6 +103,25 @@ compositing.
   interference from other radars; the omega-localized bands overlap the
   dispersion shell only at specific k and appear to be handled by the
   robust fit, but worth monitoring.
+
+## Station demonstration: 9 hours off Wedding Cake, Rota
+
+The Revelle occupied 14.1177°N 145.1136°E (off Mt. Taipingot, "Wedding
+Cake", Rota) from 2022-04-05 00:11 to 09:26 UTC. Processing the full
+occupation (~23,000 files, 37 fifteen-minute composites, gated
+configuration below) resolves a coherent **clockwise-rotating tidal
+current** of 0.1–0.3 m/s superposed on a weak mean flow:
+
+- mean current 0.14 m/s toward 022°,
+- semidiurnal harmonic amplitude ~0.13 m/s (ux) / 0.07 m/s (uy),
+- residual about the mean+M2 fit: 0.064 m/s median,
+- per-composite scatter-based errors ~0.04 m/s — the point-to-point
+  smoothness of the series confirms the error scale.
+
+The rotation sense (clockwise) and period (most of a cycle in 9 h) are
+consistent with semidiurnal tidal currents; the inertial period at 14°N
+(~49 h) is too long to contribute. Wall time: ~50 minutes on the M4 Max
+for 9.2 hours of data — roughly 11x real time at one block every 23 s.
 
 ## Recommended starting configuration for bulk reprocessing
 
