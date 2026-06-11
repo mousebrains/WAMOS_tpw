@@ -16,11 +16,16 @@ U(x, y) on a fine grid, and the field is recovered by minimizing
     J(u) = sum_w (A_w u - d_w)^T C_w^-1 (A_w u - d_w)
          + sum_edges ((u_i - u_j) * L_c / (sigma_prior * h))^2
 
-where ``A_w`` averages the field cells inside window w's footprint,
-``d_w`` is the window's (ux, uy) with its 2x2 least-squares covariance
-``C_w``, and the second term is a first-difference smoothness prior:
-gradients of order ``sigma_prior / L_c`` cost about one unit per cell
-edge, comparable to a 1-sigma data misfit.
+where ``A_w`` is a Hann^2-weighted average over window w's footprint —
+the kernel the dispersion estimator actually applies: the extractor uses
+a spatial Hann window and works with the power spectrum, so its
+effective sensing footprint is concentrated toward the window center
+(empirically a 2 km Hann window recovers a 2 km sinusoidal current at
+~0.9 amplitude, where a boxcar kernel would predict zero). ``d_w`` is
+the window's (ux, uy) with its 2x2 least-squares covariance ``C_w``, and
+the second term is a first-difference smoothness prior: gradients of
+order ``sigma_prior / L_c`` cost about one unit per cell edge,
+comparable to a 1-sigma data misfit.
 
 Because small windows resolve only short waves and large windows resolve
 long waves, mixing window sizes lets short waves carry high-resolution
@@ -184,6 +189,7 @@ def solve_current_field(
     # ---- Per-observation footprints and 2x2 weights ----
     coverage = np.zeros(n_cells, dtype=np.int32)
     obs_cells: list[np.ndarray] = []
+    obs_fpw: list[np.ndarray] = []  # footprint weights (sum to 1)
     obs_weights: list[tuple[float, float, float]] = []  # (w00, w01, w11)
     obs_data: list[tuple[float, float]] = []
 
@@ -196,6 +202,21 @@ def solve_current_field(
         cells = (in_y[:, np.newaxis] * n_x + in_x[np.newaxis, :]).ravel()
         coverage[cells] += 1
 
+        # Footprint weights: the window estimate is not a boxcar average of
+        # the current. The extractor applies a spatial Hann window and works
+        # with the POWER spectrum, so the local Doppler information is
+        # weighted approximately by Hann^2 — heavily concentrated toward the
+        # window center (equivalent width ~0.4 of the window). Validated
+        # empirically: 2 km Hann windows recover a 2 km sinusoidal current
+        # at ~0.9 amplitude where a boxcar model predicts ~0.
+        wx_t = np.cos(np.pi * (x_centers[in_x] - est.center_x) / est.window_size) ** 4
+        wy_t = np.cos(np.pi * (y_centers[in_y] - est.center_y) / est.window_size) ** 4
+        w_fp = (wy_t[:, np.newaxis] * wx_t[np.newaxis, :]).ravel()
+        w_sum = float(w_fp.sum())
+        if w_sum <= 0:
+            continue
+        w_fp /= w_sum
+
         # 2x2 observation covariance -> weight matrix
         var_x = est.ux_err**2 + err_floor**2
         var_y = est.uy_err**2 + err_floor**2
@@ -206,6 +227,7 @@ def solve_current_field(
             det = var_x * var_y
 
         obs_cells.append(cells)
+        obs_fpw.append(w_fp)
         obs_weights.append((var_y / det, -cov / det, var_x / det))
         obs_data.append((est.ux, est.uy))
 
@@ -245,21 +267,20 @@ def solve_current_field(
         vals: list[np.ndarray] = []
         rhs = np.zeros(n_unknowns)
 
-        for cells, (w00, w01, w11), (dx_, dy_), f in zip(
-            obs_cells, obs_weights, obs_data, factors, strict=True
+        for cells, w_fp, (w00, w01, w11), (dx_, dy_), f in zip(
+            obs_cells, obs_fpw, obs_weights, obs_data, factors, strict=True
         ):
             if f <= 0:
                 continue
-            m = len(cells)
-            a = 1.0 / m  # footprint-average coefficient
 
             # Normal-equation contribution: for the 2 x n row block R with
-            # entries a at [cells] (ux row) and [n_cells + cells] (uy row),
-            # R^T W R adds (f * a^2 * W_ij) over the outer product of cells.
+            # entries w_fp at [cells] (ux row) and [n_cells + cells]
+            # (uy row), R^T W R adds (f * w_i * w_j * W_ab) over the outer
+            # product of cells.
             ci, cj = np.meshgrid(cells, cells, indexing="ij")
             ci = ci.ravel()
             cj = cj.ravel()
-            a2 = np.full(ci.shape, f * a * a)
+            a2 = f * np.outer(w_fp, w_fp).ravel()
 
             rows.append(ci)
             cols.append(cj)
@@ -274,8 +295,8 @@ def solve_current_field(
             cols.append(cj)
             vals.append(a2 * w01)
 
-            rhs[cells] += f * a * (w00 * dx_ + w01 * dy_)
-            rhs[n_cells + cells] += f * a * (w01 * dx_ + w11 * dy_)
+            rhs[cells] += f * w_fp * (w00 * dx_ + w01 * dy_)
+            rhs[n_cells + cells] += f * w_fp * (w01 * dx_ + w11 * dy_)
 
         h_data = sparse.coo_matrix(
             (np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))),
@@ -291,26 +312,38 @@ def solve_current_field(
     def _mahalanobis2(solution: np.ndarray) -> np.ndarray:
         """Per-observation squared Mahalanobis residual (2 dof, expect ~2)."""
         m2 = np.empty(n_used)
-        for i, (cells, (w00, w01, w11), (dx_, dy_)) in enumerate(
-            zip(obs_cells, obs_weights, obs_data, strict=True)
+        for i, (cells, w_fp, (w00, w01, w11), (dx_, dy_)) in enumerate(
+            zip(obs_cells, obs_fpw, obs_weights, obs_data, strict=True)
         ):
-            rx = dx_ - float(np.mean(solution[cells]))
-            ry = dy_ - float(np.mean(solution[n_cells + cells]))
+            rx = dx_ - float(np.dot(w_fp, solution[cells]))
+            ry = dy_ - float(np.dot(w_fp, solution[n_cells + cells]))
             m2[i] = w00 * rx * rx + 2 * w01 * rx * ry + w11 * ry * ry
         return m2
 
     # ---- Robust (IRLS) solve: down-weight gross outlier observations.
-    # A window estimate that disagrees with the consensus field by more
-    # than ~3 sigma (m2 > 9, chi-square 2-dof 99th percentile) is scaled
-    # down; this protects the field from the occasional window whose
-    # least-squares fit locked onto the wrong spectral feature while
-    # reporting optimistic formal errors.
+    #
+    # Residuals are first normalized by a robust global scale (the bulk
+    # median of m2 against the chi-square 2-dof median, 1.386) so that a
+    # uniformly optimistic error calibration — common, since the window
+    # least-squares errors ignore correlated spectral leakage — does not
+    # mark the whole population as inconsistent. Only observations that
+    # are outliers RELATIVE TO THE BULK (scaled m2 above the chi-square
+    # 2-dof ~99th percentile) are scaled down: typically a window whose
+    # fit locked onto the wrong spectral feature.
+    #
+    # Note: per-window-size variance-component recalibration was tried
+    # and rejected — with few large windows and many small ones, the
+    # consensus field is dominated by the small windows, and residuals
+    # against a contaminated consensus punish the most accurate group.
+    _CHI2_2DOF_MEDIAN = 1.386
     factors = np.ones(n_used)
     try:
         lu, solution = _assemble_and_solve(factors)
         for _ in range(_IRLS_ITERATIONS):
             m2 = _mahalanobis2(solution)
-            new_factors = np.minimum(1.0, _IRLS_M2_CUTOFF / np.maximum(m2, 1e-12))
+            bulk_scale = max(1.0, float(np.median(m2)) / _CHI2_2DOF_MEDIAN)
+            m2_scaled = m2 / bulk_scale
+            new_factors = np.minimum(1.0, _IRLS_M2_CUTOFF / np.maximum(m2_scaled, 1e-12))
             if np.allclose(new_factors, factors, rtol=0.05, atol=0.01):
                 factors = new_factors
                 break

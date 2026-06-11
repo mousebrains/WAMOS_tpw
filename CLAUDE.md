@@ -94,7 +94,20 @@ All radar commands via `wamos` CLI (`src/wamos_tpw/cli.py`). Each module registe
 
 ```bash
 wamos list|parse|view|process|combine|bearing|timestamp|config|deramp|destreak
+wamos current|cube-diag   # surface current extraction + diagnostics
 ```
+
+### Surface Currents
+
+`wamos current` extracts surface currents via 3D FFT dispersion fitting
+(`current.py`: coarse shell search + sub-bin LS refinement with formal
+uncertainties). Key add-ons: `--composite-minutes` (inverse-variance
+temporal compositing, `current_composite.py`), `--field --window-sizes
+2000,1000` (multi-scale joint field inversion, `current_field.py`).
+Synthetic validation cubes with prescribed U(x,y): `synthetic.py`;
+resolution study: `tools/resolution_study.py` →
+`docs/resolution_validation.md`. Algorithm review:
+`docs/current_extraction_review.md`.
 
 ## Viewer Controls
 

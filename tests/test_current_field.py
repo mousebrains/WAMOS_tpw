@@ -48,25 +48,40 @@ def make_tiled_obs(
     domain: float = 4000.0,
     stride: float | None = None,
     err: float = 0.05,
+    noise: float = 0.0,
+    seed: int = 0,
 ) -> list[CurrentEstimate]:
     """Tile a square domain with window observations of a current field.
 
-    Each observation's value is the footprint average of ``u_func``
-    evaluated on a fine sampling of the window (matching the forward
-    model of the inversion).
+    Each observation's value is the Hann^2-weighted footprint average of
+    ``u_func`` (matching both the inversion's forward model and the
+    empirical sensing kernel of the dispersion estimator), optionally
+    perturbed by Gaussian noise of standard deviation ``noise``.
     """
     if stride is None:
         stride = window_size / 2
     half_dom = domain / 2
     centers = np.arange(-half_dom + window_size / 2, half_dom - window_size / 2 + 1, stride)
+    rng = np.random.default_rng(seed)
 
     out = []
-    s = np.linspace(-window_size / 2, window_size / 2, 9)
+    s = np.linspace(-window_size / 2, window_size / 2, 17)
     sx, sy = np.meshgrid(s, s)
+    w = (np.cos(np.pi * sx / window_size) * np.cos(np.pi * sy / window_size)) ** 4
+    w /= w.sum()
     for cy in centers:
         for cx in centers:
             ux, uy = u_func(cx + sx, cy + sy)
-            out.append(obs(float(np.mean(ux)), float(np.mean(uy)), cx, cy, window_size, err))
+            out.append(
+                obs(
+                    float(np.sum(w * ux)) + rng.normal(0, noise),
+                    float(np.sum(w * uy)) + rng.normal(0, noise),
+                    cx,
+                    cy,
+                    window_size,
+                    err,
+                )
+            )
     return out
 
 
@@ -120,24 +135,40 @@ class TestVaryingField:
         assert np.median(err_y) < 0.02
 
     def test_sinusoid_better_resolved_with_small_windows(self):
-        """A 2 km sinusoid is attenuated by 2 km windows but recovered by
-        the inversion when 1 km windows contribute."""
-        wavelength = 2000.0
+        """A 1.3 km sinusoid is invisible to 2 km windows at 1 km stride
+        (below their Nyquist sampling, and Hann^2 response only 0.37) but
+        well resolved when 1 km windows at 500 m stride contribute.
+
+        The wavelength is chosen incommensurate with the window strides so
+        the observations do not all land on the sinusoid's nodes. The
+        smoothness prior is set to allow gradients of the feature's scale
+        (sigma_prior / L_c = 0.002 per m ~ the feature's peak gradient);
+        the prior is the resolution knob of the inversion.
+        """
+        wavelength = 1300.0
         amp = 0.4
+        noise = 0.05
+        phase = 0.4
 
         def u(x, y):
-            return amp * np.sin(2 * np.pi * x / wavelength), np.zeros_like(x)
+            s = amp * np.sin(2 * np.pi * x / wavelength + phase)
+            return s, np.zeros_like(x)
 
-        big = make_tiled_obs(u, window_size=2000.0, domain=8000.0)
-        small = make_tiled_obs(u, window_size=1000.0, domain=8000.0)
+        big = make_tiled_obs(u, window_size=2000.0, domain=8000.0, noise=noise, seed=1)
+        small = make_tiled_obs(u, window_size=1000.0, domain=8000.0, noise=noise, seed=2)
 
-        fld_big = solve_current_field(big, field_spacing=250.0, correlation_length=500.0)
-        fld_both = solve_current_field(big + small, field_spacing=250.0, correlation_length=500.0)
+        kwargs = {
+            "field_spacing": 250.0,
+            "correlation_length": 250.0,
+            "sigma_prior": 0.5,
+        }
+        fld_big = solve_current_field(big, **kwargs)
+        fld_both = solve_current_field(big + small, **kwargs)
 
         def recovered_amplitude(fld: CurrentField) -> float:
             covered = fld.coverage > 0
             xg, _ = np.meshgrid(fld.x_centers, fld.y_centers)
-            ref = np.sin(2 * np.pi * xg / wavelength)
+            ref = np.sin(2 * np.pi * xg / wavelength + phase)
             num = np.sum(fld.ux[covered] * ref[covered])
             den = np.sum(ref[covered] ** 2)
             return float(num / den)
@@ -145,11 +176,8 @@ class TestVaryingField:
         a_big = recovered_amplitude(fld_big)
         a_both = recovered_amplitude(fld_both)
 
-        # A 2 km boxcar average of a 2 km sinusoid is ~0 (full attenuation);
-        # adding 1 km windows (sinc(1/2) ~ 0.64 response) must recover most
-        # of the amplitude.
-        assert abs(a_big) < 0.15 * amp
-        assert a_both > 0.5 * amp
+        assert abs(a_big) < 0.15 * amp, f"big={a_big:.3f}"
+        assert a_both > 0.6 * amp, f"both={a_both:.3f}"
 
 
 class TestWeightsAndErrors:

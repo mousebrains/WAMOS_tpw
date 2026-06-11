@@ -142,3 +142,84 @@ wamos interpolator 2022040514 2022040515 /path/to/POLAR \
 | `--progress` / `--no-progress` | Show/hide progress bars (default: show) |
 
 Source: `src/wamos_tpw/interpolator.py`
+
+---
+
+## `wamos current`
+
+Extract surface current vectors from sequential radar frames via 3D FFT
+dispersion fitting: blocks of frames become space-time cubes, analysis
+windows are fitted with a Doppler-shifted dispersion shell (coarse search +
+sub-bin least-squares refinement with formal uncertainties), and tiles are
+assembled into current maps. Optional temporal compositing and a joint
+multi-scale field inversion for higher spatial resolution.
+
+```bash
+# Per-block tile maps
+wamos current 2022040514 2022040515 /path/to/POLAR \
+    --ship-data ./output/ -o ./currents/
+
+# 15-minute inverse-variance composites on top of the block maps
+wamos current 2022040514 2022040515 /path/to/POLAR \
+    --ship-data ./output/ -o ./currents/ --composite-minutes 15
+
+# High-resolution field inversion from 2 km + 1 km windows
+wamos current 2022040514 2022040515 /path/to/POLAR \
+    --ship-data ./output/ -o ./currents/ --field --window-sizes 2000,1000
+```
+
+**Arguments:**
+
+| Argument | Description |
+|----------|-------------|
+| `stime` | Start time |
+| `etime` | End time |
+| `polar_path` | Root directory of POLAR files |
+| `--config`, `-c` | YAML configuration file |
+| `--depth` | Water depth in meters (default: deep water) |
+| `--block-frames` | Frames per analysis block (default: `32`) |
+| `--block-overlap` | Overlap between blocks (default: `0.5`) |
+| `--sub-region-size` | Analysis window side length in meters (default: `2000`) |
+| `--search-radius` | Maximum current speed searched, m/s (default: `3.0`) |
+| `--min-snr` | Minimum SNR to accept an estimate (default: `1.5`) |
+| `--composite-minutes` | Write inverse-variance composites over windows of this many minutes |
+| `--field` | Joint regularized field inversion per block (`current_field_*.nc`) |
+| `--window-sizes` | Comma-separated window sizes in meters, e.g. `2000,1000` |
+| `--field-spacing` | Field inversion cell size in meters (default: `250`) |
+| `--field-correlation-length` | Smoothness prior length scale in meters (default: `1000`) |
+| `--field-sigma-prior` | Expected current variation over the correlation length, m/s (default: `0.3`) |
+| `--output-dir`, `-o` | Output directory |
+| `--format` | `netcdf`, `png`, or `both` (default: `netcdf`) |
+| `--ship-data` | Directory with instrument NetCDF files |
+| `--grid-spacing` | Grid cell size in meters (default: auto) |
+| `--workers`, `-w` | Number of parallel workers (default: auto) |
+| `--plot` | Show diagnostic plots |
+
+Notes:
+
+- Tiles containing the radar or crossed by the antenna rotation seam are
+  masked (`current.mask_seam`, default on).
+- The smoothness prior is the field inversion's resolution knob:
+  `sigma_prior / correlation_length` is the largest current gradient the
+  prior allows without penalty. Resolving 0.3 m/s features at 1 km
+  requires roughly `--field-correlation-length 250 --field-sigma-prior 0.5`.
+- See `docs/resolution_validation.md` for measured transfer functions of
+  the variants and `docs/current_extraction_review.md` for the algorithm
+  review.
+
+Source: `src/wamos_tpw/current_pipeline.py`
+
+---
+
+## `wamos cube-diag`
+
+Whole-cube diagnostic for current extraction: 2x2 figure with time-averaged
+intensity plus sub-cube current vectors, kx-omega and ky-omega spectrum
+slices with the fitted dispersion curves, and the (Ux, Uy) search surface.
+
+```bash
+wamos cube-diag 2022040514 2022040515 /path/to/POLAR \
+    --ship-data ./output/ -o ./diag/
+```
+
+Source: `src/wamos_tpw/current_pipeline.py` (`run_cube_diag`)

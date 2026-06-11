@@ -60,6 +60,8 @@ Thumbs.db
 *.png
 *.jpg
 *.gif
+# ... but documentation figures are part of the repo
+!docs/figures/**/*.png
 
 # Temporary files
 *.tmp
