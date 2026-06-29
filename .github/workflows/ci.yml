@@ -15,7 +15,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -23,7 +23,7 @@ jobs:
         python-version: "3.12"
 
     - name: Cache pip dependencies
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: ~/.cache/pip
         key: ${{ runner.os }}-pip-lint-${{ hashFiles('pyproject.toml') }}
@@ -49,7 +49,7 @@ jobs:
   pre-commit:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -62,7 +62,7 @@ jobs:
   security:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -70,7 +70,7 @@ jobs:
         python-version: "3.12"
 
     - name: Cache pip dependencies
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: ~/.cache/pip
         key: ${{ runner.os }}-pip-security-${{ hashFiles('pyproject.toml') }}
@@ -102,7 +102,7 @@ jobs:
     continue-on-error: ${{ matrix.experimental || false }}
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         lfs: true
 
@@ -113,7 +113,7 @@ jobs:
 
     - name: Cache pip dependencies (Unix)
       if: runner.os != 'Windows'
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: ~/.cache/pip
         key: ${{ runner.os }}-pip-test-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml') }}
@@ -122,7 +122,7 @@ jobs:
 
     - name: Cache pip dependencies (Windows)
       if: runner.os == 'Windows'
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: ~\AppData\Local\pip\Cache
         key: ${{ runner.os }}-pip-test-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml') }}
@@ -139,7 +139,7 @@ jobs:
 
     - name: Upload coverage to Codecov
       if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
-      uses: codecov/codecov-action@v6
+      uses: codecov/codecov-action@v7
       with:
         file: ./coverage.xml
         fail_ci_if_error: false
@@ -150,7 +150,7 @@ jobs:
   benchmarks:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         lfs: true
 
@@ -160,7 +160,7 @@ jobs:
         python-version: "3.12"
 
     - name: Cache pip dependencies
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: ~/.cache/pip
         key: ${{ runner.os }}-pip-bench-${{ hashFiles('pyproject.toml') }}
@@ -185,7 +185,7 @@ jobs:
   docs:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -193,7 +193,7 @@ jobs:
         python-version: "3.12"
 
     - name: Cache pip dependencies
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: ~/.cache/pip
         key: ${{ runner.os }}-pip-docs-${{ hashFiles('pyproject.toml') }}
@@ -221,7 +221,7 @@ jobs:
     needs: [lint, pre-commit, security, test]
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
       with:
         lfs: true
 
@@ -231,7 +231,7 @@ jobs:
         python-version: "3.12"
 
     - name: Cache pip dependencies
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: ~/.cache/pip
         key: ${{ runner.os }}-pip-build-${{ hashFiles('pyproject.toml') }}
