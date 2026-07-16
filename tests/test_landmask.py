@@ -118,6 +118,15 @@ class TestBuildFromMosaics:
         assert mask.threshold == 500.0
         assert mask.land.any()
 
+    def test_dilation_grows_mask(self):
+        rng = np.random.default_rng(3)
+        mosaics = [_synthetic_mosaic(rng, bright_block=True) for _ in range(6)]
+        m0 = build_from_mosaics(mosaics, cell_m=40.0, threshold=500.0, dilate=0)
+        m2 = build_from_mosaics(mosaics, cell_m=40.0, threshold=500.0, dilate=2)
+        assert m2.land.sum() > m0.land.sum()
+        # dilation only adds cells, never removes
+        assert not (m0.land & ~m2.land).any()
+
     def test_empty_input_raises(self):
         with pytest.raises(ValueError):
             build_from_mosaics([])

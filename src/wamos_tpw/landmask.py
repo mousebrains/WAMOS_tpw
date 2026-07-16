@@ -42,6 +42,7 @@ _DEG2M = 111_319.5  # meters per degree latitude; matches current.py
 _CELL_M_DEFAULT = 30.0
 _THRESHOLD_PCT_DEFAULT = 99.0
 _MIN_COUNT_DEFAULT = 3
+_DILATE_DEFAULT = 2
 
 
 @dataclass
@@ -218,6 +219,7 @@ def build_from_mosaics(
     threshold_pct: float = _THRESHOLD_PCT_DEFAULT,
     threshold: float | None = None,
     min_count: int = _MIN_COUNT_DEFAULT,
+    dilate: int = _DILATE_DEFAULT,
 ) -> LandMask:
     """Build a land mask from merged mosaic files or open datasets.
 
@@ -232,6 +234,8 @@ def build_from_mosaics(
         threshold: Absolute intensity threshold overriding
             ``threshold_pct``.
         min_count: Minimum mosaics covering a cell for it to be usable.
+        dilate: Grow the land mask by this many cells so thin coastline
+            slivers still trip the per-tile land-fraction test.
 
     Returns:
         LandMask on a lat/lon grid covering the union of the mosaics.
@@ -291,10 +295,15 @@ def build_from_mosaics(
     if threshold is None:
         threshold = float(np.percentile(mn[seen], threshold_pct))
     land = seen & (mn > threshold)
+    if dilate > 0 and land.any():
+        from scipy.ndimage import binary_dilation
+
+        land = binary_dilation(land, iterations=dilate)
     logger.info(
-        "Land threshold %.0f counts -> %d land cells (%.2f%% of covered)",
+        "Land threshold %.0f counts -> %d land cells after dilation by %d (%.2f%% of covered)",
         threshold,
         int(land.sum()),
+        dilate,
         100.0 * land.sum() / seen.sum(),
     )
     return LandMask(
@@ -346,6 +355,13 @@ def _add_arguments(parser) -> None:
         default=_MIN_COUNT_DEFAULT,
         help=f"Minimum mosaics covering a cell for it to be usable (default: {_MIN_COUNT_DEFAULT})",
     )
+    parser.add_argument(
+        "--dilate",
+        type=int,
+        default=_DILATE_DEFAULT,
+        help="Grow the land mask by this many cells so thin coastline "
+        f"slivers still trip the tile land-fraction test (default: {_DILATE_DEFAULT})",
+    )
 
 
 def add_subparser(subparsers) -> None:
@@ -381,5 +397,6 @@ def run(args) -> None:
         threshold_pct=args.threshold_pct,
         threshold=args.threshold,
         min_count=args.min_count,
+        dilate=args.dilate,
     )
     mask.to_netcdf(args.output)

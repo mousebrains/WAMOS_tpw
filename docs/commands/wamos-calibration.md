@@ -124,6 +124,7 @@ wamos current ... --land-mask land_mask.nc
 | `--threshold-pct` | Percentile of the temporal-minimum stack used as the land threshold (default: `99`) |
 | `--threshold` | Absolute intensity threshold (overrides `--threshold-pct`) |
 | `--min-count` | Minimum mosaics covering a cell for it to be usable (default: `3`) |
+| `--dilate` | Grow the mask by this many cells so thin coastline slivers still trip the tile land-fraction test (default: `2`) |
 
 **Output:** CF-1.13 NetCDF with a `land` flag variable on a regular
 latitude/longitude grid.
