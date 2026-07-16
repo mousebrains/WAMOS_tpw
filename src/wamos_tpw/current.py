@@ -99,6 +99,11 @@ _MASK_SEAM_DEFAULT = True
 # ~0.5 m/s inside 2 km to >2 m/s beyond 4 km — so ~3000 is a good value
 # for these installations.
 _MAX_TILE_RANGE_DEFAULT = None
+# Mask tiles whose land fraction (from a 'wamos land-mask' NetCDF given
+# via current.land_mask) exceeds this. Stationary hard returns put a
+# strong static signal at omega ~ 0 that drags dispersion fits toward
+# zero velocity, so even a small land sliver disqualifies a tile.
+_MAX_LAND_FRACTION_DEFAULT = 0.02
 
 
 # ============================================================
@@ -721,6 +726,14 @@ def compute_tile_specs(
     depth = cfg.get("current.depth", _DEPTH_DEFAULT)
     mask_seam = cfg.get("current.mask_seam", _MASK_SEAM_DEFAULT)
     max_tile_range = cfg.get("current.max_tile_range", _MAX_TILE_RANGE_DEFAULT)
+    land_mask_path = cfg.get("current.land_mask", None)
+    max_land_fraction = cfg.get("current.max_land_fraction", _MAX_LAND_FRACTION_DEFAULT)
+
+    land_mask = None
+    if land_mask_path:
+        from wamos_tpw.landmask import load_cached
+
+        land_mask = load_cached(str(land_mask_path))
 
     # Median radar position in cube coordinates, for range gating
     radar_x = radar_y = None
@@ -791,6 +804,11 @@ def compute_tile_specs(
             masked = mask_seam and _tile_contains_seam(cube, *tile_bounds)
             if not masked and radar_x is not None:
                 masked = np.hypot(cx - radar_x, cy - radar_y) > max_tile_range
+            if not masked and land_mask is not None:
+                masked = (
+                    land_mask.land_fraction(*tile_bounds, cube.center_lat, cube.center_lon)
+                    > max_land_fraction
+                )
 
             tiles.append(
                 {
@@ -810,7 +828,7 @@ def compute_tile_specs(
     n_masked = sum(1 for t in tiles if t["masked"])
     if n_masked:
         logger.debug(
-            "Masked %d/%d tiles (seam, radar inside, or beyond max range)",
+            "Masked %d/%d tiles (seam, radar inside, beyond max range, or land)",
             n_masked,
             len(tiles),
         )
