@@ -127,6 +127,24 @@ class TestBuildFromMosaics:
         # dilation only adds cells, never removes
         assert not (m0.land & ~m2.land).any()
 
+    def test_occluded_views_do_not_veto_land(self):
+        """Land bright in most views survives a few shadowed views."""
+        rng = np.random.default_rng(5)
+        # Bright in 4 of 6 views (terrain-shadowed in the other 2)
+        mosaics = [_synthetic_mosaic(rng, bright_block=(i < 4)) for i in range(6)]
+        mask = build_from_mosaics(mosaics, cell_m=40.0, threshold=500.0)
+        frac_block = mask.land_fraction(500, 700, 500, 700, CENTER_LAT, CENTER_LON)
+        assert frac_block > 0.8
+
+    def test_max_range_excludes_distant_pixels(self):
+        rng = np.random.default_rng(4)
+        mosaics = [_synthetic_mosaic(rng, bright_block=True) for _ in range(6)]
+        # Block spans radii ~566-1100 m from the mosaic center
+        m_all = build_from_mosaics(mosaics, cell_m=40.0, threshold=500.0, max_range_m=None)
+        m_near = build_from_mosaics(mosaics, cell_m=40.0, threshold=500.0, max_range_m=500.0)
+        assert m_all.land.any()
+        assert not m_near.land.any()
+
     def test_empty_input_raises(self):
         with pytest.raises(ValueError):
             build_from_mosaics([])

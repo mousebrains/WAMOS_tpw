@@ -1,9 +1,12 @@
 """Static earth-referenced land mask built from stacked radar mosaics.
 
 Hard returns (land, fixed platforms) are persistently bright in earth
-coordinates while sea clutter and wave backscatter fluctuate, so the
-per-cell temporal MINIMUM intensity across many mosaics separates land
-from sea far more reliably than any single image. The mask lives on a
+coordinates while sea clutter and wave backscatter fluctuate, so a cell
+that is bright in most near-range views across many mosaics is land. A
+majority vote (rather than a strict temporal minimum) survives terrain
+occlusion — from some ship positions a coast hides behind higher ground
+— and the near-range restriction keeps dim far-range views from
+diluting the vote. The mask lives on a
 regular latitude/longitude grid and is queried per analysis tile with
 the same equirectangular meters-from-center convention the current
 pipeline uses, so a tile can be rejected when its land fraction exceeds
@@ -43,6 +46,8 @@ _CELL_M_DEFAULT = 30.0
 _THRESHOLD_PCT_DEFAULT = 99.0
 _MIN_COUNT_DEFAULT = 3
 _DILATE_DEFAULT = 2
+_MAX_RANGE_M_DEFAULT = 4500.0
+_BRIGHT_FRAC_DEFAULT = 0.5
 
 
 @dataclass
@@ -220,8 +225,18 @@ def build_from_mosaics(
     threshold: float | None = None,
     min_count: int = _MIN_COUNT_DEFAULT,
     dilate: int = _DILATE_DEFAULT,
+    max_range_m: float | None = _MAX_RANGE_M_DEFAULT,
+    bright_frac: float = _BRIGHT_FRAC_DEFAULT,
 ) -> LandMask:
     """Build a land mask from merged mosaic files or open datasets.
+
+    A cell is land when it is brighter than ``threshold`` in at least
+    ``bright_frac`` of the near-range views covering it. A majority
+    vote — rather than a strict temporal minimum — survives terrain
+    occlusion: from some ship positions a coast hides behind higher
+    ground, and a single shadowed view must not veto the cell. Sea
+    cells still fail the vote because wave and clutter brightness at a
+    fixed earth cell is transient across views.
 
     Args:
         mosaics: Paths to ``merged_*.nc`` files (from ``wamos
@@ -236,6 +251,13 @@ def build_from_mosaics(
         min_count: Minimum mosaics covering a cell for it to be usable.
         dilate: Grow the land mask by this many cells so thin coastline
             slivers still trip the per-tile land-fraction test.
+        max_range_m: Only accumulate pixels within this range of the
+            mosaic center (the radar). Hard-return brightness falls with
+            range, so distant views would dilute the bright-fraction
+            vote for land that every near view sees clearly. None
+            disables.
+        bright_frac: Fraction of covering views that must exceed the
+            threshold for a cell to be land.
 
     Returns:
         LandMask on a lat/lon grid covering the union of the mosaics.
@@ -274,18 +296,30 @@ def build_from_mosaics(
         len(mosaics),
     )
 
-    # Pass 2: accumulate per-cell temporal minimum and coverage count
+    # Pass 2: per-cell temporal minimum (threshold estimation), coverage
+    # count, and — once the threshold is known — bright-view count.
+    # The min-stack and counts fit in memory; the bright count needs the
+    # threshold first, so mosaics are read twice when threshold is None.
     mn = np.full((n_lat, n_lon), np.inf, np.float32)
     cnt = np.zeros((n_lat, n_lon), np.int32)
-    for m in mosaics:
-        ds = _open(m)
+
+    def _cells(ds):
         lat, lon = _mosaic_lat_lon(ds)
         iy = ((lat - lat_lo) / dlat).astype(np.intp)
         ix = ((lon - lon_lo) / dlon).astype(np.intp)
         val = ds.intensity.values
-        gy, gx = np.nonzero(np.isfinite(val))
-        np.minimum.at(mn, (iy[gy], ix[gx]), val[gy, gx].astype(np.float32))
-        np.add.at(cnt, (iy[gy], ix[gx]), 1)
+        good = np.isfinite(val)
+        if max_range_m is not None:
+            xg, yg = np.meshgrid(ds.x.values, ds.y.values)
+            good &= np.hypot(xg, yg) <= max_range_m
+        gy, gx = np.nonzero(good)
+        return (iy[gy], ix[gx]), val[gy, gx].astype(np.float32)
+
+    for m in mosaics:
+        ds = _open(m)
+        cells, val = _cells(ds)
+        np.minimum.at(mn, cells, val)
+        np.add.at(cnt, cells, 1)
         if ds is not m:
             ds.close()
 
@@ -294,14 +328,27 @@ def build_from_mosaics(
         raise ValueError(f"no mask cell covered by at least {min_count} mosaics")
     if threshold is None:
         threshold = float(np.percentile(mn[seen], threshold_pct))
-    land = seen & (mn > threshold)
+
+    # Pass 3: majority vote of bright views against the threshold
+    bright = np.zeros((n_lat, n_lon), np.int32)
+    for m in mosaics:
+        ds = _open(m)
+        cells, val = _cells(ds)
+        np.add.at(bright, cells, (val > threshold).astype(np.int32))
+        if ds is not m:
+            ds.close()
+
+    with np.errstate(invalid="ignore"):
+        land = seen & (bright >= bright_frac * cnt)
     if dilate > 0 and land.any():
         from scipy.ndimage import binary_dilation
 
         land = binary_dilation(land, iterations=dilate)
     logger.info(
-        "Land threshold %.0f counts -> %d land cells after dilation by %d (%.2f%% of covered)",
+        "Land threshold %.0f counts, bright fraction >= %.2f -> %d land "
+        "cells after dilation by %d (%.2f%% of covered)",
         threshold,
+        bright_frac,
         int(land.sum()),
         dilate,
         100.0 * land.sum() / seen.sum(),
@@ -362,6 +409,22 @@ def _add_arguments(parser) -> None:
         help="Grow the land mask by this many cells so thin coastline "
         f"slivers still trip the tile land-fraction test (default: {_DILATE_DEFAULT})",
     )
+    parser.add_argument(
+        "--max-range",
+        type=float,
+        default=_MAX_RANGE_M_DEFAULT,
+        help="Only accumulate pixels within this range of the radar in "
+        "meters; distant views are too dim and would dilute the land "
+        f"vote (default: {_MAX_RANGE_M_DEFAULT:.0f}; 0 disables)",
+    )
+    parser.add_argument(
+        "--bright-frac",
+        type=float,
+        default=_BRIGHT_FRAC_DEFAULT,
+        help="Fraction of covering views that must exceed the threshold "
+        "for a cell to be land; a majority vote survives terrain "
+        f"occlusion from some view angles (default: {_BRIGHT_FRAC_DEFAULT})",
+    )
 
 
 def add_subparser(subparsers) -> None:
@@ -398,5 +461,7 @@ def run(args) -> None:
         threshold=args.threshold,
         min_count=args.min_count,
         dilate=args.dilate,
+        max_range_m=args.max_range if args.max_range > 0 else None,
+        bright_frac=args.bright_frac,
     )
     mask.to_netcdf(args.output)

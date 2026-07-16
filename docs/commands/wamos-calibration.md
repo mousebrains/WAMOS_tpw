@@ -125,6 +125,8 @@ wamos current ... --land-mask land_mask.nc
 | `--threshold` | Absolute intensity threshold (overrides `--threshold-pct`) |
 | `--min-count` | Minimum mosaics covering a cell for it to be usable (default: `3`) |
 | `--dilate` | Grow the mask by this many cells so thin coastline slivers still trip the tile land-fraction test (default: `2`) |
+| `--max-range` | Only accumulate pixels within this range of the radar, meters — distant views are too dim and would dilute the land vote (default: `4500`; `0` disables) |
+| `--bright-frac` | Fraction of covering views that must exceed the threshold for a cell to be land; the majority vote survives terrain occlusion from some view angles (default: `0.5`) |
 
 **Output:** CF-1.13 NetCDF with a `land` flag variable on a regular
 latitude/longitude grid.
