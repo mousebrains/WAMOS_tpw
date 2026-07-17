@@ -185,6 +185,7 @@ wamos current 2022040514 2022040515 /path/to/POLAR \
 | `--max-tile-range` | Mask tiles farther than this from the radar, meters (default: off; ~3000 recommended) |
 | `--land-mask` | Land mask NetCDF from `wamos land-mask`; tiles overlapping land are rejected |
 | `--max-land-fraction` | Reject tiles whose land fraction exceeds this (default: `0.02`) |
+| `--depth-grid` | Bathymetry NetCDF for per-tile finite-depth dispersion (overrides `--depth` per tile) |
 | `--composite-minutes` | Write inverse-variance composites over windows of this many minutes |
 | `--field` | Joint regularized field inversion per block (`current_field_*.nc`) |
 | `--window-sizes` | Comma-separated window sizes in meters, e.g. `2000,1000` |
@@ -206,6 +207,13 @@ Notes:
   stationary hard returns put a strong static signal at omega ~ 0 that
   drags dispersion fits toward zero velocity, so even a small land
   sliver disqualifies a tile.
+- Over shallow banks, pass a `--depth-grid`: the dispersion relation
+  omega² = gk·tanh(kh) is depth-dependent to first order for kh below
+  ~1.5 (e.g. an 18 m bank), so each tile gets the median depth over its
+  footprint. Tiles straddling steep relief (shallow side < 50 m and
+  p90/p10 depth ratio > 2) are flagged `depth_hetero` — one depth
+  cannot represent them. Supports regular lat/lon grids and 2-D
+  curvilinear grids with per-point lat/lon.
 - The smoothness prior is the field inversion's resolution knob:
   `sigma_prior / correlation_length` is the largest current gradient the
   prior allows without penalty. Resolving 0.3 m/s features at 1 km

@@ -316,6 +316,7 @@ class CurrentPipeline:
                     cube.center_lon,
                     config_dict,
                     tile.get("scale", 0),
+                    tile.get("depth"),
                 )
                 executor.submit(Priority.HIGHEST, "extract_tile", task_data)
 
@@ -801,6 +802,14 @@ def _add_arguments(parser) -> None:
         default=None,
         help="Reject tiles whose land fraction exceeds this (default: 0.02)",
     )
+    parser.add_argument(
+        "--depth-grid",
+        type=str,
+        default=None,
+        help="Bathymetry NetCDF for per-tile finite-depth dispersion "
+        "(overrides --depth per tile; tiles straddling steep relief are "
+        "flagged depth_hetero)",
+    )
 
     # Output options
     parser.add_argument(
@@ -932,6 +941,8 @@ def run(args) -> None:
         config["current.max_tile_range"] = args.max_tile_range
     if getattr(args, "land_mask", None) is not None:
         config["current.land_mask"] = args.land_mask
+    if getattr(args, "depth_grid", None) is not None:
+        config["current.depth_grid"] = args.depth_grid
     if getattr(args, "max_land_fraction", None) is not None:
         config["current.max_land_fraction"] = args.max_land_fraction
 

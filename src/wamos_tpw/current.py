@@ -533,7 +533,7 @@ class CurrentMap:
             sub = cube.sub_cube(tile["x_start"], tile["x_end"], tile["y_start"], tile["y_end"])
 
             try:
-                extractor = CurrentExtractor(sub, config=cfg)
+                extractor = CurrentExtractor(sub, config=cfg, depth=tile.get("depth"))
                 est = extractor.estimate
             except Exception:
                 logger.debug(
@@ -728,12 +728,19 @@ def compute_tile_specs(
     max_tile_range = cfg.get("current.max_tile_range", _MAX_TILE_RANGE_DEFAULT)
     land_mask_path = cfg.get("current.land_mask", None)
     max_land_fraction = cfg.get("current.max_land_fraction", _MAX_LAND_FRACTION_DEFAULT)
+    depth_grid_path = cfg.get("current.depth_grid", None)
 
     land_mask = None
     if land_mask_path:
         from wamos_tpw.landmask import load_cached
 
         land_mask = load_cached(str(land_mask_path))
+
+    depth_grid = None
+    if depth_grid_path:
+        from wamos_tpw.depthgrid import load_cached as load_depth
+
+        depth_grid = load_depth(str(depth_grid_path))
 
     # Median radar position in cube coordinates, for range gating
     radar_x = radar_y = None
@@ -810,6 +817,13 @@ def compute_tile_specs(
                     > max_land_fraction
                 )
 
+            tile_depth = None
+            depth_hetero = False
+            if depth_grid is not None:
+                tile_depth, depth_hetero = depth_grid.tile_depth(
+                    *tile_bounds, cube.center_lat, cube.center_lon
+                )
+
             tiles.append(
                 {
                     "ix": ix,
@@ -822,6 +836,8 @@ def compute_tile_specs(
                     "center_y": cy,
                     "masked": masked,
                     "scale": 0,
+                    "depth": tile_depth,
+                    "depth_hetero": depth_hetero,
                 }
             )
 
@@ -1009,6 +1025,8 @@ class CurrentExtractor:
     Args:
         cube: FrameCube for a single sub-region.
         config: Configuration object.
+        depth: Optional per-tile water depth in meters, overriding
+            ``current.depth`` (used with a bathymetry grid).
 
     Attributes:
         estimate: The best-fit CurrentEstimate.
@@ -1018,13 +1036,13 @@ class CurrentExtractor:
         omega: 1D frequency array (rad/s) along time axis (full FFT frequencies).
     """
 
-    def __init__(self, cube: FrameCube, config: Any = None) -> None:
+    def __init__(self, cube: FrameCube, config: Any = None, depth: float | None = None) -> None:
         from wamos_tpw.config import NullConfig
 
         self._cube = cube
         self._cfg = config or NullConfig()
 
-        self._depth = self._cfg.get("current.depth", _DEPTH_DEFAULT)
+        self._depth = depth if depth is not None else self._cfg.get("current.depth", _DEPTH_DEFAULT)
         self._search_radius = self._cfg.get("current.search_radius", _SEARCH_RADIUS_DEFAULT)
         self._search_step = self._cfg.get("current.search_step", _SEARCH_STEP_DEFAULT)
         self._do_refine = self._cfg.get("current.refine", _REFINE_DEFAULT)

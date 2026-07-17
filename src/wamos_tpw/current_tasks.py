@@ -49,6 +49,7 @@ def _do_extract_tile(task):
         config_dict,
     ) = task.data[:17]
     scale = task.data[17] if len(task.data) > 17 else 0
+    tile_depth = task.data[18] if len(task.data) > 18 else None
 
     result_base = {
         "cube_id": cube_id,
@@ -88,8 +89,8 @@ def _do_extract_tile(task):
         if config_dict:
             config._config = config_dict
 
-        # Run extraction
-        extractor = CurrentExtractor(tile_cube, config=config)
+        # Run extraction (tile_depth: per-tile bathymetry override)
+        extractor = CurrentExtractor(tile_cube, config=config, depth=tile_depth)
         est = extractor.estimate
 
         result_base.update(
