@@ -47,13 +47,14 @@ Examples:
     )
 
     # Register subcommands from each instrument module
-    from wamos_tpw.instruments import gps, gyro, met, mru, wind
+    from wamos_tpw.instruments import gps, gyro, met, mru, scs, wind
 
     gps.add_subparser(subparsers)
     gyro.add_subparser(subparsers)
     mru.add_subparser(subparsers)
     wind.add_subparser(subparsers)
     met.add_subparser(subparsers)
+    scs.add_subparser(subparsers)
 
     # "all" subcommand to process every instrument at once
     p_all = subparsers.add_parser(
