@@ -195,6 +195,60 @@ class LandMask:
         )
 
 
+def merge_shallow(
+    mask: LandMask, depth_grid_path: str, shallow_limit: float, dilate: int = _DILATE_DEFAULT
+) -> LandMask:
+    """OR bathymetry cells shallower than ``shallow_limit`` into a mask.
+
+    Submerged reefs that break only intermittently evade the radar's
+    bright-fraction vote yet can lie 10-1000 m from any above-surface
+    protrusion; the DEM knows roughly where they are even when its
+    depth values are degraded. The shallow raster is dilated by the
+    same margin as the radar mask before the union.
+
+    Args:
+        mask: Radar-derived LandMask (defines the output lattice).
+        depth_grid_path: Bathymetry NetCDF readable by
+            :class:`wamos_tpw.depthgrid.DepthGrid`.
+        shallow_limit: Depth in meters below which a cell is hazard.
+        dilate: Cells to grow the shallow raster before the union.
+
+    Returns:
+        New LandMask on the same lattice with the union applied.
+    """
+    from wamos_tpw.depthgrid import DepthGrid
+
+    g = DepthGrid.from_netcdf(depth_grid_path)
+    lat = mask.lat0 + (np.arange(mask.n_lat) + 0.5) * mask.dlat
+    lon = mask.lon0 + (np.arange(mask.n_lon) + 0.5) * mask.dlon
+    iy = np.clip(((lat - g.lat0) / g.dlat).astype(np.intp), 0, g.depth.shape[0] - 1)
+    ix = np.clip(((lon - g.lon0) / g.dlon).astype(np.intp), 0, g.depth.shape[1] - 1)
+    inside_lat = (lat >= g.lat0) & (lat <= g.lat0 + g.depth.shape[0] * g.dlat)
+    inside_lon = (lon >= g.lon0) & (lon <= g.lon0 + g.depth.shape[1] * g.dlon)
+    d = g.depth[np.ix_(iy, ix)]
+    shallow = np.isfinite(d) & (d < shallow_limit)
+    shallow &= inside_lat[:, None] & inside_lon[None, :]
+    if dilate > 0 and shallow.any():
+        from scipy.ndimage import binary_dilation
+
+        shallow = binary_dilation(shallow, iterations=dilate)
+    n_added = int((shallow & ~mask.land).sum())
+    logger.info(
+        "Shallow merge (< %.0f m): %d cells added to %d radar-vote cells",
+        shallow_limit,
+        n_added,
+        int(mask.land.sum()),
+    )
+    return LandMask(
+        lat0=mask.lat0,
+        lon0=mask.lon0,
+        dlat=mask.dlat,
+        dlon=mask.dlon,
+        land=mask.land | shallow,
+        threshold=mask.threshold,
+    )
+
+
 @functools.lru_cache(maxsize=4)
 def load_cached(path: str) -> LandMask:
     """Load a mask NetCDF once per path (cached across cubes/blocks)."""
@@ -425,6 +479,22 @@ def _add_arguments(parser) -> None:
         "for a cell to be land; a majority vote survives terrain "
         f"occlusion from some view angles (default: {_BRIGHT_FRAC_DEFAULT})",
     )
+    parser.add_argument(
+        "--shallow-grid",
+        type=str,
+        default=None,
+        help="Bathymetry NetCDF (as for 'wamos current --depth-grid'): "
+        "cells shallower than --shallow-limit are OR-ed into the mask. "
+        "Submerged reefs that break only intermittently evade the radar "
+        "vote yet sit far from any visible protrusion; the union covers "
+        "both sources' blind spots",
+    )
+    parser.add_argument(
+        "--shallow-limit",
+        type=float,
+        default=5.0,
+        help="Depth (m) below which --shallow-grid cells count as hazard (default: 5)",
+    )
 
 
 def add_subparser(subparsers) -> None:
@@ -464,4 +534,6 @@ def run(args) -> None:
         max_range_m=args.max_range if args.max_range > 0 else None,
         bright_frac=args.bright_frac,
     )
+    if args.shallow_grid:
+        mask = merge_shallow(mask, args.shallow_grid, args.shallow_limit, dilate=args.dilate)
     mask.to_netcdf(args.output)

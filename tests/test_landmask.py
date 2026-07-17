@@ -150,6 +150,34 @@ class TestBuildFromMosaics:
             build_from_mosaics([])
 
 
+class TestMergeShallow:
+    def test_shallow_cells_added(self, tmp_path):
+        """DEM cells above the shallow limit join the mask, dilated."""
+        from wamos_tpw.landmask import merge_shallow
+
+        mask = _simple_mask()  # land in the NE quadrant only
+        # bathy: a submerged reef patch in the SW quadrant (3 m deep)
+        lat = mask.lat0 + (np.arange(mask.n_lat) + 0.5) * mask.dlat
+        lon = mask.lon0 + (np.arange(mask.n_lon) + 0.5) * mask.dlon
+        z = np.full((mask.n_lat, mask.n_lon), -400.0)
+        z[20:30, 20:30] = -3.0
+        ds = xr.Dataset(
+            {"elevation": (("lat", "lon"), z)},
+            coords={"lat": lat, "lon": lon},
+        )
+        p = tmp_path / "reef.nc"
+        ds.to_netcdf(p)
+
+        merged = merge_shallow(mask, str(p), shallow_limit=5.0, dilate=1)
+        # original land preserved
+        assert (merged.land & mask.land).sum() == mask.land.sum()
+        # reef patch (plus 1-cell dilation ring) now masked
+        assert merged.land[21:29, 21:29].all()
+        assert merged.land.sum() > mask.land.sum()
+        # deep cells stay sea
+        assert not merged.land[40:45, 5:10].any()
+
+
 class TestComputeTilesIntegration:
     def test_land_tiles_masked(self, tmp_path):
         """compute_tiles rejects tiles overlapping the mask's land."""
