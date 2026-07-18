@@ -75,6 +75,11 @@ _BLOCK_OVERLAP_DEFAULT = 0.5
 _SUB_REGION_SIZE_DEFAULT = 2000.0  # meters
 _SUB_REGION_OVERLAP_DEFAULT = 0.5
 _DEPTH_DEFAULT = np.inf
+# Error inflation for tiles whose depth is untrusted: steep-relief
+# (depth_hetero) tiles and tiles with no bathymetry coverage at all
+# (silent deep-water fallback). A 10-20% DEM error in the swell band
+# maps to ~0.1-0.3 m/s of current bias invisible to the formal LS errors.
+_DEPTH_FLAG_ERR_INFLATION = 2.0
 _SEARCH_RADIUS_DEFAULT = 3.0  # m/s
 _SEARCH_STEP_DEFAULT = 0.1  # m/s
 _REFINE_DEFAULT = True
@@ -544,6 +549,13 @@ class CurrentMap:
                 )
                 continue
 
+            # Inflate formal errors where the tile depth is untrusted
+            # (steep relief or no bathymetry coverage) — T2b.4.
+            err_scale = (
+                _DEPTH_FLAG_ERR_INFLATION
+                if tile.get("depth_hetero") or tile.get("depth_missing")
+                else 1.0
+            )
             est = CurrentEstimate(
                 ux=est.ux,
                 uy=est.uy,
@@ -555,8 +567,8 @@ class CurrentMap:
                 center_y=tile["center_y"],
                 peak_ratio=est.peak_ratio,
                 fom=est.fom,
-                ux_err=est.ux_err,
-                uy_err=est.uy_err,
+                ux_err=est.ux_err * err_scale,
+                uy_err=est.uy_err * err_scale,
                 n_ls_points=est.n_ls_points,
                 ls_rms=est.ls_rms,
             )
@@ -729,6 +741,7 @@ def compute_tile_specs(
     land_mask_path = cfg.get("current.land_mask", None)
     max_land_fraction = cfg.get("current.max_land_fraction", _MAX_LAND_FRACTION_DEFAULT)
     depth_grid_path = cfg.get("current.depth_grid", None)
+    depth_adjust = cfg.get("current.depth_adjust", 0.0)
 
     land_mask = None
     if land_mask_path:
@@ -819,10 +832,20 @@ def compute_tile_specs(
 
             tile_depth = None
             depth_hetero = False
+            depth_missing = False
             if depth_grid is not None:
                 tile_depth, depth_hetero = depth_grid.tile_depth(
                     *tile_bounds, cube.center_lat, cube.center_lon
                 )
+                if not np.isfinite(tile_depth):
+                    # No bathymetry coverage: deep-water dispersion will be
+                    # used — flag it so downstream errors are inflated
+                    # instead of silently trusting the fallback.
+                    depth_missing = True
+                elif depth_adjust:
+                    # Calibrated DEM bias correction (e.g. +1.2 m on
+                    # Hydrographer Bank from the 2023 pressure-sensor truth).
+                    tile_depth += depth_adjust
 
             tiles.append(
                 {
@@ -838,6 +861,7 @@ def compute_tile_specs(
                     "scale": 0,
                     "depth": tile_depth,
                     "depth_hetero": depth_hetero,
+                    "depth_missing": depth_missing,
                 }
             )
 
@@ -848,6 +872,25 @@ def compute_tile_specs(
             n_masked,
             len(tiles),
         )
+
+    if depth_grid is not None:
+        n_missing = sum(1 for t in tiles if t["depth_missing"] and not t["masked"])
+        n_hetero = sum(1 for t in tiles if t["depth_hetero"] and not t["masked"])
+        if n_missing:
+            logger.warning(
+                "%d/%d tiles have no bathymetry coverage; deep-water "
+                "dispersion used there with errors inflated x%.1f",
+                n_missing,
+                len(tiles),
+                _DEPTH_FLAG_ERR_INFLATION,
+            )
+        if n_hetero:
+            logger.info(
+                "%d/%d tiles straddle steep relief (depth_hetero); errors inflated x%.1f",
+                n_hetero,
+                len(tiles),
+                _DEPTH_FLAG_ERR_INFLATION,
+            )
 
     return {
         "n_tiles_x": n_tiles_x,

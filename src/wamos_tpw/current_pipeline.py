@@ -317,6 +317,7 @@ class CurrentPipeline:
                     config_dict,
                     tile.get("scale", 0),
                     tile.get("depth"),
+                    bool(tile.get("depth_hetero") or tile.get("depth_missing")),
                 )
                 executor.submit(Priority.HIGHEST, "extract_tile", task_data)
 
@@ -810,6 +811,14 @@ def _add_arguments(parser) -> None:
         "(overrides --depth per tile; tiles straddling steep relief are "
         "flagged depth_hetero)",
     )
+    parser.add_argument(
+        "--depth-adjust",
+        type=float,
+        default=None,
+        help="Constant added to every finite --depth-grid tile depth in "
+        "meters (calibrated DEM bias, e.g. +1.2 on Hydrographer Bank "
+        "from the 2023 bottom-pressure truth)",
+    )
 
     # Output options
     parser.add_argument(
@@ -943,6 +952,8 @@ def run(args) -> None:
         config["current.land_mask"] = args.land_mask
     if getattr(args, "depth_grid", None) is not None:
         config["current.depth_grid"] = args.depth_grid
+    if getattr(args, "depth_adjust", None) is not None:
+        config["current.depth_adjust"] = args.depth_adjust
     if getattr(args, "max_land_fraction", None) is not None:
         config["current.max_land_fraction"] = args.max_land_fraction
 

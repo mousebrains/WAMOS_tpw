@@ -26,7 +26,7 @@ def _do_extract_tile(task):
     from multiprocessing import shared_memory
 
     from wamos_tpw.config import Config
-    from wamos_tpw.current import CurrentExtractor, FrameCube
+    from wamos_tpw.current import _DEPTH_FLAG_ERR_INFLATION, CurrentExtractor, FrameCube
     from wamos_tpw.priority_executor import Result
 
     (
@@ -50,6 +50,7 @@ def _do_extract_tile(task):
     ) = task.data[:17]
     scale = task.data[17] if len(task.data) > 17 else 0
     tile_depth = task.data[18] if len(task.data) > 18 else None
+    depth_flag = task.data[19] if len(task.data) > 19 else False
 
     result_base = {
         "cube_id": cube_id,
@@ -93,6 +94,10 @@ def _do_extract_tile(task):
         extractor = CurrentExtractor(tile_cube, config=config, depth=tile_depth)
         est = extractor.estimate
 
+        # Inflate formal errors where the tile depth is untrusted
+        # (steep relief or no bathymetry coverage) — T2b.4.
+        err_scale = _DEPTH_FLAG_ERR_INFLATION if depth_flag else 1.0
+
         result_base.update(
             {
                 "ux": est.ux,
@@ -105,9 +110,9 @@ def _do_extract_tile(task):
                 "center_y": est.center_y,
                 "peak_ratio": est.peak_ratio,
                 "fom": est.fom,
-                "ux_err": est.ux_err,
-                "uy_err": est.uy_err,
-                "cov_uxuy": est.cov_uxuy,
+                "ux_err": est.ux_err * err_scale,
+                "uy_err": est.uy_err * err_scale,
+                "cov_uxuy": est.cov_uxuy * err_scale**2,
                 "n_ls_points": est.n_ls_points,
                 "ls_rms": est.ls_rms,
                 "window_size": est.window_size,

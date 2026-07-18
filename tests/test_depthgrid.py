@@ -156,6 +156,56 @@ class TestTileSpecsIntegration:
         assert all(t["depth"] == pytest.approx(18.0) for t in bank)
         assert all(t["depth"] == pytest.approx(500.0) for t in deep)
         assert any(t["depth_hetero"] for t in edge)
+        # full coverage: nothing should be flagged missing
+        assert not any(t["depth_missing"] for t in tiles)
+
+        # depth_adjust shifts every finite tile depth by the calibrated bias
+        cfg_adj = dict(cfg)
+        cfg_adj["current.depth_adjust"] = 1.2
+        tiles_adj = compute_tile_specs(cube, config=cfg_adj)["tiles"]
+        bank_adj = [t for t in tiles_adj if t["center_x"] > 1500 and t["center_y"] > 1500]
+        assert all(t["depth"] == pytest.approx(19.2) for t in bank_adj)
+
+    def test_missing_coverage_flagged_not_silent(self, tmp_path):
+        """Tiles outside the bathymetry get depth=inf AND depth_missing=True."""
+        from wamos_tpw.current import FrameCube, compute_tile_specs
+
+        # tiny grid covering only the north-east corner of the cube
+        n_g = 40
+        dlat = 50.0 / _DEG2M
+        lat = CENTER_LAT + (np.arange(n_g) + 10) * dlat
+        lon = CENTER_LON + (np.arange(n_g) + 10) * dlat
+        ds = xr.Dataset(
+            {"elevation": (("lat", "lon"), np.full((n_g, n_g), -20.0))},
+            coords={"lat": lat, "lon": lon},
+        )
+        p = tmp_path / "corner.nc"
+        ds.to_netcdf(p)
+
+        n = 200
+        spacing = 40.0
+        x = (np.arange(n) - n / 2) * spacing
+        cube = FrameCube(
+            intensity=np.zeros((4, n, n)),
+            timestamps=np.arange(4).astype("datetime64[s]"),
+            dt=1.5,
+            x_centers=x,
+            y_centers=x.copy(),
+            grid_spacing=spacing,
+            center_lat=CENTER_LAT,
+            center_lon=CENTER_LON,
+        )
+        cfg = {
+            "current.sub_region_size": 2000.0,
+            "current.mask_seam": False,
+            "current.depth_grid": str(p),
+        }
+        tiles = compute_tile_specs(cube, config=cfg)["tiles"]
+        missing = [t for t in tiles if t["depth_missing"]]
+        covered = [t for t in tiles if not t["depth_missing"]]
+        assert missing, "tiles beyond the grid must be flagged"
+        assert all(not np.isfinite(t["depth"]) for t in missing)
+        assert covered and all(t["depth"] == pytest.approx(20.0) for t in covered)
 
 
 class TestExtractorOverride:
