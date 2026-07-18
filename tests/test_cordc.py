@@ -116,3 +116,60 @@ def test_packaged_css_angaur_station():
     assert s.cell_m == pytest.approx(15.0003)
     assert s.range_offset_m == pytest.approx(-36.8)
     assert s.clock_offset_s == pytest.approx(23.0)
+
+
+class TestBuildCube:
+    def test_point_target_lands_at_true_position(self, tmp_path):
+        """A bright polar target must appear at its earth position."""
+        from wamos_tpw.cordc_cube import build_cube
+
+        deg2m = 111_319.5
+        station = FixedStation(
+            "t",
+            latitude=6.9,
+            longitude=134.1,
+            antenna_height_m=30.0,
+            theta0_deg=0.0,
+            cell_m=15.0,
+            range_offset_m=0.0,
+        )
+        # target: bearing 45 deg, range 3000 m from the tower
+        brg, rng = 45.0, 3000.0
+        t_lat = 6.9 + rng * np.cos(np.radians(brg)) / deg2m
+        t_lon = 134.1 + rng * np.sin(np.radians(brg)) / (deg2m * np.cos(np.radians(6.9)))
+
+        n_rad, n_cell = 512, 400
+        words = np.arange(n_rad) * (8192 // n_rad)
+        target_w = int(brg / 360 * 8192)
+        target_r = int(rng / 15.0)
+        fns = []
+        for k in range(3):
+            fn = tmp_path / f"2023052000000{k}.pol"
+            header = (
+                "OWNER  CORDC   CC\r\n"
+                "RPT  2.509   CC\r\n"
+                f"FIFO  {n_cell}   CC\r\n"
+                "RANGE  7.408   CC\r\nSCALE  496   CC\r\n"
+                f"F0001  05-20-2023 00:00:0{k} 2.509\r\n"
+                "EOH \r\n"
+            ).encode()
+            payload = bytearray()
+            for w in words:
+                row = np.zeros(n_cell, np.uint8)
+                if abs(int(w) - target_w) <= 16:  # ~0.7 deg beam
+                    row[target_r - 1 : target_r + 2] = 250
+                payload += int(w).to_bytes(2, "little") + row.tobytes()
+            fn.write_bytes(header + f"{len(payload):10d}".encode() + bytes(payload))
+            fns.append(fn)
+
+        cube = build_cube(
+            fns, station, center_lat=t_lat, center_lon=t_lon, half_size=600.0, grid_spacing=20.0
+        )
+        assert cube.intensity.shape[0] == 3
+        frame = np.nan_to_num(cube.intensity[0], nan=0.0)
+        iy, ix = np.unravel_index(frame.argmax(), frame.shape)
+        # brightest cell within 2 cells (40 m) of the grid center
+        n = frame.shape[0]
+        assert frame.max() == 250
+        assert abs(iy - n // 2) <= 2 and abs(ix - n // 2) <= 2
+        assert cube.dt == pytest.approx(1.0, abs=0.01)  # 1-s synthetic cadence
