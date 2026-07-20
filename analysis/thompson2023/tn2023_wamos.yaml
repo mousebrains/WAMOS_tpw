@@ -1,0 +1,89 @@
+# WAMOS parameters keyed by the tower name, lower case, in the polar file
+
+# Global settings (used when tower-specific config is not available)
+
+global:
+  time_shift: 0 # Timestamp correction in seconds (added to frame timestamps)
+
+  theta_refinement:
+    enabled: True # Enable theta refinement across frames
+    min_frames: 3 # Minimum frames needed for refinement
+
+  shadow:
+    range_fraction: 0.1 # fraction of range bins to use for detecting the shadow region
+
+  bias:
+    range: 0 # Range bias in meters
+    theta: 0 # Theta bias in degrees
+
+  offsets:
+    bow_to_radar: 0 # BO2RA: Angle from bow to radar beam in degrees
+    heading_delay: 0 # HDGDL: Heading delay correction in degrees
+    compass: 0 # Compass offset correction in degrees
+
+  deramp:
+    order: 4 # Fit to 1 + 1/r + 1/r^2 + ... + 1/r^order
+
+  dewind:
+    order: 2 # Fit to polynomial of order
+
+"roger revelle":
+  time_shift: -0.06 # seconds, from hard-returns analysis 20220402T0415–20220402T0600
+
+  theta_refinement:
+    enabled: True # Tower-specific theta refinement settings
+    min_frames: 3
+
+  shadow: # Shadow regions
+    theta_refinement: True # Use shadow edges to refine theta bias frame by frame
+    range_fraction: 0.1 # fraction of range bins to use for detecting the shadow region
+    angle_range: 10 # +- degrees around expected shadow angles to search
+    aft:  # Aft tower
+      LHS: 145.36 # Expected LHS angle in degrees based on sample (high to low)
+      RHS: 215.36 # Expected RHS angle in degrees based on sample (low to high)
+
+  bias: # Bias parameters
+    range: -6 # Range bias in meters
+    theta: 10 # Theta bias in degrees
+
+  offsets: # Coordinate offset parameters
+    bow_to_radar: 0 # BO2RA: Angle from bow to radar beam in degrees
+    heading_delay: 0 # HDGDL: Heading delay correction in degrees
+    compass: 0 # Compass offset correction in degrees
+
+  deramp: # Deramping parameters
+    order: 4 # Fit to 1 + 1/r + 1/r^2 + ... + 1/r^order
+
+  dewind: # Dewind parameters
+    order: 2 # Fit to polynomial of order
+
+"r/v tommy thompson":
+  # TN417 Palau 2023. time_shift from hard-returns sweeps on bow-tie
+  # turn events with Angaur/Peleliu land in view. Coarse 2026-07-17:
+  # -0.84/-1.02/-1.08. Fine (0.02 s step, 2026-07-17 evening) on the
+  # three strongest turns: -0.70/-1.00/-1.30 -> adopt the median
+  # -1.00 +/- ~0.17 s (broad per-window peaks; +/-0.3 s only matters
+  # during hard turns: 0.3 s x 100 deg/min = 0.5 deg). The PPS
+  # cross-cruise mapping of -0.44 s was WRONG - always calibrate
+  # directly. Direction offset ~0 per the 2025 CSTARS cross-check
+  # (same tower install, not remounted between 2023 and 2025).
+  time_shift: -1.00 # seconds
+
+  shadow: # Aft tower shadow, measured 2026-07-18 from raw-frame
+          # range-slope tests at 4 headings (flat receiver noise,
+          # ship-fixed): rel 140-220 deg. Per-scan masking lets the
+          # ship's forward motion fill the astern strip in merges.
+    theta_refinement: False
+    angle_range: 10
+    aft:
+      LHS: 140
+      RHS: 220
+
+  bias:
+    range: 0
+    theta: 0
+
+  offsets:
+    bow_to_radar: 0
+    heading_delay: 0
+    compass: 0
