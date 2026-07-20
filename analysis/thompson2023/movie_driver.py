@@ -80,11 +80,12 @@ def main():
     t0 = np.datetime64(sys.argv[1])
     t1 = np.datetime64(sys.argv[2])
     step_s = int(float(sys.argv[3]) * 60) if len(sys.argv) > 3 else 900
+    n0 = int(sys.argv[5]) if len(sys.argv) > 5 else 0  # resume: seed frame counter
     FRAMES.mkdir(parents=True, exist_ok=True)
     sys.path.insert(0, str(BASE))
     import scene_render
 
-    t, n = t0, 0
+    t, n = t0, n0
     while t < t1:
         label = str(t)[:16]
         try:
