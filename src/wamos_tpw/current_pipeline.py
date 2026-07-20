@@ -316,6 +316,8 @@ class CurrentPipeline:
                     cube.center_lon,
                     config_dict,
                     tile.get("scale", 0),
+                    tile.get("depth"),
+                    bool(tile.get("depth_hetero") or tile.get("depth_missing")),
                 )
                 executor.submit(Priority.HIGHEST, "extract_tile", task_data)
 
@@ -789,6 +791,34 @@ def _add_arguments(parser) -> None:
         "(default: off; ~3000 recommended — wave signal degrades "
         "steadily with range)",
     )
+    parser.add_argument(
+        "--land-mask",
+        type=str,
+        default=None,
+        help="Land mask NetCDF from 'wamos land-mask'; tiles overlapping land are rejected",
+    )
+    parser.add_argument(
+        "--max-land-fraction",
+        type=float,
+        default=None,
+        help="Reject tiles whose land fraction exceeds this (default: 0.02)",
+    )
+    parser.add_argument(
+        "--depth-grid",
+        type=str,
+        default=None,
+        help="Bathymetry NetCDF for per-tile finite-depth dispersion "
+        "(overrides --depth per tile; tiles straddling steep relief are "
+        "flagged depth_hetero)",
+    )
+    parser.add_argument(
+        "--depth-adjust",
+        type=float,
+        default=None,
+        help="Constant added to every finite --depth-grid tile depth in "
+        "meters (calibrated DEM bias, e.g. +1.2 on Hydrographer Bank "
+        "from the 2023 bottom-pressure truth)",
+    )
 
     # Output options
     parser.add_argument(
@@ -918,6 +948,14 @@ def run(args) -> None:
         config["current.min_snr"] = args.min_snr
     if getattr(args, "max_tile_range", None) is not None:
         config["current.max_tile_range"] = args.max_tile_range
+    if getattr(args, "land_mask", None) is not None:
+        config["current.land_mask"] = args.land_mask
+    if getattr(args, "depth_grid", None) is not None:
+        config["current.depth_grid"] = args.depth_grid
+    if getattr(args, "depth_adjust", None) is not None:
+        config["current.depth_adjust"] = args.depth_adjust
+    if getattr(args, "max_land_fraction", None) is not None:
+        config["current.max_land_fraction"] = args.max_land_fraction
 
     # Field inversion overrides
     if getattr(args, "window_sizes", None):

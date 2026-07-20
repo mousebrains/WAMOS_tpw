@@ -75,6 +75,11 @@ _BLOCK_OVERLAP_DEFAULT = 0.5
 _SUB_REGION_SIZE_DEFAULT = 2000.0  # meters
 _SUB_REGION_OVERLAP_DEFAULT = 0.5
 _DEPTH_DEFAULT = np.inf
+# Error inflation for tiles whose depth is untrusted: steep-relief
+# (depth_hetero) tiles and tiles with no bathymetry coverage at all
+# (silent deep-water fallback). A 10-20% DEM error in the swell band
+# maps to ~0.1-0.3 m/s of current bias invisible to the formal LS errors.
+_DEPTH_FLAG_ERR_INFLATION = 2.0
 _SEARCH_RADIUS_DEFAULT = 3.0  # m/s
 _SEARCH_STEP_DEFAULT = 0.1  # m/s
 _REFINE_DEFAULT = True
@@ -99,6 +104,11 @@ _MASK_SEAM_DEFAULT = True
 # ~0.5 m/s inside 2 km to >2 m/s beyond 4 km — so ~3000 is a good value
 # for these installations.
 _MAX_TILE_RANGE_DEFAULT = None
+# Mask tiles whose land fraction (from a 'wamos land-mask' NetCDF given
+# via current.land_mask) exceeds this. Stationary hard returns put a
+# strong static signal at omega ~ 0 that drags dispersion fits toward
+# zero velocity, so even a small land sliver disqualifies a tile.
+_MAX_LAND_FRACTION_DEFAULT = 0.02
 
 
 # ============================================================
@@ -528,7 +538,7 @@ class CurrentMap:
             sub = cube.sub_cube(tile["x_start"], tile["x_end"], tile["y_start"], tile["y_end"])
 
             try:
-                extractor = CurrentExtractor(sub, config=cfg)
+                extractor = CurrentExtractor(sub, config=cfg, depth=tile.get("depth"))
                 est = extractor.estimate
             except Exception:
                 logger.debug(
@@ -539,6 +549,13 @@ class CurrentMap:
                 )
                 continue
 
+            # Inflate formal errors where the tile depth is untrusted
+            # (steep relief or no bathymetry coverage) — T2b.4.
+            err_scale = (
+                _DEPTH_FLAG_ERR_INFLATION
+                if tile.get("depth_hetero") or tile.get("depth_missing")
+                else 1.0
+            )
             est = CurrentEstimate(
                 ux=est.ux,
                 uy=est.uy,
@@ -550,8 +567,8 @@ class CurrentMap:
                 center_y=tile["center_y"],
                 peak_ratio=est.peak_ratio,
                 fom=est.fom,
-                ux_err=est.ux_err,
-                uy_err=est.uy_err,
+                ux_err=est.ux_err * err_scale,
+                uy_err=est.uy_err * err_scale,
                 n_ls_points=est.n_ls_points,
                 ls_rms=est.ls_rms,
             )
@@ -721,6 +738,22 @@ def compute_tile_specs(
     depth = cfg.get("current.depth", _DEPTH_DEFAULT)
     mask_seam = cfg.get("current.mask_seam", _MASK_SEAM_DEFAULT)
     max_tile_range = cfg.get("current.max_tile_range", _MAX_TILE_RANGE_DEFAULT)
+    land_mask_path = cfg.get("current.land_mask", None)
+    max_land_fraction = cfg.get("current.max_land_fraction", _MAX_LAND_FRACTION_DEFAULT)
+    depth_grid_path = cfg.get("current.depth_grid", None)
+    depth_adjust = cfg.get("current.depth_adjust", 0.0)
+
+    land_mask = None
+    if land_mask_path:
+        from wamos_tpw.landmask import load_cached
+
+        land_mask = load_cached(str(land_mask_path))
+
+    depth_grid = None
+    if depth_grid_path:
+        from wamos_tpw.depthgrid import load_cached as load_depth
+
+        depth_grid = load_depth(str(depth_grid_path))
 
     # Median radar position in cube coordinates, for range gating
     radar_x = radar_y = None
@@ -791,6 +824,28 @@ def compute_tile_specs(
             masked = mask_seam and _tile_contains_seam(cube, *tile_bounds)
             if not masked and radar_x is not None:
                 masked = np.hypot(cx - radar_x, cy - radar_y) > max_tile_range
+            if not masked and land_mask is not None:
+                masked = (
+                    land_mask.land_fraction(*tile_bounds, cube.center_lat, cube.center_lon)
+                    > max_land_fraction
+                )
+
+            tile_depth = None
+            depth_hetero = False
+            depth_missing = False
+            if depth_grid is not None:
+                tile_depth, depth_hetero = depth_grid.tile_depth(
+                    *tile_bounds, cube.center_lat, cube.center_lon
+                )
+                if not np.isfinite(tile_depth):
+                    # No bathymetry coverage: deep-water dispersion will be
+                    # used — flag it so downstream errors are inflated
+                    # instead of silently trusting the fallback.
+                    depth_missing = True
+                elif depth_adjust:
+                    # Calibrated DEM bias correction (e.g. +1.2 m on
+                    # Hydrographer Bank from the 2023 pressure-sensor truth).
+                    tile_depth += depth_adjust
 
             tiles.append(
                 {
@@ -804,16 +859,38 @@ def compute_tile_specs(
                     "center_y": cy,
                     "masked": masked,
                     "scale": 0,
+                    "depth": tile_depth,
+                    "depth_hetero": depth_hetero,
+                    "depth_missing": depth_missing,
                 }
             )
 
     n_masked = sum(1 for t in tiles if t["masked"])
     if n_masked:
         logger.debug(
-            "Masked %d/%d tiles (seam, radar inside, or beyond max range)",
+            "Masked %d/%d tiles (seam, radar inside, beyond max range, or land)",
             n_masked,
             len(tiles),
         )
+
+    if depth_grid is not None:
+        n_missing = sum(1 for t in tiles if t["depth_missing"] and not t["masked"])
+        n_hetero = sum(1 for t in tiles if t["depth_hetero"] and not t["masked"])
+        if n_missing:
+            logger.warning(
+                "%d/%d tiles have no bathymetry coverage; deep-water "
+                "dispersion used there with errors inflated x%.1f",
+                n_missing,
+                len(tiles),
+                _DEPTH_FLAG_ERR_INFLATION,
+            )
+        if n_hetero:
+            logger.info(
+                "%d/%d tiles straddle steep relief (depth_hetero); errors inflated x%.1f",
+                n_hetero,
+                len(tiles),
+                _DEPTH_FLAG_ERR_INFLATION,
+            )
 
     return {
         "n_tiles_x": n_tiles_x,
@@ -991,6 +1068,8 @@ class CurrentExtractor:
     Args:
         cube: FrameCube for a single sub-region.
         config: Configuration object.
+        depth: Optional per-tile water depth in meters, overriding
+            ``current.depth`` (used with a bathymetry grid).
 
     Attributes:
         estimate: The best-fit CurrentEstimate.
@@ -1000,13 +1079,13 @@ class CurrentExtractor:
         omega: 1D frequency array (rad/s) along time axis (full FFT frequencies).
     """
 
-    def __init__(self, cube: FrameCube, config: Any = None) -> None:
+    def __init__(self, cube: FrameCube, config: Any = None, depth: float | None = None) -> None:
         from wamos_tpw.config import NullConfig
 
         self._cube = cube
         self._cfg = config or NullConfig()
 
-        self._depth = self._cfg.get("current.depth", _DEPTH_DEFAULT)
+        self._depth = depth if depth is not None else self._cfg.get("current.depth", _DEPTH_DEFAULT)
         self._search_radius = self._cfg.get("current.search_radius", _SEARCH_RADIUS_DEFAULT)
         self._search_step = self._cfg.get("current.search_step", _SEARCH_STEP_DEFAULT)
         self._do_refine = self._cfg.get("current.refine", _REFINE_DEFAULT)

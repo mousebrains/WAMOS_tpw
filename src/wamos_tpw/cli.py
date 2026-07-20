@@ -101,6 +101,7 @@ Examples:
         frame_pipeline,
         hard_returns,
         interpolator,
+        landmask,
         list_frames,
         metadata,
         polarfile,
@@ -140,6 +141,7 @@ Examples:
     timeshift.add_subparser(subparsers)  # wamos timeshift
     pps_timing.add_subparser(subparsers)  # wamos pps-timing
     hard_returns.add_subparser(subparsers)  # wamos hard-returns
+    landmask.add_subparser(subparsers)  # wamos land-mask
 
     # Parse arguments
     args = parser.parse_args()

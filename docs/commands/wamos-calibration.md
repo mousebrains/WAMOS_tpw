@@ -92,3 +92,43 @@ wamos hard-returns 2022040514 2022040515 /path/to/POLAR \
 **Output:** Hard return mask with angular distribution and range profiles, optional NetCDF file and diagnostic plots.
 
 Source: `src/wamos_tpw/hard_returns.py`
+
+---
+
+## `wamos land-mask`
+
+Build a static earth-referenced land mask from `wamos files-pipeline`
+merged mosaics. Land and other fixed hard returns are persistently
+bright in earth coordinates while sea backscatter fluctuates, so the
+per-cell temporal minimum across many mosaics separates land from sea.
+Apply the resulting mask during current extraction with
+`wamos current --land-mask` to reject tiles overlapping land.
+
+```bash
+# Build mosaics for a period with land in view, then the mask
+wamos files-pipeline 2022040514 2022040515 /path/to/POLAR \
+    --ship-data ./ship/ --window 30 -o ./mosaics/
+wamos land-mask './mosaics/merged_*.nc' -o land_mask.nc
+
+# Use it
+wamos current ... --land-mask land_mask.nc
+```
+
+**Arguments:**
+
+| Argument | Description |
+|----------|-------------|
+| `mosaics` | Merged mosaic NetCDF files, directories, or globs |
+| `--output`, `-o` | Output land mask NetCDF filename (required) |
+| `--cell` | Mask grid resolution in meters (default: `30`) |
+| `--threshold-pct` | Percentile of the temporal-minimum stack used as the land threshold (default: `99`) |
+| `--threshold` | Absolute intensity threshold (overrides `--threshold-pct`) |
+| `--min-count` | Minimum mosaics covering a cell for it to be usable (default: `3`) |
+| `--dilate` | Grow the mask by this many cells so thin coastline slivers still trip the tile land-fraction test (default: `2`) |
+| `--max-range` | Only accumulate pixels within this range of the radar, meters — distant views are too dim and would dilute the land vote (default: `4500`; `0` disables) |
+| `--bright-frac` | Fraction of covering views that must exceed the threshold for a cell to be land; the majority vote survives terrain occlusion from some view angles (default: `0.5`) |
+
+**Output:** CF-1.13 NetCDF with a `land` flag variable on a regular
+latitude/longitude grid.
+
+Source: `src/wamos_tpw/landmask.py`

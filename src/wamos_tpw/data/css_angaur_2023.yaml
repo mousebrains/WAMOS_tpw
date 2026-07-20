@@ -1,0 +1,26 @@
+# CSS Angaur fixed-station radar (ARCTERX 2023, Palau)
+#
+# Furuno FAR-3220BB chart radar on the Angaur tower, recorded by the
+# CORDC "NAVNET SAMPLE" logger. One file per ~5 s (every other antenna
+# rotation), per-radial 13-bit encoder words + 884 x uint8 intensities.
+#
+# Calibration measured 2026-07-17 from 7108 GPS-tracked R/V Thompson
+# detections (May 18-23 2023, joint Gauss-Newton fit of theta0 / cell /
+# range offset / clock, 23 m rms; see thompson2023/css_ship_calib.py):
+#   theta0        18.836 +/- 0.002 deg   (per-day spread +/-0.05)
+#   cell size     15.0003 +/- 0.0016 m   (= Furuno spec; the header
+#                 RANGE/SCALE ratio 14.9355 m is NOT the true cell)
+#   range offset  -36.8 +/- 0.9 m
+#   clock offset  ~ +23 s but wanders +/-4 s day-to-day (free-running
+#                 recorder PC). For sub-5 s work use the hourly series
+#                 (angaur_clock_series.csv), not this constant.
+
+name: css_angaur_2023
+latitude: 6.91677          # deg N (tower position, from Pat)
+longitude: 134.14840       # deg E
+antenna_height_m: 37.2     # ~100 ft tower + 22 ft base above MSL
+
+theta0_deg: 18.836         # true bearing = word/8192*360 + theta0
+cell_m: 15.0003            # overrides header RANGE/SCALE
+range_offset_m: -36.8      # range = cell_m * cell_index + range_offset_m
+clock_offset_s: 23.0       # t_true = t_file + clock_offset_s + intra-sweep
