@@ -36,6 +36,7 @@ from pathlib import Path
 import numpy as np
 
 from wamos_tpw.cordc import ENCODER_COUNTS, CordcFile, FixedStation
+from wamos_tpw.prefetch import read_ahead
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,9 @@ def build_cube(
     intensity = np.full((len(files), n, n), np.nan, dtype=np.float32)
     times = np.empty(len(files), dtype="datetime64[ms]")
     flat_word = cell_word.ravel()
-    for k, fn in enumerate(files):
+    # warm the page cache ahead of the parse loop; cold SMB reads
+    # otherwise serialize with the per-sweep resampling below
+    for k, fn in enumerate(read_ahead(files)):
         sweep = CordcFile(fn, station)
         times[k] = np.datetime64(sweep.file_time.replace(tzinfo=None), "ms")
         rng_idx = (cell_rng - sweep.ranges[0]) / sweep.cell_m
