@@ -81,7 +81,10 @@ def ensure_mosaic(t):
 
 
 def find_composite(t):
-    ts = str(t)
+    # composites are on a 15-min grid; half-step frames reuse the cover
+    t = t.astype("datetime64[s]")
+    tn = (t.astype(int) // 900) * 900
+    ts = str(np.datetime64(int(tn), "s"))
     tag = f"{ts[:10]}_{ts[11:13]}-{ts[14:16]}"
     for d in COMPOSITE_DIRS:
         hit = sorted(glob.glob(str(d / f"current_composite_{tag}*.nc")))

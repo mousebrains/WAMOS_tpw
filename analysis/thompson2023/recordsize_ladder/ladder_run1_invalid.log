@@ -1,0 +1,30 @@
+07:40:20 === LADDER START ===
+07:40:20 eviction pass...
+evicted: 84 GB in 278s (303 MB/s)
+07:44:58 --- cp1: 128K -> 1M ---
+cp POLAR->POLAR_1M hour 12: 9874 MB in 0s (9874 MB/s)
+cp POLAR->POLAR_1M hour 13: 9879 MB in 1s (4939 MB/s)
+cp POLAR->POLAR_1M hour 14: 9873 MB in 0s (9873 MB/s)
+07:45:00 eviction pass...
+evicted: 84 GB in 199s (422 MB/s)
+07:48:19 --- cp2: 1M -> 1M ---
+cp POLAR_1M->POLAR_1M_B hour 12: 9874 MB in 0s (9874 MB/s)
+cp POLAR_1M->POLAR_1M_B hour 13: 9879 MB in 1s (4939 MB/s)
+cp POLAR_1M->POLAR_1M_B hour 14: 9873 MB in 1s (4936 MB/s)
+07:48:21 eviction pass...
+evicted: 84 GB in 122s (687 MB/s)
+07:50:24 --- Mac three-way bench over SMB ---
+--- repeat 1 ---
+128K loose serial                     66.2 MB    1.78 s     37 MB/s
+128K loose 8-way                      66.2 MB    0.48 s    138 MB/s
+1M loose serial                       66.1 MB    1.35 s     49 MB/s
+1M loose 8-way                        66.1 MB    0.37 s    178 MB/s
+tar ranged serial                     66.2 MB    0.37 s    179 MB/s
+--- repeat 2 ---
+128K loose serial                     66.2 MB    1.87 s     35 MB/s
+128K loose 8-way                      66.2 MB    0.42 s    158 MB/s
+1M loose serial                       66.0 MB    1.50 s     44 MB/s
+1M loose 8-way                        66.2 MB    0.41 s    161 MB/s
+tar ranged serial                     66.2 MB    0.34 s    193 MB/s
+tar stream 2GB (hour 12 tar, mid)   2147.5 MB    6.27 s    342 MB/s
+07:50:40 === LADDER DONE ===
