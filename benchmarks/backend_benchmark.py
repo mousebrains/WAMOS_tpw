@@ -2,13 +2,11 @@
 """
 Backend comparison benchmark for WAMOS pipeline.
 
-Tests 6 configurations of the actual pipeline code:
-  1. NumPy-only       (no GPU, no CuPy, no Numba)
-  2. Numba            (no GPU, no CuPy, Numba enabled)
-  3. PyTorch GPU      (GPU enabled, no CuPy, no Numba)
-  4. PyTorch + Numba  (GPU enabled, no CuPy, both enabled)
-  5. CuPy             (no PyTorch GPU, CuPy enabled, no Numba)
-  6. CuPy + Numba     (no PyTorch GPU, CuPy enabled, Numba enabled)
+Tests 4 configurations of the actual pipeline code:
+  1. NumPy-only       (no CuPy, no Numba)
+  2. Numba            (no CuPy, Numba enabled)
+  3. CuPy             (CuPy enabled, no Numba)
+  4. CuPy + Numba     (CuPy enabled, Numba enabled)
 
 Each configuration runs in a subprocess with the appropriate env vars
 so that module-level detection picks up the correct settings.
@@ -33,27 +31,19 @@ from pathlib import Path
 CONFIGS = [
     {
         "name": "NumPy-only",
-        "env": {"WAMOS_NO_GPU": "1", "WAMOS_NO_NUMBA": "1", "WAMOS_NO_CUPY": "1"},
+        "env": {"WAMOS_NO_NUMBA": "1", "WAMOS_NO_CUPY": "1"},
     },
     {
         "name": "Numba",
-        "env": {"WAMOS_NO_GPU": "1", "WAMOS_NO_NUMBA": "", "WAMOS_NO_CUPY": "1"},
-    },
-    {
-        "name": "PyTorch GPU",
-        "env": {"WAMOS_NO_GPU": "", "WAMOS_NO_NUMBA": "1", "WAMOS_NO_CUPY": "1"},
-    },
-    {
-        "name": "PyTorch + Numba",
-        "env": {"WAMOS_NO_GPU": "", "WAMOS_NO_NUMBA": "", "WAMOS_NO_CUPY": "1"},
+        "env": {"WAMOS_NO_NUMBA": "", "WAMOS_NO_CUPY": "1"},
     },
     {
         "name": "CuPy",
-        "env": {"WAMOS_NO_GPU": "1", "WAMOS_NO_NUMBA": "1", "WAMOS_NO_CUPY": ""},
+        "env": {"WAMOS_NO_NUMBA": "1", "WAMOS_NO_CUPY": ""},
     },
     {
         "name": "CuPy + Numba",
-        "env": {"WAMOS_NO_GPU": "1", "WAMOS_NO_NUMBA": "", "WAMOS_NO_CUPY": ""},
+        "env": {"WAMOS_NO_NUMBA": "", "WAMOS_NO_CUPY": ""},
     },
 ]
 
@@ -72,7 +62,7 @@ import numpy as np
 
 sys.path.insert(0, "{src_dir}")
 
-from wamos_tpw.backend import HAS_CUPY_GPU, HAS_NUMBA, HAS_TORCH_GPU
+from wamos_tpw.backend import HAS_CUPY_GPU, HAS_NUMBA
 from wamos_tpw.config import Config
 from wamos_tpw.polarfile import PolarFile
 
@@ -171,7 +161,6 @@ def main():
 
     output = {{
         "HAS_CUPY_GPU": HAS_CUPY_GPU,
-        "HAS_TORCH_GPU": HAS_TORCH_GPU,
         "HAS_NUMBA": HAS_NUMBA,
         "frame_shape": list(frame.shape),
     }}
@@ -193,14 +182,15 @@ def main():
     }}
 
     # GPU memory stats
-    if HAS_TORCH_GPU:
-        import torch
-        if torch.cuda.is_available():
-            memory["gpu_peak_allocated_mb"] = torch.cuda.max_memory_allocated() / (1024 * 1024)
-            memory["gpu_current_allocated_mb"] = torch.cuda.memory_allocated() / (1024 * 1024)
-            free, total = torch.cuda.mem_get_info()
-            memory["gpu_free_mb"] = free / (1024 * 1024)
-            memory["gpu_total_mb"] = total / (1024 * 1024)
+    if HAS_CUPY_GPU:
+        import cupy
+
+        mempool = cupy.get_default_memory_pool()
+        memory["gpu_pool_used_mb"] = mempool.used_bytes() / (1024 * 1024)
+        memory["gpu_pool_total_mb"] = mempool.total_bytes() / (1024 * 1024)
+        free, total = cupy.cuda.Device(0).mem_info
+        memory["gpu_free_mb"] = free / (1024 * 1024)
+        memory["gpu_total_mb"] = total / (1024 * 1024)
 
     output["memory"] = memory
 
@@ -215,7 +205,6 @@ def run_config(cfg, filepath, config_path, n_warmup, n_iter, src_dir):
     """Run one configuration in a subprocess."""
     env = dict(os.environ)
     # Clear first, then set
-    env.pop("WAMOS_NO_GPU", None)
     env.pop("WAMOS_NO_NUMBA", None)
     env.pop("WAMOS_NO_CUPY", None)
     for k, v in cfg["env"].items():
@@ -394,8 +383,6 @@ def print_comparison_table(all_results):
         backends = []
         if r.get("HAS_CUPY_GPU"):
             backends.append("CuPy/CUDA")
-        if r.get("HAS_TORCH_GPU"):
-            backends.append("PyTorch/CUDA")
         if r.get("HAS_NUMBA"):
             backends.append("Numba")
         if not backends:
@@ -427,8 +414,8 @@ def print_comparison_table(all_results):
             ("Baseline RSS", "baseline_rss_mb"),
             ("Peak RSS", "peak_rss_mb"),
             ("Delta RSS", "delta_rss_mb"),
-            ("GPU Peak Alloc", "gpu_peak_allocated_mb"),
-            ("GPU Current Alloc", "gpu_current_allocated_mb"),
+            ("GPU Pool Used", "gpu_pool_used_mb"),
+            ("GPU Pool Total", "gpu_pool_total_mb"),
             ("GPU Free", "gpu_free_mb"),
             ("GPU Total", "gpu_total_mb"),
         ]
@@ -460,7 +447,7 @@ def main():
         "--configs",
         nargs="+",
         default=None,
-        choices=["numpy", "numba", "pytorch", "both", "cupy", "cupy+numba"],
+        choices=["numpy", "numba", "cupy", "cupy+numba"],
         help="Configs to test (default: all)",
     )
     args = parser.parse_args()
@@ -479,7 +466,7 @@ def main():
     src_dir = str(Path(__file__).resolve().parents[1] / "src")
 
     # Filter configs
-    config_map = {"numpy": 0, "numba": 1, "pytorch": 2, "both": 3, "cupy": 4, "cupy+numba": 5}
+    config_map = {"numpy": 0, "numba": 1, "cupy": 2, "cupy+numba": 3}
     if args.configs:
         selected = [CONFIGS[config_map[c]] for c in args.configs]
     else:

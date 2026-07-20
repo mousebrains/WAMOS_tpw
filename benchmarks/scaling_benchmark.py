@@ -3,16 +3,16 @@
 Multi-worker scaling benchmark for WAMOS pipeline.
 
 Measures how throughput scales with number of parallel workers across
-different backend configurations (NumPy-only, PyTorch GPU, etc.).
+different backend configurations (NumPy-only, Numba, CuPy, etc.).
 
 Each (config, n_workers) combination runs in a subprocess with the
-appropriate WAMOS_NO_GPU / WAMOS_NO_NUMBA env vars so that module-level
+appropriate WAMOS_NO_CUPY / WAMOS_NO_NUMBA env vars so that module-level
 detection picks up the correct settings.
 
 Usage:
     python benchmarks/scaling_benchmark.py /path/to/POLAR
     python benchmarks/scaling_benchmark.py /path/to/POLAR -n 30 --workers 1,2,4,8,16
-    python benchmarks/scaling_benchmark.py /path/to/POLAR --configs numpy pytorch both
+    python benchmarks/scaling_benchmark.py /path/to/POLAR --configs numpy numba cupy+numba
 """
 
 from __future__ import annotations
@@ -30,27 +30,19 @@ from pathlib import Path
 CONFIGS = {
     "numpy": {
         "name": "NumPy-only",
-        "env": {"WAMOS_NO_GPU": "1", "WAMOS_NO_NUMBA": "1", "WAMOS_NO_CUPY": "1"},
+        "env": {"WAMOS_NO_NUMBA": "1", "WAMOS_NO_CUPY": "1"},
     },
     "numba": {
         "name": "Numba",
-        "env": {"WAMOS_NO_GPU": "1", "WAMOS_NO_NUMBA": "", "WAMOS_NO_CUPY": "1"},
-    },
-    "pytorch": {
-        "name": "PyTorch GPU",
-        "env": {"WAMOS_NO_GPU": "", "WAMOS_NO_NUMBA": "1", "WAMOS_NO_CUPY": "1"},
-    },
-    "both": {
-        "name": "PyTorch + Numba",
-        "env": {"WAMOS_NO_GPU": "", "WAMOS_NO_NUMBA": "", "WAMOS_NO_CUPY": "1"},
+        "env": {"WAMOS_NO_NUMBA": "", "WAMOS_NO_CUPY": "1"},
     },
     "cupy": {
         "name": "CuPy",
-        "env": {"WAMOS_NO_GPU": "1", "WAMOS_NO_NUMBA": "1", "WAMOS_NO_CUPY": ""},
+        "env": {"WAMOS_NO_NUMBA": "1", "WAMOS_NO_CUPY": ""},
     },
     "cupy+numba": {
         "name": "CuPy + Numba",
-        "env": {"WAMOS_NO_GPU": "1", "WAMOS_NO_NUMBA": "", "WAMOS_NO_CUPY": ""},
+        "env": {"WAMOS_NO_NUMBA": "", "WAMOS_NO_CUPY": ""},
     },
 }
 
@@ -144,10 +136,10 @@ def main():
     peak_rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 
     # Import backend AFTER workers finish (avoids CUDA init before fork)
-    from wamos_tpw.backend import HAS_NUMBA, HAS_TORCH_GPU
+    from wamos_tpw.backend import HAS_CUPY_GPU, HAS_NUMBA
 
     output = {{
-        "HAS_TORCH_GPU": HAS_TORCH_GPU,
+        "HAS_CUPY_GPU": HAS_CUPY_GPU,
         "HAS_NUMBA": HAS_NUMBA,
         "n_workers": n_workers,
         "n_files": len(filepaths),
@@ -161,12 +153,12 @@ def main():
     }}
 
     # GPU memory stats (device-wide)
-    if HAS_TORCH_GPU:
-        import torch
-        if torch.cuda.is_available():
-            free, total = torch.cuda.mem_get_info()
-            output["gpu_free_mb"] = free / (1024 * 1024)
-            output["gpu_total_mb"] = total / (1024 * 1024)
+    if HAS_CUPY_GPU:
+        import cupy
+
+        free, total = cupy.cuda.Device(0).mem_info
+        output["gpu_free_mb"] = free / (1024 * 1024)
+        output["gpu_total_mb"] = total / (1024 * 1024)
 
     print(json.dumps(output))
 
@@ -201,7 +193,6 @@ def run_scaling_config(
 ) -> dict | None:
     """Launch one subprocess for a (config, n_workers) pair."""
     env = dict(os.environ)
-    env.pop("WAMOS_NO_GPU", None)
     env.pop("WAMOS_NO_NUMBA", None)
     env.pop("WAMOS_NO_CUPY", None)
     for k, v in cfg["env"].items():
@@ -266,8 +257,8 @@ def print_scaling_table(config_results: dict[str, list[dict]]) -> None:
         # Backend info from first result
         r0 = results[0]
         backends = []
-        if r0.get("HAS_TORCH_GPU"):
-            backends.append("PyTorch/CUDA")
+        if r0.get("HAS_CUPY_GPU"):
+            backends.append("CuPy/CUDA")
         if r0.get("HAS_NUMBA"):
             backends.append("Numba")
         if not backends:
@@ -381,9 +372,9 @@ def main():
     parser.add_argument(
         "--configs",
         nargs="+",
-        default=["numpy", "both"],
-        choices=["numpy", "numba", "pytorch", "both", "cupy", "cupy+numba"],
-        help="Configs to test (default: numpy both)",
+        default=["numpy", "numba"],
+        choices=["numpy", "numba", "cupy", "cupy+numba"],
+        help="Configs to test (default: numpy numba)",
     )
     parser.add_argument("--json", type=str, default=None, help="Save results to JSON file")
     args = parser.parse_args()
