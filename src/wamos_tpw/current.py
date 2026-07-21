@@ -1098,6 +1098,15 @@ class CurrentExtractor:
             "current.min_shell_fraction", _MIN_SHELL_FRACTION_DEFAULT
         )
         self._window_name = self._cfg.get("current.fft_window", _FFT_WINDOW_DEFAULT)
+        # Alias-aware fitting: include dispersion-branch energy folded by
+        # temporal undersampling. alias_m = number of Nyquist folds to
+        # model (0 = legacy). Because the sampled spectrum is the true
+        # spectrum wrapped modulo omega_s and all omega lookups here index
+        # modulo n_t, the folded branches are reached simply by letting
+        # |omega_pred| extend to (2*alias_m + 1) * omega_nyq; the Doppler
+        # term keeps its sign under folding (direction and frequency both
+        # negate), so folded peaks constrain the SAME (Ux, Uy).
+        self._alias_m = int(self._cfg.get("current.alias_m", 0))
 
         # Run the extraction pipeline
         prepared = self._prepare_cube()
@@ -1258,6 +1267,11 @@ class CurrentExtractor:
         self._se_omega_nyq: float = omega_nyq
         self._se_omega_min: float = omega_min
         self._se_n_t: int = n_t
+        # Alias-aware prediction limit: folded branches live at unwrapped
+        # |omega| in (omega_nyq, (2*alias_m+1)*omega_nyq]; modular indexing
+        # maps them onto their measured (wrapped) rows automatically.
+        self._se_omega_lim: float = (2 * self._alias_m + 1) * omega_nyq
+        self._se_omega_s: float = 2.0 * omega_nyq
 
         # Total energy and bin count over the analysis set — the valid k
         # annulus restricted to omega_min <= |omega| < omega_nyq — used by
@@ -1313,9 +1327,15 @@ class CurrentExtractor:
         energy = 0.0
         n_shell = 0
 
+        omega_lim = self._se_omega_lim
+        omega_s = self._se_omega_s
+
         for omega_pred in [-(self._se_om0 + doppler), self._se_om0 - doppler]:
             abs_pred = np.abs(omega_pred)
-            ok = (abs_pred < omega_nyq) & (abs_pred >= omega_min)
+            # wrapped distance from DC: keeps folded predictions off the
+            # static-pattern rows (== abs_pred inside the primary band)
+            wd = np.abs((omega_pred + omega_nyq) % omega_s - omega_nyq)
+            ok = (abs_pred < omega_lim) & (abs_pred >= omega_min) & (wd >= omega_min)
             op = omega_pred[ok]
             frac = op / d_omega
             lo = np.floor(frac).astype(np.intp)
@@ -1370,6 +1390,8 @@ class CurrentExtractor:
         d_omega = self._se_d_omega
         omega_nyq = self._se_omega_nyq
         omega_min = self._se_omega_min
+        omega_lim_ = self._se_omega_lim
+        omega_s_ = self._se_omega_s
 
         n_valid = len(kx_v)
 
@@ -1416,7 +1438,8 @@ class CurrentExtractor:
                 for sign in (-1.0, 1.0):
                     omega_pred = sign * om0_v[np.newaxis, :] - doppler
                     abs_pred = np.abs(omega_pred)
-                    ok = (abs_pred < omega_nyq) & (abs_pred >= omega_min)
+                    wd = np.abs((omega_pred + omega_nyq) % omega_s_ - omega_nyq)
+                    ok = (abs_pred < omega_lim_) & (abs_pred >= omega_min) & (wd >= omega_min)
 
                     frac = omega_pred / d_omega
                     lo = np.floor(frac).astype(np.intp)
@@ -1537,7 +1560,17 @@ class CurrentExtractor:
             )
 
             margin = (half_w + 1) * d_omega
-            usable = (np.abs(omega_pred) < omega_nyq - margin) & (np.abs(omega_pred) >= omega_min)
+            if self._alias_m:
+                wd = np.abs((omega_pred + omega_nyq) % self._se_omega_s - omega_nyq)
+                usable = (
+                    (np.abs(omega_pred) < self._se_omega_lim - margin)
+                    & (np.abs(omega_pred) >= omega_min)
+                    & (wd >= omega_min + margin)
+                )
+            else:
+                usable = (np.abs(omega_pred) < omega_nyq - margin) & (
+                    np.abs(omega_pred) >= omega_min
+                )
             idx = np.where(usable)[0]
             if len(idx) < _MIN_POINTS:
                 return coarse_ux, coarse_uy

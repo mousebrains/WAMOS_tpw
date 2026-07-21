@@ -222,18 +222,28 @@ def _do_process_file(task) -> Result:
     if config_dict:
         config._config = config_dict
 
+    # Display experiment (2026-07-20): WAMOS_FOLD_STAGE=shadowed taps the
+    # destreaked+shadow-masked intensity BEFORE Deramp/Dewind, whose
+    # per-disk fits subtract mesoscale (eddy-scale) roughness contrast.
+    import os
+
+    stage = os.environ.get("WAMOS_FOLD_STAGE", "final")
+
     t0 = time.perf_counter() if qTiming else None
     pf = PolarFile(filepath, config=config)
     frames_data = []
     shm_names = []
 
     for frame_idx, frame in enumerate(pf):
-        fp = FramePipeline(frame, config=config, qTiming=qTiming)
+        fp = FramePipeline(frame, config=config, qSave=(stage == "shadowed"),
+                           qTiming=qTiming)
 
         # Create shared memory for arrays
         theta_shm = create_shared_array(fp.theta_array)
         ground_range_shm = create_shared_array(fp.ground_range)
-        intensity_shm = create_shared_array(fp.final_intensity)
+        intensity_shm = create_shared_array(
+            fp.intensity_shadowed if stage == "shadowed" else fp.final_intensity
+        )
 
         shm_names.extend([theta_shm[0], ground_range_shm[0], intensity_shm[0]])
 
