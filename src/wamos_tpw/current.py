@@ -1277,10 +1277,14 @@ class CurrentExtractor:
         if self._beam_origin is not None:
             olat, olon = self._beam_origin
             deg2m = 111_319.5
-            dx_o = (
-                (self._cube.center_lon - olon) * deg2m * np.cos(np.radians(self._cube.center_lat))
-            )
-            dy_o = (self._cube.center_lat - olat) * deg2m
+            # Patch position = cube reference latlon PLUS the mean grid
+            # offset: tile sub-cubes keep the parent's center_lat/lon and
+            # carry their location in x/y_centers, so without the offset a
+            # tile 8 km off-center would get the parent's look geometry.
+            dx_o = (self._cube.center_lon - olon) * deg2m * np.cos(
+                np.radians(self._cube.center_lat)
+            ) + float(np.mean(self._cube.x_centers))
+            dy_o = (self._cube.center_lat - olat) * deg2m + float(np.mean(self._cube.y_centers))
             rng_o = float(np.hypot(dx_o, dy_o))
             if rng_o > 1.0:
                 look = np.array([dx_o, dy_o]) / rng_o  # radial unit
