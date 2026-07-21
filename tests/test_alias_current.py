@@ -101,3 +101,46 @@ class TestAliasAware:
         # well-sampled cube: alias branches are empty, results must agree
         assert np.hypot(est0.ux - est1.ux, est0.uy - est1.uy) < 0.05
         assert np.hypot(est0.ux - UX, est0.uy - UY) < 0.10
+
+
+class TestMtfTileGeometry:
+    """MTF look geometry must use the PATCH position (center latlon +
+    mean grid offset), not the parent-cube center: a tile due east of
+    the radar has a N-S azimuthal axis (high |ky| culled), and a tile
+    whose position is carried entirely in x_centers must still get
+    weighting."""
+
+    def _extractor(self, x0, y0):
+        from wamos_tpw.current import FrameCube
+
+        rng = np.random.default_rng(1)
+        n = 48
+        cube = FrameCube(
+            intensity=rng.normal(size=(16, n, n)).astype(np.float32),
+            timestamps=np.arange(16).astype("datetime64[s]"),
+            dt=5.0,
+            x_centers=x0 + np.arange(n) * 20.0,
+            y_centers=y0 + np.arange(n) * 20.0,
+            grid_spacing=20.0,
+            center_lat=6.9168,
+            center_lon=134.1484,  # radar AT the cube reference latlon
+        )
+        cfg = {
+            "current.depth": 2000.0,
+            "current.beam_origin_latlon": (6.9168, 134.1484),
+            "current.k_max": 2.0 * np.pi / 50.0,
+        }
+        from wamos_tpw.current import CurrentExtractor
+
+        return CurrentExtractor(cube, config=cfg)
+
+    def test_offset_tile_gets_azimuthal_culling(self):
+        ex = self._extractor(6000.0, 0.0)  # patch due EAST of radar
+        assert ex._se_mtf is not None
+        # azimuthal axis is N-S -> surviving |ky| range < surviving |kx|
+        assert np.max(np.abs(ex._se_ky)) < 0.7 * np.max(np.abs(ex._se_kx))
+
+    def test_north_tile_culls_kx(self):
+        ex = self._extractor(0.0, 6000.0)  # patch due NORTH
+        assert ex._se_mtf is not None
+        assert np.max(np.abs(ex._se_kx)) < 0.7 * np.max(np.abs(ex._se_ky))
