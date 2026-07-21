@@ -1098,6 +1098,27 @@ class CurrentExtractor:
             "current.min_shell_fraction", _MIN_SHELL_FRACTION_DEFAULT
         )
         self._window_name = self._cfg.get("current.fft_window", _FFT_WINDOW_DEFAULT)
+        # Alias-aware fitting: include dispersion-branch energy folded by
+        # temporal undersampling. alias_m = number of Nyquist folds to
+        # model (0 = legacy). Because the sampled spectrum is the true
+        # spectrum wrapped modulo omega_s and all omega lookups here index
+        # modulo n_t, the folded branches are reached simply by letting
+        # |omega_pred| extend to (2*alias_m + 1) * omega_nyq; the Doppler
+        # term keeps its sign under folding (direction and frequency both
+        # negate), so folded peaks constrain the SAME (Ux, Uy).
+        self._alias_m = int(self._cfg.get("current.alias_m", 0))
+        # Anisotropic resolution weighting for fixed-station geometry:
+        # the azimuthal footprint (range * beamwidth) low-pass filters
+        # wavenumbers along the azimuthal direction, so spectral columns
+        # with large k_azimuthal carry attenuated (then noise-dominated)
+        # wave signal. beam_origin_latlon (radar position) enables it;
+        # beamwidth_broadening absorbs the radar's internal echo
+        # averaging (calibrate; 1.0 = spec beamwidth).
+        self._beam_origin = self._cfg.get("current.beam_origin_latlon", None)
+        self._beamwidth_deg = float(self._cfg.get("current.beamwidth_deg", 0.95))
+        self._beam_broaden = float(self._cfg.get("current.beamwidth_broadening", 1.0))
+        self._range_res_m = float(self._cfg.get("current.range_res_m", 20.0))
+        self._mtf_w_min = float(self._cfg.get("current.mtf_w_min", 0.05))
 
         # Run the extraction pipeline
         prepared = self._prepare_cube()
@@ -1247,6 +1268,32 @@ class CurrentExtractor:
         omega_nyq = np.pi / self._cube.dt
         omega_min = self._omega_min_factor * d_omega
 
+        # Anisotropic MTF: attenuation of wave modulation along the
+        # azimuthal (cross-look) direction by the beam footprint at this
+        # tile's range, plus the (range-independent) radial resolution.
+        # Columns with weight < mtf_w_min are dropped from the analysis
+        # set entirely — their signal is below the smearing floor.
+        self._se_mtf: np.ndarray | None = None
+        if self._beam_origin is not None:
+            olat, olon = self._beam_origin
+            deg2m = 111_319.5
+            dx_o = (
+                (self._cube.center_lon - olon) * deg2m * np.cos(np.radians(self._cube.center_lat))
+            )
+            dy_o = (self._cube.center_lat - olat) * deg2m
+            rng_o = float(np.hypot(dx_o, dy_o))
+            if rng_o > 1.0:
+                look = np.array([dx_o, dy_o]) / rng_o  # radial unit
+                azim = np.array([-look[1], look[0]])  # azimuthal unit
+                fwhm_az = rng_o * np.radians(self._beamwidth_deg) * self._beam_broaden
+                sig_az = fwhm_az / 2.3548
+                sig_r = self._range_res_m / 2.3548
+                k_az = kx_2d * azim[0] + ky_2d * azim[1]
+                k_r = kx_2d * look[0] + ky_2d * look[1]
+                mtf = np.exp(-0.5 * ((k_az * sig_az) ** 2 + (k_r * sig_r) ** 2))
+                valid &= mtf >= self._mtf_w_min
+                self._se_mtf = mtf
+
         # Extract valid-bin indices and pre-compute per-bin constants
         iy_v, ix_v = np.where(valid)
         self._se_kx: np.ndarray = kx_2d[iy_v, ix_v]  # (n_valid,)
@@ -1258,6 +1305,11 @@ class CurrentExtractor:
         self._se_omega_nyq: float = omega_nyq
         self._se_omega_min: float = omega_min
         self._se_n_t: int = n_t
+        # Alias-aware prediction limit: folded branches live at unwrapped
+        # |omega| in (omega_nyq, (2*alias_m+1)*omega_nyq]; modular indexing
+        # maps them onto their measured (wrapped) rows automatically.
+        self._se_omega_lim: float = (2 * self._alias_m + 1) * omega_nyq
+        self._se_omega_s: float = 2.0 * omega_nyq
 
         # Total energy and bin count over the analysis set — the valid k
         # annulus restricted to omega_min <= |omega| < omega_nyq — used by
@@ -1280,6 +1332,11 @@ class CurrentExtractor:
             self._se_cols_filtered: np.ndarray = np.maximum(
                 cols - np.median(cols, axis=0, keepdims=True), 0.0
             )
+            if self._se_mtf is not None:
+                # Downweight (not deconvolve) beam-smeared columns: their
+                # peak powers, and hence their grid-search contributions
+                # and LS influence, scale with the squared MTF.
+                self._se_cols_filtered *= (self._se_mtf[iy_v, ix_v] ** 2)[np.newaxis, :]
         else:
             self._se_analysis_energy = 0.0
             self._se_n_analysis = 0
@@ -1313,9 +1370,15 @@ class CurrentExtractor:
         energy = 0.0
         n_shell = 0
 
+        omega_lim = self._se_omega_lim
+        omega_s = self._se_omega_s
+
         for omega_pred in [-(self._se_om0 + doppler), self._se_om0 - doppler]:
             abs_pred = np.abs(omega_pred)
-            ok = (abs_pred < omega_nyq) & (abs_pred >= omega_min)
+            # wrapped distance from DC: keeps folded predictions off the
+            # static-pattern rows (== abs_pred inside the primary band)
+            wd = np.abs((omega_pred + omega_nyq) % omega_s - omega_nyq)
+            ok = (abs_pred < omega_lim) & (abs_pred >= omega_min) & (wd >= omega_min)
             op = omega_pred[ok]
             frac = op / d_omega
             lo = np.floor(frac).astype(np.intp)
@@ -1370,6 +1433,8 @@ class CurrentExtractor:
         d_omega = self._se_d_omega
         omega_nyq = self._se_omega_nyq
         omega_min = self._se_omega_min
+        omega_lim_ = self._se_omega_lim
+        omega_s_ = self._se_omega_s
 
         n_valid = len(kx_v)
 
@@ -1416,7 +1481,8 @@ class CurrentExtractor:
                 for sign in (-1.0, 1.0):
                     omega_pred = sign * om0_v[np.newaxis, :] - doppler
                     abs_pred = np.abs(omega_pred)
-                    ok = (abs_pred < omega_nyq) & (abs_pred >= omega_min)
+                    wd = np.abs((omega_pred + omega_nyq) % omega_s_ - omega_nyq)
+                    ok = (abs_pred < omega_lim_) & (abs_pred >= omega_min) & (wd >= omega_min)
 
                     frac = omega_pred / d_omega
                     lo = np.floor(frac).astype(np.intp)
@@ -1537,7 +1603,17 @@ class CurrentExtractor:
             )
 
             margin = (half_w + 1) * d_omega
-            usable = (np.abs(omega_pred) < omega_nyq - margin) & (np.abs(omega_pred) >= omega_min)
+            if self._alias_m:
+                wd = np.abs((omega_pred + omega_nyq) % self._se_omega_s - omega_nyq)
+                usable = (
+                    (np.abs(omega_pred) < self._se_omega_lim - margin)
+                    & (np.abs(omega_pred) >= omega_min)
+                    & (wd >= omega_min + margin)
+                )
+            else:
+                usable = (np.abs(omega_pred) < omega_nyq - margin) & (
+                    np.abs(omega_pred) >= omega_min
+                )
             idx = np.where(usable)[0]
             if len(idx) < _MIN_POINTS:
                 return coarse_ux, coarse_uy
