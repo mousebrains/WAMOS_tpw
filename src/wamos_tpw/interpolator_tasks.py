@@ -235,8 +235,7 @@ def _do_process_file(task) -> Result:
     shm_names = []
 
     for frame_idx, frame in enumerate(pf):
-        fp = FramePipeline(frame, config=config, qSave=(stage == "shadowed"),
-                           qTiming=qTiming)
+        fp = FramePipeline(frame, config=config, qSave=(stage == "shadowed"), qTiming=qTiming)
 
         # Create shared memory for arrays
         theta_shm = create_shared_array(fp.theta_array)
