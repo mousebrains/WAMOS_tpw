@@ -22,6 +22,14 @@ from this repo (branch `thompson2023/depth-aware` or later).
   approved frame language and reel drivers (sliding 15-min windows,
   drifter Doppler arrows, Malakal tide strip).
 - `PLAN.md` — living plan incl. the adversarial review (AR1-AR13).
+- `adcp_validation/NOTES.md` — WG + Thompson ADCP assessment and X-band
+  validation (2026-07/08): the seven-platform truth ensemble, pointing
+  offsets (C05 skew, Ragnar), Ole's speed-dependent under-read, the
+  structure function / decorrelation floor, bank-node and alias-mode radar
+  results, and the 2025 QC recipe. Dated 2026-10-05 notes record the
+  Sig1000 heading decision (flow steering, not a compass error) and the
+  withdrawn co-tidal chart. Its scripts and `truth_ensemble.npz` are not
+  committed.
 
 Large derived files (folds, npz caches, detection CSVs from the
 singlebeam work, movies) are intentionally NOT committed — all are
